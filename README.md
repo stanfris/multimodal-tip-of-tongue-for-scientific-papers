@@ -161,6 +161,77 @@ python scripts/build_acl_subset.py --download-pdfs
 PDF downloads run concurrently and show completed/total, skipped, failed, rate,
 and ETA. Tune concurrency with `--max-workers`; the default is `16`.
 
+## MinerU PDF Extraction
+
+The full-paper PDF extraction path uses MinerU 3.x through a persistent
+`mineru-api` or `mineru-router` service. This avoids paying model startup cost
+once per PDF and keeps corpus-level resume state in this repository instead of
+depending on MinerU's in-process task IDs.
+
+First inspect the machine:
+
+```bash
+uv run dataset-generation probe-mineru-env
+```
+
+On the DGX, start a persistent router. Limit GPUs with `CUDA_VISIBLE_DEVICES`
+when needed; do not hardcode GPU IDs in the extraction command.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 scripts/08_start_mineru_router.sh
+```
+
+The script defaults to `mineru-router --local-gpus auto`, preloads VLM workers,
+uses `MINERU_API_MAX_CONCURRENT_REQUESTS=1` per worker, and exposes the MinerU
+API at `http://127.0.0.1:8002`. It writes MinerU service output under
+`data/mineru_api_output` unless `MINERU_API_OUTPUT_ROOT` is overridden.
+
+Run extraction against the downloaded ACL subset PDFs:
+
+```bash
+uv run dataset-generation extract-mineru-pdfs \
+  --input-dir data/acl_subset/pdfs \
+  --output-dir data/processed/mineru_pdf_extraction \
+  --api-url http://127.0.0.1:8002 \
+  --backend hybrid-engine \
+  --effort medium \
+  --max-in-flight 4
+```
+
+Completed papers are skipped on restart. Each successful paper has:
+
+```text
+data/processed/mineru_pdf_extraction/papers/<paper_id>/
+  _SUCCESS
+  markdown.md
+  paper.json
+  figures.json
+  mineru/                  # MinerU Markdown, content_list JSON, images
+```
+
+`paper.json` records the source PDF, MinerU configuration/version, Markdown
+path, page count if available, and normalized `image`/`chart` figure records
+with page, bounding box, caption, footnote, and image paths. Failed PDFs are
+appended to `data/processed/mineru_pdf_extraction/failures.jsonl` and do not
+stop the batch.
+
+Before a full run, compare medium and high effort on a small sample:
+
+```bash
+uv run dataset-generation benchmark-mineru-pdfs \
+  --input-dir data/acl_subset/pdfs \
+  --sample-size 20 \
+  --api-url http://127.0.0.1:8002 \
+  --max-in-flight 4
+```
+
+For this project, start with `hybrid-engine --effort medium`: current MinerU
+documentation states that hybrid medium is the default fast path and disables
+expensive image/chart analysis, while still returning extracted image/chart
+blocks when available. Use `high` for production only if the benchmark shows a
+meaningful improvement in Markdown quality, figure crops, or caption
+association.
+
 ## Managed Runs
 
 Config-driven runs keep dataset, parser, prompt, model, and output settings in one YAML file:

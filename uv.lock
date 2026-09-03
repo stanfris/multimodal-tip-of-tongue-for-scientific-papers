@@ -642,6 +642,7 @@ source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "ipykernel" },
     { name = "matplotlib" },
@@ -666,6 +667,7 @@ dev = [
 requires-dist = [
     { name = "accelerate" },
     { name = "datasets", specifier = ">=5.0.1" },
+    { name = "httpx", specifier = ">=0.28.0" },
     { name = "huggingface-hub", specifier = ">=1.26.0" },
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "matplotlib", specifier = ">=3.11.1" },

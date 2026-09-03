@@ -10,6 +10,11 @@ from pathlib import Path
 from dataset_generation.build import BuildConfig, build_combined_dataset
 from dataset_generation.canonical import align_canonical_clues, build_canonical_papers
 from dataset_generation.manager import run_from_config
+from dataset_generation.mineru_extraction import build_benchmark_parser as build_mineru_benchmark_parser
+from dataset_generation.mineru_extraction import build_extract_parser as build_mineru_extract_parser
+from dataset_generation.mineru_extraction import probe_environment as probe_mineru_environment
+from dataset_generation.mineru_extraction import run_benchmark as run_mineru_benchmark
+from dataset_generation.mineru_extraction import run_extract as run_mineru_extract
 from dataset_generation.sources import DEFAULT_DATA_DIR, download_hf_sources
 from dataset_generation.sources import materialize_acl_fig_images
 from dataset_generation.storage import SUPPORTED_FORMATS, read_stats, write_dataset_artifact
@@ -53,6 +58,19 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[build_generate_queries_parser()],
         add_help=False,
         help="Generate visual-only and visual-and-text query collections from clue sidecars.",
+    )
+    subparsers.add_parser("probe-mineru-env", help="Inspect local MinerU, CUDA, VLLM, and GPU availability.")
+    subparsers.add_parser(
+        "extract-mineru-pdfs",
+        parents=[build_mineru_extract_parser()],
+        add_help=False,
+        help="Extract PDF Markdown and figures through a persistent MinerU API/router.",
+    )
+    subparsers.add_parser(
+        "benchmark-mineru-pdfs",
+        parents=[build_mineru_benchmark_parser()],
+        add_help=False,
+        help="Benchmark MinerU backends/efforts on a PDF sample.",
     )
 
     build = subparsers.add_parser("build", help="Build and persist the combined dataset artifact.")
@@ -148,6 +166,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "generate-queries":
         output_path = run_generate_queries(args)
         print(json.dumps({"output": str(Path(output_path))}, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "probe-mineru-env":
+        print(json.dumps(probe_mineru_environment(), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "extract-mineru-pdfs":
+        run_mineru_extract(args)
+        return 0
+
+    if args.command == "benchmark-mineru-pdfs":
+        run_mineru_benchmark(args)
         return 0
 
     if args.command == "build":
