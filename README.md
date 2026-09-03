@@ -181,9 +181,9 @@ when needed; do not hardcode GPU IDs in the extraction command.
 CUDA_VISIBLE_DEVICES=0,1,2,3 scripts/08_start_mineru_router.sh
 ```
 
-The script defaults to `mineru-router --local-gpus auto`, preloads VLM workers,
-uses `MINERU_API_MAX_CONCURRENT_REQUESTS=1` per worker, and exposes the MinerU
-API at `http://127.0.0.1:8002`. It writes MinerU service output under
+The script defaults to `uv run mineru-router --local-gpus auto`, preloads VLM
+workers, uses `MINERU_API_MAX_CONCURRENT_REQUESTS=1` per worker, and exposes the
+MinerU API at `http://127.0.0.1:8002`. It writes MinerU service output under
 `data/mineru_api_output` unless `MINERU_API_OUTPUT_ROOT` is overridden.
 
 Run extraction against the downloaded ACL subset PDFs:

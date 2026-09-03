@@ -14,7 +14,7 @@ export MINERU_API_OUTPUT_ROOT
 export MINERU_API_MAX_CONCURRENT_REQUESTS
 export MINERU_PROCESSING_WINDOW_SIZE
 
-exec mineru-router \
+exec uv run mineru-router \
   --host "$HOST" \
   --port "$PORT" \
   --local-gpus "$LOCAL_GPUS" \
