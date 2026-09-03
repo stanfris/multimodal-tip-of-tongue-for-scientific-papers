@@ -168,8 +168,38 @@ def run_extract(args: argparse.Namespace) -> Path:
         end_index=args.end_index,
         limit=args.limit,
     )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    write_json(
+        args.output_dir / "run_config.json",
+        {
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "input_dir": str(args.input_dir),
+            "output_dir": str(args.output_dir),
+            "api_url": args.api_url,
+            "backend": args.backend,
+            "effort": args.effort,
+            "parse_method": args.parse_method,
+            "lang": args.lang,
+            "max_in_flight": args.max_in_flight,
+            "poll_interval": args.poll_interval,
+            "request_timeout": args.request_timeout,
+            "result_timeout": args.result_timeout,
+            "retries": args.retries,
+            "min_markdown_chars": args.min_markdown_chars,
+            "allow_tiny_markdown": args.allow_tiny_markdown,
+            "formula": not args.no_formula,
+            "table": not args.no_table,
+            "image_analysis": args.image_analysis,
+            "selected_pdf_count": len(pdfs),
+            "start_index": args.start_index,
+            "end_index": args.end_index,
+            "limit": args.limit,
+        },
+    )
     stats = asyncio.run(extract_many(pdfs, args.output_dir, options_from_args(args)))
-    print(json.dumps({"output": str(args.output_dir), "stats": stats.snapshot()}, indent=2, sort_keys=True))
+    summary = {"output": str(args.output_dir), "stats": stats.snapshot()}
+    write_json(args.output_dir / "last_run_summary.json", summary)
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return args.output_dir
 
 

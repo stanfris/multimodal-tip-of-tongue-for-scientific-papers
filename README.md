@@ -189,13 +189,7 @@ MinerU API at `http://127.0.0.1:8002`. It writes MinerU service output under
 Run extraction against the downloaded ACL subset PDFs:
 
 ```bash
-uv run dataset-generation extract-mineru-pdfs \
-  --input-dir data/acl_subset/pdfs \
-  --output-dir data/processed/mineru_pdf_extraction \
-  --api-url http://127.0.0.1:8002 \
-  --backend hybrid-engine \
-  --effort medium \
-  --max-in-flight 4
+MAX_IN_FLIGHT=4 scripts/09_run_mineru_full_extraction.sh
 ```
 
 Completed papers are skipped on restart. Each successful paper has:
@@ -213,7 +207,9 @@ data/processed/mineru_pdf_extraction/papers/<paper_id>/
 path, page count if available, and normalized `image`/`chart` figure records
 with page, bounding box, caption, footnote, and image paths. Failed PDFs are
 appended to `data/processed/mineru_pdf_extraction/failures.jsonl` and do not
-stop the batch.
+stop the batch. Full-run logs are written under
+`data/processed/mineru_pdf_extraction/logs/`, and the latest run configuration
+and summary are saved as `run_config.json` and `last_run_summary.json`.
 
 Before a full run, benchmark medium-effort throughput on a small sample:
 
