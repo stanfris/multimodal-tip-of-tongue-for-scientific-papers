@@ -215,22 +215,25 @@ with page, bounding box, caption, footnote, and image paths. Failed PDFs are
 appended to `data/processed/mineru_pdf_extraction/failures.jsonl` and do not
 stop the batch.
 
-Before a full run, compare medium and high effort on a small sample:
+Before a full run, benchmark medium-effort throughput on a small sample:
 
 ```bash
 uv run dataset-generation benchmark-mineru-pdfs \
   --input-dir data/acl_subset/pdfs \
   --sample-size 20 \
   --api-url http://127.0.0.1:8002 \
-  --max-in-flight 4
+  --max-in-flight-values 1 2 4 8
 ```
 
-For this project, start with `hybrid-engine --effort medium`: current MinerU
-documentation states that hybrid medium is the default fast path and disables
+For this project, use `hybrid-engine --effort medium`: current MinerU
+documentation states that hybrid medium is the default fast path and skips
 expensive image/chart analysis, while still returning extracted image/chart
-blocks when available. Use `high` for production only if the benchmark shows a
-meaningful improvement in Markdown quality, figure crops, or caption
-association.
+blocks when available. The benchmark writes a `benchmark_report.json` with a
+recommended `max_in_flight` starting point.
+
+The extraction client requests only production outputs: Markdown, images, and
+content list JSON. It explicitly skips the original PDF, middle JSON, and model
+output in MinerU responses.
 
 ## Managed Runs
 

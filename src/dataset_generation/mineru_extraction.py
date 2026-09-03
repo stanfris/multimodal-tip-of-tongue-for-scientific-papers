@@ -91,7 +91,7 @@ class ExtractionError(RuntimeError):
 
 def build_extract_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Extract PDFs through a persistent MinerU API/router.")
-    add_common_args(parser)
+    add_common_args(parser, include_max_in_flight=True)
     parser.add_argument("--limit", type=int, default=None, help="Optional number of PDFs to process.")
     parser.add_argument("--start-index", type=int, default=0, help="First discovered PDF index to process.")
     parser.add_argument("--end-index", type=int, default=None, help="Exclusive discovered PDF index to process.")
@@ -99,28 +99,34 @@ def build_extract_parser() -> argparse.ArgumentParser:
 
 
 def build_benchmark_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Benchmark MinerU extraction on a representative PDF subset.")
-    add_common_args(parser)
-    parser.add_argument("--sample-size", type=int, default=20, help="Number of PDFs per effort.")
+    parser = argparse.ArgumentParser(
+        description="Benchmark MinerU medium-effort extraction on a representative PDF subset."
+    )
+    add_common_args(parser, include_max_in_flight=False)
+    parser.set_defaults(effort="medium")
+    parser.add_argument("--sample-size", type=int, default=20, help="Number of PDFs per benchmark run.")
     parser.add_argument(
-        "--efforts",
+        "--max-in-flight-values",
         nargs="+",
-        default=["medium", "high"],
-        choices=["medium", "high"],
-        help="Hybrid efforts to compare.",
+        type=int,
+        default=[1, 2, 4, 8],
+        help="Client-side in-flight task counts to benchmark.",
     )
     return parser
 
 
-def add_common_args(parser: argparse.ArgumentParser) -> None:
+def add_common_args(parser: argparse.ArgumentParser, *, include_max_in_flight: bool) -> None:
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR, help="Directory containing PDFs.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Extraction output directory.")
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help="MinerU API or router base URL.")
     parser.add_argument("--backend", default="hybrid-engine", help="MinerU backend.")
-    parser.add_argument("--effort", default="medium", choices=["medium", "high"], help="Hybrid parsing effort.")
+    parser.add_argument("--effort", default="medium", choices=["medium"], help="Hybrid parsing effort.")
     parser.add_argument("--parse-method", default="auto", choices=["auto", "txt", "ocr"], help="MinerU parse method.")
     parser.add_argument("--lang", default="ch", help="OCR language hint for pipeline/hybrid backends.")
-    parser.add_argument("--max-in-flight", type=int, default=4, help="Maximum submitted MinerU tasks in flight.")
+    if include_max_in_flight:
+        parser.add_argument("--max-in-flight", type=int, default=4, help="Maximum submitted MinerU tasks in flight.")
+    else:
+        parser.set_defaults(max_in_flight=4)
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Seconds between task status polls.")
     parser.add_argument("--request-timeout", type=float, default=120.0, help="Submit/status HTTP timeout.")
     parser.add_argument("--result-timeout", type=float, default=3600.0, help="Per-task terminal-state timeout.")
@@ -175,32 +181,60 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     output_dir = args.output_dir / "benchmarks" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output_dir.mkdir(parents=True, exist_ok=True)
     results = []
-    for effort in args.efforts:
+    for max_in_flight in args.max_in_flight_values:
         run_args = argparse.Namespace(**vars(args))
-        run_args.effort = effort
-        run_output = output_dir / f"{args.backend}_{effort}"
+        run_args.effort = "medium"
+        run_args.max_in_flight = max(max_in_flight, 1)
+        run_output = output_dir / f"{args.backend}_medium_inflight_{run_args.max_in_flight}"
         started = time.monotonic()
         stats = asyncio.run(extract_many(pdfs, run_output, options_from_args(run_args)))
         elapsed = time.monotonic() - started
         results.append(
             {
                 "backend": args.backend,
-                "effort": effort,
+                "effort": "medium",
+                "max_in_flight": run_args.max_in_flight,
                 "pdfs": len(pdfs),
                 "wall_time_seconds": round(elapsed, 3),
                 **stats.snapshot(),
             }
         )
+    best = recommend_benchmark_result(results)
     report = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "api_url": args.api_url,
+        "backend": args.backend,
+        "effort": "medium",
         "sample_pdfs": [str(path) for path in pdfs],
         "environment": probe_environment(),
+        "recommendation": best,
         "results": results,
     }
     (output_dir / "benchmark_report.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
     return output_dir
+
+
+def recommend_benchmark_result(results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    successful = [row for row in results if row.get("completed", 0) > 0 and row.get("failed", 0) == 0]
+    candidates = successful or [row for row in results if row.get("completed", 0) > 0]
+    if not candidates:
+        return None
+    best = max(
+        candidates,
+        key=lambda row: (
+            float(row.get("papers_per_second", 0.0)),
+            float(row.get("pages_per_second", 0.0)),
+        ),
+    )
+    return {
+        "backend": best.get("backend"),
+        "effort": best.get("effort"),
+        "max_in_flight": best.get("max_in_flight"),
+        "papers_per_second": best.get("papers_per_second"),
+        "pages_per_second": best.get("pages_per_second"),
+        "note": "Use this as the starting production setting, then confirm on a larger sample.",
+    }
 
 
 def probe_environment() -> dict[str, Any]:
