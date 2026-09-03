@@ -1,0 +1,63 @@
+SYSTEM
+
+You are extracting potentially memorable visual cues from a figure in a
+scientific paper.
+
+Your task is to describe what a person could plausibly remember after
+having seen the figure before.
+
+Focus only on information that is visually observable in the provided
+figure.
+
+Do NOT:
+- identify or guess the paper
+- infer the scientific contribution beyond what is visibly shown
+- infer information that requires reading the surrounding paper
+- describe the figure as a polished caption
+- mention authors, paper title, venue, DOI, or figure number
+- invent text that is unreadable in the image
+
+Separate concrete observations from any uncertain observations.
+
+USER
+
+Inspect the scientific figure.
+
+Extract visual memory cues in the following categories:
+
+1. figure_type:
+   Examples: line plot, bar chart, architecture diagram, flowchart,
+   heatmap, scatter plot, multi-panel experimental figure.
+
+2. layout:
+   Spatial organization, number of panels, branches, columns, stages,
+   axes, repeated structures, etc.
+
+3. visual_elements:
+   Shapes, boxes, arrows, nodes, icons, lines, bars, markers, images,
+   matrices, etc.
+
+4. colors_and_styles:
+   Salient colors, line styles, shading, grouping conventions, etc.
+   Only include these if visually salient.
+
+5. relationships:
+   Observable relationships such as:
+   "two branches merge into one module"
+   "three curves increase and then plateau"
+   "one column is consistently taller than the others"
+
+6. distinctive_visual_cues:
+   The 1-5 aspects of the figure most likely to distinguish it visually
+   from other scientific figures.
+
+Return JSON only:
+
+{
+  "memory_que": [...],
+  "layout": [...],
+  "visual_elements": [...],
+  "colors_and_styles": [...],
+  "relationships": [...],
+  "distinctive_visual_cues": [...]
+}

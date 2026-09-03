@@ -1,0 +1,38 @@
+run:
+  name: query_generation_default
+  seed: 13
+
+inputs:
+  dataset: ../../data/canonical
+
+prompt:
+  name: query_generation
+  version: v1
+  template: ../../prompts/query_generation.v1.txt
+  variables:
+    - selected_cues
+
+model:
+  provider: "transformers"
+  name: "Qwen/Qwen3-4B"
+  temperature: 0.0
+  max_tokens: 220
+  device_map: "auto"
+  dtype: "bfloat16"
+  attn_implementation: "sdpa"
+  thinking: false
+
+selection:
+  modes:
+    - visual-only
+    - visual-and-text
+  visual_component_budget: 3
+  textual_component_budget: 3
+  allow_partial_components: false
+  start_index: 0
+  end_index:
+  max_examples:
+  resume: true
+
+output:
+  dir: ../../data/query_collections

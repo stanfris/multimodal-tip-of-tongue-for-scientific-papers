@@ -1,0 +1,68 @@
+SYSTEM
+
+You are simulating a researcher who previously encountered a scientific
+paper and is now trying to find it again.
+
+The researcher cannot remember the title or authors. They only remember
+the pieces of information listed below.
+
+Your job is to write the search request that this researcher might
+naturally give to a search engine or conversational retrieval system.
+
+This is a tip-of-the-tongue known-item search: the user knows that the
+paper exists and wants to re-find that particular paper.
+
+USER
+
+Let's do a role play.
+
+You previously read a scientific paper, but some time has passed and you
+cannot remember what it was called.
+
+These are the ONLY things you currently remember:
+
+MEMORY CUES:
+{selected_cues}
+
+Write one natural-language request that you might use to find the paper.
+
+MUST:
+
+1. Use only information contained in the memory cues.
+2. Preserve uncertainty: phrase the request as recollection rather than
+   authoritative description.
+3. Make it clear that the user is trying to re-find a previously
+   encountered paper.
+4. Express the cues naturally rather than listing them mechanically.
+5. Do not mention the title, authors, venue, DOI, citation, or figure number.
+6. Do not introduce scientific facts that are absent from the supplied cues.
+7. Respect the modality of the supplied memory: if only visual cues are
+   supplied, do not infer the topic, method, dataset, or result.
+
+COULD:
+
+1. Use expressions such as "I remember", "I think", "there was", or
+   "if I remember correctly" where natural.
+2. Be somewhat verbose, as real tip-of-the-tongue requests often contain
+   several remembered details.
+3. Describe spatial or relational visual properties informally rather
+   than using caption-like language.
+4. Combine cues into approximate recollections rather than preserving
+   their original wording.
+5. Include mild uncertainty about a remembered detail.
+6. Mention that one particular figure, diagram, or plot stood out.
+7. Use ordinary first-person language rather than academic prose.
+
+IMPORTANT:
+
+Uncertainty may be expressed linguistically, but DO NOT create false
+memories or alter the supplied facts.
+
+Bad:
+"Figure 3 shows the model's cross-attention mechanism..."
+
+Better:
+"I'm trying to find a paper I saw before. I remember one of the diagrams
+had two parallel branches that came back together near the end..."
+
+Return only the query.

@@ -1,0 +1,73 @@
+SYSTEM
+
+You extract semantic memory cues from scientific papers for a simulated
+paper re-finding benchmark.
+
+Imagine that a researcher read this paper some time ago. Extract pieces
+of information that they might plausibly remember when later trying to
+find the paper again.
+
+You are NOT writing a summary of the paper.
+
+Do not include:
+- paper title
+- author names
+- affiliations
+- DOI
+- exact bibliographic information
+- section numbers
+- figure numbers
+- exact sentences from the paper
+- unusually identifying phrases when a more generic paraphrase is possible
+
+Prefer concise semantic cues that can stand independently.
+
+USER
+
+Extract candidate memory cues from the following paper.
+
+Consider these categories:
+
+- paper_topic:
+  In the most general sense, what is the field of the paper.
+
+- research_problem:
+  What problem or question was being addressed?
+
+- task:
+  What kind of task was studied?
+
+- method:
+  What broad methodological idea or architecture was used?
+
+- motivation:
+  Why was the problem important or difficult?
+
+- datasets_or_domain:
+  What datasets, domains, populations, or settings were involved?
+
+- experimental_setup:
+  Memorable aspects of how the method was evaluated.
+
+- findings:
+  Broad qualitative findings or comparisons that might be remembered.
+
+- limitations_or_observations:
+  Memorable caveats, failure cases, or unusual observations.
+
+For each candidate cue provide:
+
+{
+  "cue": "...",
+  "category": "..."
+}
+
+Rules:
+
+1. Paraphrase rather than copying distinctive wording.
+2. Each cue should express one fact.
+
+PAPER:
+{paper_text}
+
+Return JSON only.
