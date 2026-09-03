@@ -76,3 +76,29 @@ def test_missing_configured_volume_fails_loudly(tmp_path: Path, monkeypatch: pyt
 
     with pytest.raises(ValueError, match="Volume 2026.acl-long not found"):
         list(acl_subset.iter_target_papers(tmp_path))
+
+
+def test_download_acl_pdfs_reports_progress_and_uses_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = []
+
+    def fake_download_one_pdf(url: str, destination: Path) -> None:
+        calls.append((url, destination))
+        destination.write_bytes(b"%PDF test")
+
+    monkeypatch.setattr(acl_subset, "download_one_pdf", fake_download_one_pdf)
+    papers = [
+        {"anthology_id": "2026.acl-long.1", "pdf_url": "https://aclanthology.org/2026.acl-long.1.pdf"},
+        {"anthology_id": "2026.acl-long.2", "pdf_url": "https://aclanthology.org/2026.acl-long.2.pdf"},
+    ]
+
+    stats = acl_subset.download_acl_pdfs(papers, output_dir=tmp_path, max_workers=2)
+
+    assert stats == {"total": 2, "downloaded": 2, "skipped": 0, "failed": 0}
+    assert len(calls) == 2
+    output = capsys.readouterr().out
+    assert "Downloading 2 PDFs with 2 workers" in output
+    assert "2/2 (100.0%)" in output

@@ -158,6 +158,9 @@ Download the corresponding PDFs after writing metadata:
 python scripts/build_acl_subset.py --download-pdfs
 ```
 
+PDF downloads run concurrently and show completed/total, skipped, failed, rate,
+and ETA. Tune concurrency with `--max-workers`; the default is `16`.
+
 ## Managed Runs
 
 Config-driven runs keep dataset, parser, prompt, model, and output settings in one YAML file:
