@@ -12,6 +12,8 @@ REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-120}"
 RESULT_TIMEOUT="${RESULT_TIMEOUT:-3600}"
 RETRIES="${RETRIES:-2}"
 MIN_MARKDOWN_CHARS="${MIN_MARKDOWN_CHARS:-200}"
+START_PAGE_ID="${START_PAGE_ID:-0}"
+END_PAGE_ID="${END_PAGE_ID:-9}"
 
 mkdir -p "$OUTPUT_DIR/logs"
 LOG_PATH="$OUTPUT_DIR/logs/full_run_$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -24,6 +26,8 @@ LOG_PATH="$OUTPUT_DIR/logs/full_run_$(date -u +%Y%m%dT%H%M%SZ).log"
   echo "backend=$BACKEND"
   echo "effort=$EFFORT"
   echo "max_in_flight=$MAX_IN_FLIGHT"
+  echo "start_page_id=$START_PAGE_ID"
+  echo "end_page_id=$END_PAGE_ID"
 
   uv run dataset-generation extract-mineru-pdfs \
     --input-dir "$INPUT_DIR" \
@@ -36,7 +40,9 @@ LOG_PATH="$OUTPUT_DIR/logs/full_run_$(date -u +%Y%m%dT%H%M%SZ).log"
     --request-timeout "$REQUEST_TIMEOUT" \
     --result-timeout "$RESULT_TIMEOUT" \
     --retries "$RETRIES" \
-    --min-markdown-chars "$MIN_MARKDOWN_CHARS"
+    --min-markdown-chars "$MIN_MARKDOWN_CHARS" \
+    --start-page-id "$START_PAGE_ID" \
+    --end-page-id "$END_PAGE_ID"
 
   echo "finished_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } 2>&1 | tee "$LOG_PATH"

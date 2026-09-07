@@ -8,8 +8,10 @@ import pytest
 from dataset_generation.mineru_extraction import (
     ExtractionError,
     MinerUOptions,
+    build_extract_parser,
     is_complete,
     normalize_figures,
+    options_from_args,
     validate_and_normalize,
 )
 
@@ -53,6 +55,15 @@ def test_normalize_figures_uses_structured_content_and_skips_tables(tmp_path: Pa
     assert figures[0]["caption"] == ["Figure 1: Result"]
     assert figures[0]["image_relpath"] == "mineru/images/fig1.png"
     assert figures[0]["image_path"] == str((tmp_path / "final" / "mineru/images/fig1.png").resolve())
+
+
+def test_extract_options_accept_page_range() -> None:
+    args = build_extract_parser().parse_args(["--start-page-id", "2", "--end-page-id", "7"])
+
+    options = options_from_args(args)
+
+    assert options.start_page_id == 2
+    assert options.end_page_id == 7
 
 
 def test_validate_and_normalize_writes_paper_and_figures(tmp_path: Path) -> None:

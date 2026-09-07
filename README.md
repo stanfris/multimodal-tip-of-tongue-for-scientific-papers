@@ -189,8 +189,12 @@ MinerU API at `http://127.0.0.1:8002`. It writes MinerU service output under
 Run extraction against the downloaded ACL subset PDFs:
 
 ```bash
-MAX_IN_FLIGHT=4 scripts/09_run_mineru_full_extraction.sh
+MAX_IN_FLIGHT=4 START_PAGE_ID=0 END_PAGE_ID=9 scripts/09_run_mineru_full_extraction.sh
 ```
+
+By default the full-run script parses only page IDs `0..9`, i.e. the first 10
+pages. Override `START_PAGE_ID` and `END_PAGE_ID` for a different slice, or use
+`END_PAGE_ID=99999` to request the whole PDF.
 
 Completed papers are skipped on restart. Each successful paper has:
 

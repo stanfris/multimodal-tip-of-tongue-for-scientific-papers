@@ -42,6 +42,8 @@ class MinerUOptions:
     formula: bool = True
     table: bool = True
     image_analysis: bool | None = None
+    start_page_id: int = 0
+    end_page_id: int = 9
     max_in_flight: int = 4
     poll_interval: float = 2.0
     request_timeout: float = 120.0
@@ -123,6 +125,8 @@ def add_common_args(parser: argparse.ArgumentParser, *, include_max_in_flight: b
     parser.add_argument("--effort", default="medium", choices=["medium"], help="Hybrid parsing effort.")
     parser.add_argument("--parse-method", default="auto", choices=["auto", "txt", "ocr"], help="MinerU parse method.")
     parser.add_argument("--lang", default="ch", help="OCR language hint for pipeline/hybrid backends.")
+    parser.add_argument("--start-page-id", type=int, default=0, help="Zero-based first PDF page to parse.")
+    parser.add_argument("--end-page-id", type=int, default=9, help="Zero-based last PDF page to parse.")
     if include_max_in_flight:
         parser.add_argument("--max-in-flight", type=int, default=4, help="Maximum submitted MinerU tasks in flight.")
     else:
@@ -151,6 +155,8 @@ def options_from_args(args: argparse.Namespace) -> MinerUOptions:
         formula=not args.no_formula,
         table=not args.no_table,
         image_analysis=args.image_analysis,
+        start_page_id=max(args.start_page_id, 0),
+        end_page_id=max(args.end_page_id, max(args.start_page_id, 0)),
         max_in_flight=max(args.max_in_flight, 1),
         poll_interval=args.poll_interval,
         request_timeout=args.request_timeout,
@@ -190,6 +196,8 @@ def run_extract(args: argparse.Namespace) -> Path:
             "formula": not args.no_formula,
             "table": not args.no_table,
             "image_analysis": args.image_analysis,
+            "start_page_id": args.start_page_id,
+            "end_page_id": args.end_page_id,
             "selected_pdf_count": len(pdfs),
             "start_index": args.start_index,
             "end_index": args.end_index,
@@ -431,8 +439,8 @@ async def submit_task(client: httpx.AsyncClient, pdf: Path, options: MinerUOptio
         "response_format_zip": "true",
         "return_original_file": "false",
         "client_side_output_generation": "false",
-        "start_page_id": "0",
-        "end_page_id": "99999",
+        "start_page_id": str(options.start_page_id),
+        "end_page_id": str(options.end_page_id),
     }
     if options.image_analysis is not None:
         data["image_analysis"] = str(options.image_analysis).lower()
