@@ -69,16 +69,21 @@ Table 1: First table.
     assert row["figure_caption_count"] == 1
     assert row["table_caption_count"] == 1
     assert row["figure_table_caption_count"] == 2
-    assert row["markdown_image_count"] == 1
+    assert row["markdown_linked_image_count"] == 1
+    assert row["markdown_image_count"] == 2
     assert row["image_file_count"] == 2
+    assert row["markdown_to_image_file_delta"] == 0
+    assert row["markdown_to_image_file_absolute_error"] == 0
     assert row["caption_to_image_file_delta"] == 0
     assert row["caption_to_image_file_absolute_error"] == 0
-    assert row["caption_to_markdown_image_delta"] == 1
-    assert row["caption_to_markdown_image_absolute_error"] == 1
+    assert row["caption_to_markdown_image_delta"] == 0
+    assert row["caption_to_markdown_image_absolute_error"] == 0
+    assert report["aggregate"]["markdown_to_image_file_delta"] == 0.0
+    assert report["aggregate"]["markdown_to_image_file_absolute_error"] == 0.0
     assert report["aggregate"]["caption_to_image_file_delta"] == 0.0
     assert report["aggregate"]["caption_to_image_file_absolute_error"] == 0.0
-    assert report["aggregate"]["caption_to_markdown_image_delta"] == 1.0
-    assert report["aggregate"]["caption_to_markdown_image_absolute_error"] == 1.0
+    assert report["aggregate"]["caption_to_markdown_image_delta"] == 0.0
+    assert report["aggregate"]["caption_to_markdown_image_absolute_error"] == 0.0
 
 
 def test_run_writes_json_and_csv_outputs(tmp_path: Path) -> None:
@@ -104,5 +109,6 @@ def test_run_writes_json_and_csv_outputs(tmp_path: Path) -> None:
     csv_text = csv_path.read_text(encoding="utf-8")
     assert "paper_count" in csv_text
     assert "abstract_word_jaccard" in csv_text
-    assert "caption_to_image_file_absolute_error" in csv_text
+    assert "missed_visual_items_absolute_distance" in csv_text
+    assert "markdown_to_image_file_delta" not in csv_text
     assert "paper_id" not in csv_text

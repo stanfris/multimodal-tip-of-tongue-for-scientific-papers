@@ -130,9 +130,11 @@ def summarize_paper(paper: PaperInputs, metadata: dict[str, Any]) -> dict[str, A
     parsed_tokens = token_set(parsed_abstract)
     overlap = metadata_tokens & parsed_tokens
     caption_counts = count_caption_labels(markdown)
-    markdown_image_count = len(extract_markdown_images(markdown))
+    markdown_linked_image_count = len(extract_markdown_images(markdown))
+    markdown_image_count = markdown_linked_image_count + caption_counts["table"]
     image_file_count = count_image_files(paper.paper_dir / "images")
     expected_visual_count = caption_counts["figure"] + caption_counts["table"]
+    markdown_to_image_file_delta = markdown_image_count - image_file_count
     return {
         "paper_id": paper.paper_id,
         "title": metadata.get("title"),
@@ -148,8 +150,11 @@ def summarize_paper(paper: PaperInputs, metadata: dict[str, Any]) -> dict[str, A
         "figure_caption_count": caption_counts["figure"],
         "table_caption_count": caption_counts["table"],
         "figure_table_caption_count": expected_visual_count,
+        "markdown_linked_image_count": markdown_linked_image_count,
         "markdown_image_count": markdown_image_count,
         "image_file_count": image_file_count,
+        "markdown_to_image_file_delta": markdown_to_image_file_delta,
+        "markdown_to_image_file_absolute_error": abs(markdown_to_image_file_delta),
         "caption_to_image_file_delta": expected_visual_count - image_file_count,
         "caption_to_image_file_absolute_error": abs(expected_visual_count - image_file_count),
         "caption_to_markdown_image_delta": expected_visual_count - markdown_image_count,
@@ -221,8 +226,13 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     caption_total = sum(int(row["figure_table_caption_count"]) for row in rows)
     image_file_total = sum(int(row["image_file_count"]) for row in rows)
     markdown_image_total = sum(int(row["markdown_image_count"]) for row in rows)
+    markdown_linked_image_total = sum(int(row["markdown_linked_image_count"]) for row in rows)
     figure_total = sum(int(row["figure_caption_count"]) for row in rows)
     table_total = sum(int(row["table_caption_count"]) for row in rows)
+    mean_markdown_to_image_file_error = mean(row["markdown_to_image_file_delta"] for row in rows)
+    mean_markdown_to_image_file_absolute_error = mean(
+        row["markdown_to_image_file_absolute_error"] for row in rows
+    )
     mean_caption_to_image_file_error = mean(row["caption_to_image_file_delta"] for row in rows)
     mean_caption_to_image_file_absolute_error = mean(row["caption_to_image_file_absolute_error"] for row in rows)
     mean_caption_to_markdown_image_error = mean(row["caption_to_markdown_image_delta"] for row in rows)
@@ -240,8 +250,12 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "figure_caption_count": figure_total,
         "table_caption_count": table_total,
         "figure_table_caption_count": caption_total,
+        "markdown_linked_image_count": markdown_linked_image_total,
         "markdown_image_count": markdown_image_total,
         "image_file_count": image_file_total,
+        "markdown_to_image_file_delta": mean_markdown_to_image_file_error,
+        "markdown_to_image_file_absolute_error": mean_markdown_to_image_file_absolute_error,
+        "total_markdown_to_image_file_delta": markdown_image_total - image_file_total,
         "caption_to_image_file_delta": mean_caption_to_image_file_error,
         "caption_to_image_file_absolute_error": mean_caption_to_image_file_absolute_error,
         "caption_to_markdown_image_delta": mean_caption_to_markdown_image_error,
@@ -253,6 +267,9 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "papers_with_caption_markdown_image_mismatch": sum(
             1 for row in rows if row["figure_table_caption_count"] != row["markdown_image_count"]
+        ),
+        "papers_with_markdown_image_file_mismatch": sum(
+            1 for row in rows if row["markdown_image_count"] != row["image_file_count"]
         ),
     }
 
@@ -268,12 +285,8 @@ def aggregate_csv_row(report: dict[str, Any]) -> dict[str, Any]:
         "abstract_word_jaccard": aggregate["mean_abstract_word_jaccard"],
         "metadata_abstract_word_recall": aggregate["mean_metadata_abstract_word_recall"],
         "parsed_abstract_word_precision": aggregate["mean_parsed_abstract_word_precision"],
-        "caption_to_image_file_delta": aggregate["caption_to_image_file_delta"],
-        "caption_to_image_file_absolute_error": aggregate["caption_to_image_file_absolute_error"],
-        "caption_to_markdown_image_delta": aggregate["caption_to_markdown_image_delta"],
-        "caption_to_markdown_image_absolute_error": aggregate["caption_to_markdown_image_absolute_error"],
-        "papers_with_caption_image_file_mismatch": aggregate["papers_with_caption_image_file_mismatch"],
-        "papers_with_caption_markdown_image_mismatch": aggregate["papers_with_caption_markdown_image_mismatch"],
+        "missed_visual_items_absolute_distance": aggregate["markdown_to_image_file_absolute_error"],
+        "papers_with_markdown_image_file_mismatch": aggregate["papers_with_markdown_image_file_mismatch"],
     }
 
 
