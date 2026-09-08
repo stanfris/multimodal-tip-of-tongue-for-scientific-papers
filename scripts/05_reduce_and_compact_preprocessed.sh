@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PREPROCESSED_DIR="${PREPROCESSED_DIR:-data/preprocessed}"
+PREPROCESSED_DIR="${PREPROCESSED_DIR:-data/preprocessed/papers}"
 PDF_DIR="${PDF_DIR:-data/acl_subset/pdfs}"
 MAX_PAGES="${MAX_PAGES:-10}"
 REPORT="${REPORT:-data/preprocessed_reduction_report.json}"

@@ -21,21 +21,22 @@ The current source path should be the curated ACL Anthology subset:
 
 - Build official ACL Anthology metadata into `data/acl_subset/papers.jsonl`.
 - Download subset PDFs into `data/acl_subset/pdfs/`.
-- Extract markdown and figures from PDFs with MinerU into
-  `data/processed/mineru_pdf_extraction/papers/`.
-- Build the canonical dataset in `data/canonical/`.
+- Extract markdown and figures from PDFs with MinerU into `data/preprocessed`.
+- Generate clues and queries directly from `data/preprocessed` or
+  `data/preprocessed/papers`.
 
 ## Essential Stages To Preserve
 
-The prompt-backed stages remain essential, but they must consume the canonical
-dataset produced from the ACL subset path:
+The prompt-backed stages remain essential, but they must consume the
+preprocessed extraction output directly:
 
-- `04_describe_all_figures.sh` reads `data/canonical/papers.jsonl` and writes
-  `data/canonical/visual_clues.jsonl`.
-- `05_describe_all_textual_clues.sh` reads `data/canonical/papers.jsonl` and
-  writes `data/canonical/textual_clues.jsonl`.
-- `06_generate_queries.sh` reads canonical papers and clue sidecars, then writes
-  query collections plus canonical `queries.jsonl` when resume is enabled.
+- `06_describe_all_figures.sh` reads preprocessed paper directories and writes
+  `data/clues/<paper_id>/images/<figure_id>.jsonl`.
+- `07_describe_all_textual_clues.sh` reads preprocessed paper directories and
+  writes `data/clues/<paper_id>/base/textual_clues.jsonl`.
+- `08_generate_queries.sh` reads preprocessed paper directories and per-paper
+  clue files, then writes query collections plus `data/clues/queries.jsonl`
+  when resume is enabled.
 
 ## Script Order
 
@@ -44,20 +45,14 @@ The cleaned order should be:
 - `00_sync_env.sh`
 - `01_build_acl_subset.sh`
 - `02_download_acl_pdfs.sh`
-- `03_build_canonical.sh`
-- `04_describe_all_figures.sh`
-- `05_describe_all_textual_clues.sh`
-- `06_generate_queries.sh`
-
-MinerU service and extraction helpers remain available as operational helpers:
-
-- `08_start_mineru_router.sh`
-- `09_run_mineru_full_extraction.sh`
-- `10_reduce_and_compact_preprocessed.sh`
+- `03_start_mineru_router.sh`
+- `04_run_mineru_full_extraction.sh`
+- `05_reduce_and_compact_preprocessed.sh`
+- `06_describe_all_figures.sh`
+- `07_describe_all_textual_clues.sh`
+- `08_generate_queries.sh`
 
 ## Implementation Notes
 
-`03_build_canonical.sh` should no longer default to
-`data/processed/acl_fig_markdown/<split>`. It should build canonical papers from
-the ACL subset extraction output, preserving paper IDs, markdown, figures, local
-image copies, source PDF references, and useful MinerU metadata.
+There is no intermediate dataset preparation stage. Clue and query generation
+read the ACL subset extraction output in place.

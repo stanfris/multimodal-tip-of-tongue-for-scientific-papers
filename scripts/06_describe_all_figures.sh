@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 DATA_DIR="${DATA_DIR:-data}"
+DATASET_DIR="${DATASET_DIR:-$DATA_DIR/preprocessed}"
+CLUES_DIR="${CLUES_DIR:-$DATA_DIR/clues}"
 SPLIT="${SPLIT:-train}"
 VISUAL_BACKEND="${VISUAL_BACKEND:-transformers}"
 VISUAL_MODEL="${VISUAL_MODEL:-Qwen/Qwen3-VL-4B-Instruct}"
@@ -25,6 +27,8 @@ args=(
   --backend "$VISUAL_BACKEND"
   --model "$VISUAL_MODEL"
   --data-dir "$DATA_DIR"
+  --dataset "$DATASET_DIR"
+  --clues-dir "$CLUES_DIR"
   --split "$SPLIT"
   --all
   --max-tokens "$MAX_TOKENS"

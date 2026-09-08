@@ -14,12 +14,13 @@ from typing import Any, Callable, Literal
 
 import yaml
 
-from dataset_generation.canonical import (
-    DEFAULT_CANONICAL_DIR,
-    canonical_textual_clues_path,
-    canonical_visual_clues_path,
-    read_canonical_clues,
-    read_canonical_papers,
+from dataset_generation.preprocessed import (
+    DEFAULT_CLUES_DIR,
+    DEFAULT_DATA_DIR,
+    read_clue_rows,
+    read_preprocessed_papers,
+    textual_clue_path,
+    visual_clue_path,
 )
 from dataset_generation.synthetic import TestCollectionExample, write_test_collection
 from dataset_generation.textual_clue_descriptions import (
@@ -49,6 +50,7 @@ class QueryGenerationConfig:
     dataset: Path
     visual_interpretations: Path | None
     textual_interpretations: Path | None
+    clues_dir: Path
     output_dir: Path
     prompt: Path = DEFAULT_PROMPT
     prompt_id: str = "query_generation"
@@ -92,8 +94,9 @@ class ExistingQueryState:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate query collections from visual/textual clue sidecars.")
     parser.add_argument("--config", type=Path, default=None, help="YAML config file for query generation.")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_CANONICAL_DIR.parent)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--dataset", type=Path, default=None)
+    parser.add_argument("--clues-dir", type=Path, default=None)
     parser.add_argument("--visual-interpretations", type=Path, default=None)
     parser.add_argument("--textual-interpretations", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -135,6 +138,7 @@ def load_query_generation_config(args: argparse.Namespace) -> QueryGenerationCon
     max_examples = args.max_examples if args.max_examples is not None else args.limit
     overrides = {
         "dataset": args.dataset,
+        "clues_dir": args.clues_dir,
         "visual_interpretations": args.visual_interpretations,
         "textual_interpretations": args.textual_interpretations,
         "output_dir": args.output_dir,
@@ -178,28 +182,30 @@ def generate_query_collections(config: QueryGenerationConfig) -> Path:
     prompt_text = config.prompt.read_text(encoding="utf-8")
     prompt_sha256 = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     loaded_generator = load_query_generator(config)
-    return _generate_query_collections_from_canonical(config, prompt_text, prompt_sha256, loaded_generator)
+    return _generate_query_collections_from_preprocessed(config, prompt_text, prompt_sha256, loaded_generator)
 
 
 
 
 
-def _generate_query_collections_from_canonical(
+def _generate_query_collections_from_preprocessed(
     config: QueryGenerationConfig,
     prompt_text: str,
     prompt_sha256: str,
     loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
 ) -> Path:
-    papers = read_canonical_papers(config.dataset)
-    components_by_paper = _canonical_components_by_paper(
+    papers = read_preprocessed_papers(config.dataset)
+    components_by_paper = _components_by_paper(
         config.dataset,
+        clues_dir=config.clues_dir,
         visual_clues_path=config.visual_interpretations,
         textual_clues_path=config.textual_interpretations,
     )
-    selected_papers = _eligible_canonical_papers(papers, config)
+    selected_papers = _eligible_papers(papers, config)
     root = config.output_dir / config.collection_id
     root.mkdir(parents=True, exist_ok=True)
-    canonical_query_keys = _read_existing_query_keys(config.dataset / "queries.jsonl") if config.resume else set()
+    root_query_path = config.clues_dir / "queries.jsonl"
+    query_keys = _read_existing_query_keys(root_query_path) if config.resume else set()
     for mode in config.modes:
         collection_dir = root / mode.replace("-", "_")
         existing = _read_existing_query_state(collection_dir / "queries.jsonl", mode) if config.resume else None
@@ -211,7 +217,8 @@ def _generate_query_collections_from_canonical(
             prompt_text,
             loaded_generator,
             existing=existing,
-            canonical_query_keys=canonical_query_keys,
+            query_keys=query_keys,
+            root_query_path=root_query_path,
         )
         collection = (existing.examples if existing is not None else []) + examples
         write_test_collection(collection, collection_dir)
@@ -229,7 +236,8 @@ def _generate_mode_examples_from_papers(
     loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
     *,
     existing: ExistingQueryState | None = None,
-    canonical_query_keys: set[str] | None = None,
+    query_keys: set[str] | None = None,
+    root_query_path: Path | None = None,
 ) -> list[TestCollectionExample]:
     examples: list[TestCollectionExample] = []
     existing_count = len(existing.examples) if existing is not None else 0
@@ -281,7 +289,7 @@ def _generate_mode_examples_from_papers(
             relevant_ids=[paper_id],
             metadata={
                 "mode": mode,
-                "method": "canonical_paper_query_generation",
+                "method": "preprocessed_acl_paper_query_generation",
                 "model_provider": config.model_provider,
                 "model": config.model,
                 "seed": config.seed,
@@ -297,7 +305,8 @@ def _generate_mode_examples_from_papers(
             },
         )
         examples.append(example)
-        _append_canonical_query(example, config.dataset / "queries.jsonl", canonical_query_keys)
+        if root_query_path is not None:
+            _append_query(example, root_query_path, query_keys)
         progress.update(scanned=scanned, skipped=empty + underfilled + resumed)
         if target_new_examples is not None and len(examples) >= target_new_examples:
             break
@@ -309,7 +318,7 @@ def _generate_mode_examples_from_papers(
             f"Generated {len(examples)} new queries and resumed {existing_count} existing queries. "
             f"Scanned {scanned} papers; {underfilled} had fewer than {_expected_component_count(mode, config)} "
             f"required components, {empty} had no usable {mode} components, and {resumed} were already generated. "
-            f"Regenerate canonical clues, lower budgets, or pass --allow-partial-components."
+            f"Regenerate clues, lower budgets, or pass --allow-partial-components."
         )
     return examples
 
@@ -371,7 +380,7 @@ def _read_existing_query_keys(path: Path) -> set[str]:
     return keys
 
 
-def _append_canonical_query(
+def _append_query(
     example: TestCollectionExample,
     path: Path,
     existing_keys: set[str] | None,
@@ -409,7 +418,7 @@ def _query_paper_id(row: dict[str, Any]) -> str | None:
     return None
 
 
-def _eligible_canonical_papers(papers: list[dict[str, Any]], config: QueryGenerationConfig) -> list[dict[str, Any]]:
+def _eligible_papers(papers: list[dict[str, Any]], config: QueryGenerationConfig) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     for index, paper in enumerate(papers):
         if index < config.start_index:
@@ -420,13 +429,14 @@ def _eligible_canonical_papers(papers: list[dict[str, Any]], config: QueryGenera
     return selected
 
 
-def _canonical_components_by_paper(
+def _components_by_paper(
     dataset: Path,
     *,
+    clues_dir: Path,
     visual_clues_path: Path | None,
     textual_clues_path: Path | None,
 ) -> dict[str, list[MemoryComponent]]:
-    papers = read_canonical_papers(dataset)
+    papers = read_preprocessed_papers(dataset)
     paper_ids = set()
     figure_to_paper = {}
     figure_to_name = {}
@@ -442,41 +452,45 @@ def _canonical_components_by_paper(
             else:
                 figure_to_name[fid] = f"Figure {index + 1}"
     
-    visual_path = (
-        visual_clues_path 
-        if visual_clues_path is not None and visual_clues_path.is_file() 
-        else canonical_visual_clues_path(dataset)
-    )
-    text_path = (
-        textual_clues_path
-        if textual_clues_path is not None and textual_clues_path.is_file()
-        else canonical_textual_clues_path(dataset)
-    )
     components: dict[str, list[MemoryComponent]] = {}
-    for clue in read_canonical_clues(text_path, kind="textual"):
+    if textual_clues_path is not None and textual_clues_path.is_file():
+        textual_rows = read_clue_rows(textual_clues_path)
+    else:
+        textual_rows = [
+            clue
+            for paper_id in sorted(paper_ids)
+            for clue in read_clue_rows(textual_clue_path(clues_dir, paper_id))
+        ]
+    if visual_clues_path is not None and visual_clues_path.is_file():
+        visual_rows = read_clue_rows(visual_clues_path)
+    else:
+        visual_rows = [
+            clue
+            for figure_id, paper_id in sorted(figure_to_paper.items())
+            for clue in read_clue_rows(visual_clue_path(clues_dir, paper_id, figure_id))
+        ]
+    for clue in textual_rows:
+        if clue.get("kind") != "textual":
+            continue
         paper_id = str(clue.get("paper_id", ""))
-        if paper_id not in paper_ids:
+        if paper_id in paper_ids:
+            text = str(clue.get("output", "")).strip()
+            for component_text in _split_component_text(text, "textual"):
+                components.setdefault(paper_id, []).append(
+                    MemoryComponent(record_id=paper_id, kind="textual", text=component_text)
+                )
+    for clue in visual_rows:
+        if clue.get("kind") != "visual":
             continue
-        text = str(clue.get("output", "")).strip()
-        if not text:
-            continue
-        for component_text in _split_component_text(text, "textual"):
-            components.setdefault(paper_id, []).append(
-                MemoryComponent(record_id=paper_id, kind="textual", text=component_text)
-            )
-    for clue in read_canonical_clues(visual_path, kind="visual"):
         figure_id = str(clue.get("figure_id", ""))
         paper_id = str(clue.get("paper_id", ""))
-        if paper_id not in paper_ids or figure_id not in figure_to_paper:
-            continue
-        text = str(clue.get("output", "")).strip()
-        if not text:
-            continue
-        figure_name = figure_to_name.get(figure_id, "Figure")
-        for component_text in _split_component_text(text, "visual"):
-            components.setdefault(paper_id, []).append(
-                MemoryComponent(record_id=figure_id, kind="visual", text=f"{figure_name}: {component_text}")
-            )
+        if paper_id in paper_ids and figure_id in figure_to_paper:
+            text = str(clue.get("output", "")).strip()
+            figure_name = figure_to_name.get(figure_id, "Figure")
+            for component_text in _split_component_text(text, "visual"):
+                components.setdefault(paper_id, []).append(
+                    MemoryComponent(record_id=figure_id, kind="visual", text=f"{figure_name}: {component_text}")
+                )
     return components
 
 
@@ -712,6 +726,7 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
         dataset=_resolve_path(inputs["dataset"], config_dir),
         visual_interpretations=_resolve_optional_path(inputs.get("visual_interpretations"), config_dir),
         textual_interpretations=_resolve_optional_path(inputs.get("textual_interpretations"), config_dir),
+        clues_dir=_resolve_path(inputs.get("clues_dir", DEFAULT_CLUES_DIR), config_dir),
         output_dir=_resolve_path(output["dir"], config_dir),
         prompt=_resolve_path(prompt["template"], config_dir),
         prompt_id=prompt.get("name", "query_generation"),
@@ -750,11 +765,11 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
 
 
 def _default_config(data_dir: Path, split: str) -> QueryGenerationConfig:
-    canonical_dir = Path(data_dir) / "canonical"
     return QueryGenerationConfig(
-        dataset=canonical_dir,
-        visual_interpretations=Path(data_dir) / "interim" / "interpretations" / DEFAULT_VISUAL_INTERPRETATIONS,
-        textual_interpretations=Path(data_dir) / "interim" / "interpretations" / DEFAULT_TEXTUAL_INTERPRETATIONS,
+        dataset=Path(data_dir) / "preprocessed",
+        visual_interpretations=None,
+        textual_interpretations=None,
+        clues_dir=Path(data_dir) / "clues",
         output_dir=Path(data_dir) / "query_collections",
     )
 
@@ -839,7 +854,15 @@ def _write_root_metadata(root: Path, config: QueryGenerationConfig, prompt_sha25
 
 def _metadata_config(config: QueryGenerationConfig) -> dict[str, Any]:
     data = asdict(config)
-    for key in ("dataset", "visual_interpretations", "textual_interpretations", "output_dir", "prompt", "config_path"):
+    for key in (
+        "dataset",
+        "visual_interpretations",
+        "textual_interpretations",
+        "clues_dir",
+        "output_dir",
+        "prompt",
+        "config_path",
+    ):
         if data.get(key) is not None:
             data[key] = str(data[key])
     return data

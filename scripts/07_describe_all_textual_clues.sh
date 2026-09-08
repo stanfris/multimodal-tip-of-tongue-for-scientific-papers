@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 DATA_DIR="${DATA_DIR:-data}"
+DATASET_DIR="${DATASET_DIR:-$DATA_DIR/preprocessed}"
+CLUES_DIR="${CLUES_DIR:-$DATA_DIR/clues}"
 SPLIT="${SPLIT:-train}"
 TEXT_BACKEND="${TEXT_BACKEND:-transformers}"
 TEXT_MODEL="${TEXT_MODEL:-Qwen/Qwen3-4B}"
@@ -25,6 +27,8 @@ args=(
   --backend "$TEXT_BACKEND"
   --model "$TEXT_MODEL"
   --data-dir "$DATA_DIR"
+  --dataset "$DATASET_DIR"
+  --clues-dir "$CLUES_DIR"
   --split "$SPLIT"
   --all
   --max-tokens "$MAX_TOKENS"

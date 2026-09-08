@@ -17,12 +17,12 @@ from dataset_generation.interpretations import (
     interpretation_key,
     read_completed_interpretation_keys,
 )
-from dataset_generation.canonical import (
-    DEFAULT_CANONICAL_DIR,
-    canonical_dataset_path,
-    canonical_visual_clues_path,
-    read_canonical_clues,
-    read_canonical_papers,
+from dataset_generation.preprocessed import (
+    DEFAULT_DATA_DIR,
+    append_clue_row,
+    read_clue_rows,
+    read_preprocessed_papers,
+    visual_clue_path,
 )
 
 
@@ -46,15 +46,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Qwen-VL visual descriptions for scientific figures.")
     parser.add_argument("--backend", choices=sorted(DEFAULT_MODELS), default="mlx")
     parser.add_argument("--model", default=None, help="Model name. Defaults depend on --backend.")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_CANONICAL_DIR.parent, help="Local data root.")
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Local data root.")
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID, help="Interpretation artifact run ID.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Interpretation artifact directory.")
     parser.add_argument(
         "--dataset",
         type=Path,
         default=None,
-        help="Canonical dataset artifact directory. Defaults to data-dir/canonical.",
+        help="Preprocessed papers directory. Defaults to data-dir/preprocessed.",
     )
+    parser.add_argument("--clues-dir", type=Path, default=None, help="Clue output directory. Defaults to data-dir/clues.")
     parser.add_argument("--prompt", type=Path, default=DEFAULT_PROMPT, help="Prompt template path.")
     parser.add_argument("--prompt-id", default="visual_interpretation", help="Prompt identifier for metadata.")
     parser.add_argument("--prompt-version", default="v1", help="Prompt version for metadata.")
@@ -124,7 +125,7 @@ def iter_samples_from_dataset(
         raise ValueError("start-index must be non-negative")
     if end_index is not None and end_index < start_index:
         raise ValueError("end-index must be greater than or equal to start-index")
-    return iter_samples_from_canonical_dataset(
+    return iter_samples_from_preprocessed_dataset(
         dataset_dir,
         limit=limit,
         start_index=start_index,
@@ -132,24 +133,23 @@ def iter_samples_from_dataset(
     )
 
 
-def iter_samples_from_canonical_dataset(
+def iter_samples_from_preprocessed_dataset(
     dataset_dir: Path,
     *,
     limit: int | None,
     start_index: int = 0,
     end_index: int | None = None,
 ) -> list[FigureSample]:
-    root = canonical_dataset_path(dataset_dir).parent
     samples: list[FigureSample] = []
     figure_index = 0
-    for paper in read_canonical_papers(dataset_dir):
+    for paper in read_preprocessed_papers(dataset_dir):
         for figure in paper.get("figures", []):
             if figure_index < start_index:
                 figure_index += 1
                 continue
             if end_index is not None and figure_index >= end_index:
                 break
-            image_path = (root / figure["image_relpath"]).resolve()
+            image_path = Path(str(figure["image_path"])).resolve()
             if not image_path.exists():
                 raise FileNotFoundError(f"Canonical figure image does not exist: {image_path}")
             samples.append(
@@ -157,16 +157,15 @@ def iter_samples_from_canonical_dataset(
                     record_id=str(figure["figure_id"]),
                     image_path=image_path,
                     metadata={
-                        "canonical_entity": "figure",
+                        "source_entity": "figure",
                         "figure_index": figure_index,
                         "paper_id": paper["paper_id"],
                         "resolved_paper_id": paper["paper_id"],
                         "figure_id": figure["figure_id"],
                         "filename": figure.get("filename"),
-                        "image_sha256": figure.get("image_sha256"),
+                        "paper_dir": paper.get("paper_dir"),
                         "image_relpath": figure.get("image_relpath"),
-                        "source_rows": figure.get("source_rows", []),
-                        "legacy_record_ids": figure.get("legacy_record_ids", []),
+                        "image_path": str(image_path),
                     },
                 )
             )
@@ -178,7 +177,7 @@ def iter_samples_from_canonical_dataset(
         if limit is not None and len(samples) >= limit:
             break
     if not samples:
-        raise RuntimeError(f"No canonical figures with images found in {dataset_dir}.")
+        raise RuntimeError(f"No preprocessed figures with images found in {dataset_dir}.")
     return samples
 
 
@@ -342,8 +341,8 @@ def print_debug_trace(sample: FigureSample, prompt: str, description: str) -> No
 
 def run(args: argparse.Namespace) -> Path:
     model_name = args.model or DEFAULT_MODELS[args.backend]
-    dataset_dir = args.dataset or (Path(args.data_dir) / "canonical")
-    output_dir = args.output_dir or canonical_dataset_path(dataset_dir).parent
+    dataset_dir = args.dataset or (Path(args.data_dir) / "preprocessed")
+    output_dir = args.output_dir or args.clues_dir or (Path(args.data_dir) / "clues")
     prompt_path = args.prompt.expanduser().resolve()
     prompt = prompt_path.read_text(encoding="utf-8")
     limit = args.limit if args.all else max(1, min(args.num_samples, 5))
@@ -370,8 +369,9 @@ def run(args: argparse.Namespace) -> Path:
             prompt_version=args.prompt_version,
         )
         completed.update(
-            _completed_visual_keys_from_canonical(
-                dataset_dir,
+            _completed_visual_keys_from_clues(
+                output_dir,
+                read_preprocessed_papers(dataset_dir),
                 model=model_name,
                 prompt_id=args.prompt_id,
                 prompt_version=args.prompt_version,
@@ -380,10 +380,14 @@ def run(args: argparse.Namespace) -> Path:
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    output_file = canonical_visual_clues_path(dataset_dir) if args.output_dir is None else output_path / "interpretations.jsonl"
-    failure_file = output_path / ("visual_failures.jsonl" if args.output_dir is None else "failures.jsonl")
+    failure_file = output_path / "visual_failures.jsonl"
     if args.all and args.overwrite:
-        output_file.unlink(missing_ok=True)
+        for sample in samples:
+            visual_clue_path(
+                output_path,
+                str(sample.metadata["paper_id"]),
+                str(sample.metadata["figure_id"]),
+            ).unlink(missing_ok=True)
         failure_file.unlink(missing_ok=True)
     started = time.time()
     processed = 0
@@ -442,7 +446,7 @@ def run(args: argparse.Namespace) -> Path:
                 },
             )
             records.append(record)
-            _append_canonical_visual_clue(record, output_file)
+            _append_visual_clue(record, output_path)
             completed.add(interpretation_key(record))
             processed += 1
             if not args.all:
@@ -468,8 +472,7 @@ def run(args: argparse.Namespace) -> Path:
             "failed_records": failed,
             "elapsed_seconds": round(time.time() - started, 3),
     }
-    metadata_name = "visual_clues.metadata.json" if args.output_dir is None else "metadata.json"
-    (output_path / metadata_name).write_text(
+    (output_path / "visual_clues.metadata.json").write_text(
         json.dumps({"record_count": processed, **metadata}, indent=2, sort_keys=True),
         encoding="utf-8",
     )
@@ -477,45 +480,43 @@ def run(args: argparse.Namespace) -> Path:
     return output_path
 
 
-def _append_canonical_visual_clue(record: InterpretationRecord, output_file: str | Path) -> None:
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+def _append_visual_clue(record: InterpretationRecord, clues_dir: str | Path) -> None:
+    paper_id = str(record.metadata.get("paper_id") or record.metadata.get("resolved_paper_id"))
+    figure_id = str(record.metadata.get("figure_id") or record.record_id)
     row = {
-        "paper_id": record.metadata.get("paper_id") or record.metadata.get("resolved_paper_id"),
-        "figure_id": record.record_id,
+        "paper_id": paper_id,
+        "figure_id": figure_id,
         "kind": record.kind,
         "model": record.model,
         "prompt_id": record.prompt_id,
         "prompt_version": record.prompt_version,
         "output": record.text,
     }
-    with output_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False))
-        handle.write("\n")
+    append_clue_row(visual_clue_path(clues_dir, paper_id, figure_id), row)
 
 
-def _completed_visual_keys_from_canonical(
-    dataset_dir: Path,
+def _completed_visual_keys_from_clues(
+    clues_dir: Path,
+    papers: list[dict[str, Any]],
     *,
     model: str,
     prompt_id: str,
     prompt_version: str,
 ) -> set[tuple[str, str, str, str, str]]:
     completed: set[tuple[str, str, str, str, str]] = set()
-    clues = read_canonical_clues(canonical_visual_clues_path(dataset_dir), kind="visual")
-    clue_ids = {
-        str(clue.get("figure_id") or clue.get("record_id"))
-        for clue in clues
-        if clue.get("kind") == "visual"
-        and clue.get("model") == model
-        and clue.get("prompt_id") == prompt_id
-        and clue.get("prompt_version") == prompt_version
-    }
-    for paper in read_canonical_papers(dataset_dir):
+    for paper in papers:
+        paper_id = str(paper["paper_id"])
         for figure in paper.get("figures", []):
             figure_id = str(figure["figure_id"])
-            if figure_id in clue_ids:
-                completed.add((figure_id, "visual", model, prompt_id, prompt_version))
+            for clue in read_clue_rows(visual_clue_path(clues_dir, paper_id, figure_id)):
+                if (
+                    clue.get("kind") == "visual"
+                    and clue.get("model") == model
+                    and clue.get("prompt_id") == prompt_id
+                    and clue.get("prompt_version") == prompt_version
+                ):
+                    completed.add((figure_id, "visual", model, prompt_id, prompt_version))
+                    break
     return completed
 
 

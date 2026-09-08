@@ -15,7 +15,6 @@ from dataset_generation.storage import read_dataset_artifact
 
 
 DEFAULT_CANONICAL_DIR = Path("data") / "canonical"
-DEFAULT_EXTRACTED_PAPERS_DIR = Path("data") / "processed" / "mineru_pdf_extraction" / "papers"
 
 
 @dataclass(frozen=True)
@@ -82,117 +81,6 @@ def write_canonical_papers(papers: Iterable[dict[str, Any] | CanonicalPaper], pa
     return data_path
 
 
-def build_canonical_from_extracted_papers(
-    extracted_papers_dir: str | Path = DEFAULT_EXTRACTED_PAPERS_DIR,
-    output_dir: str | Path = DEFAULT_CANONICAL_DIR,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Build canonical papers from ACL subset PDF extraction output."""
-    source_root = Path(extracted_papers_dir)
-    output_path = Path(output_dir)
-    markdown_root = output_path / "markdown"
-    image_root = output_path / "images"
-    pdf_root = output_path / "pdfs"
-    markdown_root.mkdir(parents=True, exist_ok=True)
-    image_root.mkdir(parents=True, exist_ok=True)
-    pdf_root.mkdir(parents=True, exist_ok=True)
-
-    if not source_root.exists():
-        raise FileNotFoundError(f"Extracted papers directory does not exist: {source_root}")
-
-    papers: list[dict[str, Any]] = []
-    skipped = 0
-    figures_total = 0
-    missing_images = 0
-    copied_pdfs = 0
-
-    for paper_dir in sorted(path for path in source_root.iterdir() if path.is_dir()):
-        paper_json_path = paper_dir / "paper.json"
-        markdown_path = paper_dir / "markdown.md"
-        if not paper_json_path.exists() or not markdown_path.exists():
-            skipped += 1
-            continue
-
-        source_paper = json.loads(paper_json_path.read_text(encoding="utf-8"))
-        paper_id = _clean(source_paper.get("paper_id") or paper_dir.name)
-        if not paper_id:
-            skipped += 1
-            continue
-
-        markdown = markdown_path.read_text(encoding="utf-8")
-        markdown_relpath = _write_markdown(markdown_root, paper_id, markdown)
-        pdf_relpath, copied = _copy_source_pdf(paper_dir, pdf_root, paper_id, source_paper)
-        copied_pdfs += int(copied)
-
-        figures = []
-        seen_image_shas: set[str] = set()
-        for figure_index, source_figure in enumerate(source_paper.get("figures") or []):
-            source_image_path = _resolve_extracted_image_path(paper_dir, source_figure)
-            if source_image_path is None or not source_image_path.exists():
-                missing_images += 1
-                continue
-            image_sha = sha256_file(source_image_path)
-            if image_sha in seen_image_shas:
-                continue
-            seen_image_shas.add(image_sha)
-            figure_id = _clean(source_figure.get("figure_id")) or figure_id_for(paper_id, image_sha)
-            suffix = source_image_path.suffix or ".png"
-            image_relpath = Path("images") / f"{figure_id}{suffix}"
-            shutil.copyfile(source_image_path, output_path / image_relpath)
-            figures.append(
-                {
-                    "figure_id": figure_id,
-                    "filename": source_image_path.name,
-                    "image_relpath": image_relpath.as_posix(),
-                    "image_sha256": image_sha,
-                    "source_rows": [figure_index],
-                    "legacy_record_ids": [],
-                    "metadata": _extracted_figure_metadata(source_figure),
-                }
-            )
-        figures_total += len(figures)
-
-        source = {
-            "source_paper_dataset": "acl_subset",
-            "source_paper_config": "official_acl_anthology_xml",
-            "source_paper_split": "curated",
-            "source_fig_dataset": "mineru_pdf_extraction",
-            "source_fig_split": "acl_subset",
-            "source_dir": str(paper_dir),
-        }
-        if pdf_relpath:
-            source["pdf_relpath"] = pdf_relpath
-        for field_name in ("title", "year", "venue", "url", "pdf_url", "anthology_id"):
-            if source_paper.get(field_name) is not None:
-                source[field_name] = source_paper[field_name]
-
-        papers.append(
-            {
-                "paper_id": paper_id,
-                "markdown_relpath": markdown_relpath.as_posix(),
-                "markdown_sha256": sha256_file(output_path / markdown_relpath),
-                "source": source,
-                "figures": sorted(figures, key=lambda figure: figure["figure_id"]),
-                "queries": {"visual_only": [], "visual_and_text": []},
-            }
-        )
-
-    papers.sort(key=lambda paper: paper["paper_id"])
-    write_canonical_papers(papers, output_path)
-    report = {
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "source": str(source_root),
-        "canonical_dir": str(output_path),
-        "papers_written": len(papers),
-        "paper_dirs_skipped": skipped,
-        "canonical_unique_figures": figures_total,
-        "missing_figure_images": missing_images,
-        "pdfs_copied": copied_pdfs,
-    }
-    (output_path / "build_report.json").write_text(
-        json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return papers, report
 
 
 def canonical_textual_clues_path(path: str | Path) -> Path:
@@ -233,7 +121,7 @@ def write_canonical_clues(clues: Iterable[dict[str, Any]], path: str | Path) -> 
     return data_path
 
 
-def build_canonical_papers(
+def prepare_canonical_papers_from_rows(
     processed_dataset_dir: str | Path,
     output_dir: str | Path,
     *,

@@ -3,8 +3,8 @@
 This repository builds a persisted research dataset from a curated ACL
 Anthology subset. The current path starts from official ACL Anthology XML
 metadata, downloads the selected PDFs, extracts markdown and figures with
-MinerU, and writes a canonical paper-level dataset for clue and query
-generation.
+MinerU, then generates clue and query artifacts directly from the preprocessed
+paper directories.
 
 ## Repository Layout
 
@@ -12,7 +12,7 @@ generation.
 src/dataset_generation/
   schema.py      # Output schema validation
   acl_subset.py  # ACL Anthology subset metadata and PDF downloads
-  canonical.py   # Canonical paper/figure/clue representation
+  preprocessed.py # Direct reader for extracted paper directories and clues
   storage.py     # Artifact writing and reading
   synthetic.py   # Stable interfaces for later test collection generation
   cli.py         # dataset-generation command line interface
@@ -23,7 +23,7 @@ Generated data is intentionally ignored by Git:
 ```text
 data/acl_subset/                          # curated ACL metadata and PDFs
 data/processed/mineru_pdf_extraction/     # extracted PDF markdown and figures
-data/canonical/                           # canonical papers, figures, clues, queries
+data/clues/                               # per-paper textual and visual clues
 data/query_collections/<id>/              # generated query/eval collections
 ```
 
@@ -43,68 +43,53 @@ Launch the local Streamlit reviewer for generated tip-of-the-tongue query collec
 uv run streamlit run review_app.py --server.address 127.0.0.1
 ```
 
-The reviewer defaults to `data/canonical`, joins generated examples with the
-canonical paper, figure, markdown, visual clue, and textual clue artifacts, and
-writes manual annotations separately to
-`data/reviews/query_review_annotations.jsonl`.
+The reviewer can inspect generated query collections and writes manual
+annotations separately to `data/reviews/query_review_annotations.jsonl`.
 
 ## Bash Scripts
 
-Run the full dataset generation pipeline from bash:
-
-```bash
-scripts/build_everything_from_scratch.sh
-```
-
-This syncs the environment, builds the ACL subset metadata, downloads PDFs,
-runs MinerU extraction, builds the canonical artifact, generates visual/textual
-canonical clue files, and generates query collections. Set `RUN_VISUAL=0`,
-`RUN_TEXTUAL=0`, or `RUN_QUERIES=0` to skip the expensive model-backed stages.
-
-Or run individual steps:
+Run the dataset generation stages individually:
 
 ```bash
 scripts/00_sync_env.sh
 scripts/01_build_acl_subset.sh
 scripts/02_download_acl_pdfs.sh
-scripts/08_start_mineru_router.sh
-scripts/09_run_mineru_full_extraction.sh
-scripts/03_build_canonical.sh
-scripts/04_describe_all_figures.sh
-scripts/05_describe_all_textual_clues.sh
-scripts/06_generate_queries.sh
+scripts/03_start_mineru_router.sh
+scripts/04_run_mineru_full_extraction.sh
+scripts/05_reduce_and_compact_preprocessed.sh
+scripts/06_describe_all_figures.sh
+scripts/07_describe_all_textual_clues.sh
+scripts/08_generate_queries.sh
 ```
 
-Run `08_start_mineru_router.sh` in a separate terminal before
-`09_run_mineru_full_extraction.sh`. `03_build_canonical.sh` builds the
-canonical paper-level artifact under `data/canonical/` from
-`data/processed/mineru_pdf_extraction/papers/`, which is the default input for
-clue and query generation.
+Run `03_start_mineru_router.sh` in a separate terminal before
+`04_run_mineru_full_extraction.sh`. The clue and query stages read directly
+from `data/preprocessed` or `data/preprocessed/papers`.
 
 The scripts use `DATA_DIR=data` and `SPLIT=train` by default. Override them as
 environment variables, for example:
 
 ```bash
-LIMIT=100 scripts/05_describe_all_textual_clues.sh
+LIMIT=100 scripts/07_describe_all_textual_clues.sh
 ```
 
-The clue-generation scripts write to the canonical clue files:
+The clue-generation scripts write per-paper clue files:
 
 ```text
-data/canonical/visual_clues.jsonl
-data/canonical/textual_clues.jsonl
+data/clues/<paper_id>/base/textual_clues.jsonl
+data/clues/<paper_id>/images/<figure_id>.jsonl
 ```
 
 The full-run scripts are single-process and do not launch multi-GPU workers.
 They default to `RESUME=1`, write clues incrementally, and record failures under
-`data/canonical/`. They use PyTorch SDPA attention by default; set
+`data/clues/`. They use PyTorch SDPA attention by default; set
 `ATTN_IMPLEMENTATION=` to let Transformers choose automatically. Useful
 overrides:
 
 ```bash
-TEXT_BATCH_SIZE=16 LIMIT=1000 scripts/05_describe_all_textual_clues.sh
-VISUAL_BATCH_SIZE=1 START_INDEX=5000 scripts/04_describe_all_figures.sh
-ATTN_IMPLEMENTATION= scripts/05_describe_all_textual_clues.sh
+TEXT_BATCH_SIZE=16 LIMIT=1000 scripts/07_describe_all_textual_clues.sh
+VISUAL_BATCH_SIZE=1 START_INDEX=5000 scripts/06_describe_all_figures.sh
+ATTN_IMPLEMENTATION= scripts/07_describe_all_textual_clues.sh
 ```
 
 ## ACL Anthology Subset
@@ -146,7 +131,7 @@ On the DGX, start a persistent router. Limit GPUs with `CUDA_VISIBLE_DEVICES`
 when needed; do not hardcode GPU IDs in the extraction command.
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 scripts/08_start_mineru_router.sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 scripts/03_start_mineru_router.sh
 ```
 
 The script defaults to `uv run mineru-router --local-gpus auto`, preloads VLM
@@ -157,7 +142,7 @@ MinerU API at `http://127.0.0.1:8002`. It writes MinerU service output under
 Run extraction against the downloaded ACL subset PDFs:
 
 ```bash
-MAX_IN_FLIGHT=4 START_PAGE_ID=0 END_PAGE_ID=9 scripts/09_run_mineru_full_extraction.sh
+MAX_IN_FLIGHT=4 START_PAGE_ID=0 END_PAGE_ID=9 scripts/04_run_mineru_full_extraction.sh
 ```
 
 By default the full-run script parses only page IDs `0..9`, i.e. the first 10
@@ -167,7 +152,7 @@ pages. Override `START_PAGE_ID` and `END_PAGE_ID` for a different slice, or use
 Completed papers are skipped on restart. Each successful paper has:
 
 ```text
-data/processed/mineru_pdf_extraction/papers/<paper_id>/
+data/preprocessed/papers/<paper_id>/
   _SUCCESS
   markdown.md
   paper.json
@@ -205,7 +190,7 @@ output in MinerU responses.
 
 ## Figure Descriptions
 
-Generate Qwen-VL visual descriptions from the canonical ACL subset artifact:
+Generate Qwen-VL visual descriptions from preprocessed ACL subset papers:
 
 ```bash
 uv run dataset-generation describe-figures \
@@ -215,9 +200,10 @@ uv run dataset-generation describe-figures \
   --num-samples 1
 ```
 
-This reads figure image references from `data/canonical/papers.jsonl` and writes
-canonical visual clues to `data/canonical/visual_clues.jsonl`. You can still
-pass explicit local images for ad hoc checks:
+This reads figure image references from
+`data/preprocessed` and writes visual clues to
+`data/clues/<paper_id>/images/<figure_id>.jsonl`. You can still pass explicit
+local images for ad hoc checks:
 
 ```bash
 uv run dataset-generation describe-figures \
@@ -226,12 +212,11 @@ uv run dataset-generation describe-figures \
   --num-samples 1
 ```
 
-Use `--output-dir` only when intentionally writing a separate interpretation
-artifact instead of the canonical clue sidecar.
+Use `--clues-dir` to write to a different clue directory.
 
 ## Textual Clues
 
-Generate semantic memory cues from canonical paper markdown:
+Generate semantic memory cues from preprocessed paper markdown:
 
 ```bash
 uv run dataset-generation describe-textual-clues \
@@ -241,57 +226,47 @@ uv run dataset-generation describe-textual-clues \
   --num-samples 1
 ```
 
-This writes canonical textual clues to `data/canonical/textual_clues.jsonl`.
+This writes textual clues to `data/clues/<paper_id>/base/textual_clues.jsonl`.
 
 Print stored coverage statistics:
 
 ```bash
-uv run dataset-generation stats --dataset data/canonical
+uv run dataset-generation stats --dataset data/query_collections/query_generation_default/visual_only
 ```
 
 ## Artifact Structure
 
-Canonical builds write:
+Preprocessing and clue generation write:
 
 ```text
-data/canonical/
-  papers.jsonl
-  markdown/
-  images/
-  pdfs/
-  build_report.json
-  textual_clues.jsonl
-  visual_clues.jsonl
-  queries.jsonl
-```
+data/preprocessed/papers/<paper_id>/
+  markdown.md
+  paper.json
+  figures.json
+  mineru/
 
-The base dataset stays compact and canonical: paper metadata, markdown
-references, figure image references, source PDF references, and source
-provenance. Model-generated descriptions are sidecars keyed by canonical
-`paper_id` and `figure_id`:
+data/clues/<paper_id>/
+  base/textual_clues.jsonl
+  images/<figure_id>.jsonl
 
-```text
-data/canonical/textual_clues.jsonl
-data/canonical/visual_clues.jsonl
+data/clues/queries.jsonl
 ```
 
 Prompt templates live in `prompts/` and are referenced by ID/version from
-sidecar metadata. Query generation joins canonical papers with clue sidecars and
-writes query collections under `data/query_collections/<collection_id>/`.
+sidecar metadata. Query generation joins preprocessed papers with per-paper
+clue files and writes query collections under
+`data/query_collections/<collection_id>/`.
 
 ## Output Schema
 
-Each `papers.jsonl` row contains:
+Each preprocessed paper directory must contain:
 
 | Field | Description |
 | --- | --- |
-| `paper_id` | ACL Anthology paper ID |
-| `markdown_relpath` | Relative path to canonical markdown |
-| `markdown_sha256` | SHA-256 of the canonical markdown file |
-| `source` | ACL subset, PDF, and extraction provenance |
-| `figures` | Canonical figures with `figure_id`, `image_relpath`, `image_sha256`, and metadata |
-| `queries` | Reserved query grouping fields |
-- Try fallback suffixes in order: `.0`, `00`, `000`, `0`.
+| `paper.json` | Paper metadata, including `paper_id` and extracted figures |
+| `markdown.md` | Extracted full-paper markdown |
+| `figures.json` | Extracted figure metadata |
+| `mineru/` | MinerU output files and image assets |
 
 ## Synthetic Test Collections
 

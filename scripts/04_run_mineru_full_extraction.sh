@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INPUT_DIR="${INPUT_DIR:-data/acl_subset/pdfs}"
-OUTPUT_DIR="${OUTPUT_DIR:-data/processed/mineru_pdf_extraction}"
+OUTPUT_DIR="${OUTPUT_DIR:-data/preprocessed}"
 API_URL="${API_URL:-http://127.0.0.1:8002}"
 BACKEND="${BACKEND:-hybrid-engine}"
 EFFORT="${EFFORT:-medium}"

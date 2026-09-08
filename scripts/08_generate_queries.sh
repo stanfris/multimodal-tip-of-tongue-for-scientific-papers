@@ -11,6 +11,12 @@ args=(--config "$CONFIG")
 if [[ -n "${LIMIT:-}" ]]; then
   args+=(--limit "$LIMIT")
 fi
+if [[ -n "${DATASET_DIR:-}" ]]; then
+  args+=(--dataset "$DATASET_DIR")
+fi
+if [[ -n "${CLUES_DIR:-}" ]]; then
+  args+=(--clues-dir "$CLUES_DIR")
+fi
 if [[ -n "${MAX_EXAMPLES:-}" ]]; then
   args+=(--max-examples "$MAX_EXAMPLES")
 fi

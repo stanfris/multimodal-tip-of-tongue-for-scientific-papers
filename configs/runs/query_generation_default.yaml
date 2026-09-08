@@ -3,7 +3,8 @@ run:
   seed: 13
 
 inputs:
-  dataset: ../../data/canonical
+  dataset: ../../data/preprocessed
+  clues_dir: ../../data/clues
 
 prompt:
   name: query_generation

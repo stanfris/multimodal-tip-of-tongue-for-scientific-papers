@@ -9,8 +9,7 @@ import pytest
 
 from dataset_generation.canonical import (
     align_canonical_clues,
-    build_canonical_from_extracted_papers,
-    build_canonical_papers,
+    prepare_canonical_papers_from_rows,
     canonical_textual_clues_path,
     canonical_visual_clues_path,
     read_canonical_clues,
@@ -27,6 +26,7 @@ from dataset_generation.query_generation import (
     generate_query_collections,
     select_components,
 )
+from dataset_generation.preprocessed import append_clue_row, textual_clue_path, visual_clue_path
 from dataset_generation.storage import read_dataset_artifact, read_stats, write_dataset_artifact
 from dataset_generation.synthetic import (
     SyntheticCollectionConfig,
@@ -97,6 +97,38 @@ def fixture_records():
     ]
 
 
+def write_preprocessed_paper(
+    root,
+    paper_id: str,
+    *,
+    markdown: str = "# Paper",
+    figure_id: str = "figure-0001",
+):
+    paper_dir = root / paper_id
+    image_dir = paper_dir / "mineru" / "images"
+    image_dir.mkdir(parents=True)
+    image_path = image_dir / f"{figure_id}.png"
+    image_path.write_bytes(f"{paper_id}-{figure_id}".encode("utf-8"))
+    (paper_dir / "markdown.md").write_text(markdown, encoding="utf-8")
+    (paper_dir / "figures.json").write_text("[]", encoding="utf-8")
+    (paper_dir / "paper.json").write_text(
+        json.dumps(
+            {
+                "paper_id": paper_id,
+                "figures": [
+                    {
+                        "figure_id": figure_id,
+                        "filename": f"{paper_id}-Figure1.png",
+                        "image_relpath": f"mineru/images/{figure_id}.png",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return paper_dir
+
+
 def test_write_and_read_jsonl_artifact(tmp_path):
     records = fixture_records()
     stats = {"matched_records": 2}
@@ -139,7 +171,7 @@ def test_interpretations_are_sidecar_artifacts(tmp_path):
             )
         ],
         tmp_path / "interpretations" / "run-1",
-        {"base_dataset": "data/canonical"},
+        {"base_dataset": "data/processed/mineru_pdf_extraction/papers"},
     )
 
     rows = read_interpretations(output)
@@ -147,42 +179,6 @@ def test_interpretations_are_sidecar_artifacts(tmp_path):
     assert rows[0]["record_id"] == "fig-1"
     assert rows[0]["kind"] == "visual"
     assert metadata["record_count"] == 1
-
-
-def test_build_canonical_from_extracted_acl_subset_papers(tmp_path):
-    source = tmp_path / "processed" / "mineru_pdf_extraction" / "papers" / "2026.acl-long.1"
-    (source / "mineru" / "images").mkdir(parents=True)
-    (source / "markdown.md").write_text("# Extracted paper\n\nBody", encoding="utf-8")
-    (source / "2026.acl-long.1.pdf").write_bytes(b"%PDF-1.7\n")
-    image = source / "mineru" / "images" / "fig1.png"
-    image.write_bytes(b"image-bytes")
-    (source / "paper.json").write_text(
-        json.dumps(
-            {
-                "paper_id": "2026.acl-long.1",
-                "title": "Paper",
-                "figures": [
-                    {
-                        "type": "image",
-                        "page_idx": 0,
-                        "caption": "Example figure",
-                        "image_relpath": "mineru/images/fig1.png",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    papers, report = build_canonical_from_extracted_papers(source.parent, tmp_path / "canonical")
-
-    assert report["papers_written"] == 1
-    assert report["canonical_unique_figures"] == 1
-    assert papers[0]["paper_id"] == "2026.acl-long.1"
-    assert papers[0]["source"]["source_paper_dataset"] == "acl_subset"
-    assert read_canonical_markdown(tmp_path / "canonical", papers[0]).startswith("# Extracted paper")
-    assert (tmp_path / "canonical" / papers[0]["figures"][0]["image_relpath"]).exists()
-    assert (tmp_path / "canonical" / "pdfs" / "2026.acl-long.1.pdf").exists()
 
 
 def test_vl_figure_description_helpers_use_local_paths(tmp_path):
@@ -283,7 +279,7 @@ def write_processed_rows(tmp_path, rows):
 def test_canonical_duplicate_source_rows_with_identical_images_collapse(tmp_path):
     processed = write_processed_rows(tmp_path, canonical_source_rows(tmp_path))
 
-    papers, report = build_canonical_papers(processed, tmp_path / "canonical")
+    papers, report = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical")
 
     assert len(papers) == 1
     assert list(papers[0].keys())[:3] == ["paper_id", "markdown_relpath", "markdown_sha256"]
@@ -298,7 +294,7 @@ def test_canonical_duplicate_source_rows_with_identical_images_collapse(tmp_path
 def test_canonical_different_figures_from_same_paper_remain_distinct(tmp_path):
     processed = write_processed_rows(tmp_path, canonical_source_rows(tmp_path))
 
-    papers, _ = build_canonical_papers(processed, tmp_path / "canonical")
+    papers, _ = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical")
 
     image_hashes = {figure["image_sha256"] for figure in papers[0]["figures"]}
     assert len(image_hashes) == 2
@@ -330,7 +326,7 @@ def test_canonical_textual_clues_are_associated_once_at_paper_level(tmp_path):
         tmp_path / "textual",
     )
 
-    papers, report = build_canonical_papers(processed, tmp_path / "canonical", textual_interpretations=textual)
+    papers, report = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical", textual_interpretations=textual)
     clues = read_canonical_clues(canonical_textual_clues_path(tmp_path / "canonical"), kind="textual")
 
     assert "textual_clues" not in papers[0]
@@ -357,7 +353,7 @@ def test_old_textual_clues_migrate_with_distinct_generations_preserved(tmp_path)
         tmp_path / "textual",
     )
 
-    _, report = build_canonical_papers(processed, tmp_path / "canonical", textual_interpretations=textual)
+    _, report = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical", textual_interpretations=textual)
     clues = read_canonical_clues(canonical_textual_clues_path(tmp_path / "canonical"), kind="textual")
 
     assert len(clues) == 1
@@ -376,7 +372,7 @@ def test_deterministic_visual_clue_recovery_uses_record_id(tmp_path):
         tmp_path / "visual",
     )
 
-    papers, report = build_canonical_papers(processed, tmp_path / "canonical", visual_interpretations=visual)
+    papers, report = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical", visual_interpretations=visual)
     clues = read_canonical_clues(canonical_visual_clues_path(tmp_path / "canonical"), kind="visual")
 
     assert len(clues) == 1
@@ -406,7 +402,7 @@ def test_unresolved_visual_clues_remain_missing_without_fuzzy_matching(tmp_path)
         tmp_path / "visual",
     )
 
-    papers, report = build_canonical_papers(processed, tmp_path / "canonical", visual_interpretations=visual)
+    papers, report = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical", visual_interpretations=visual)
     clues = read_canonical_clues(canonical_visual_clues_path(tmp_path / "canonical"), kind="visual")
 
     assert report["visual_clues_unresolved"] == 1
@@ -414,25 +410,26 @@ def test_unresolved_visual_clues_remain_missing_without_fuzzy_matching(tmp_path)
     assert all("visual_clues" not in figure for figure in papers[0]["figures"])
 
 
-def test_canonical_query_generation_is_one_query_per_paper_with_paper_relevance(tmp_path):
-    processed = write_processed_rows(tmp_path, canonical_source_rows(tmp_path))
-    papers, _ = build_canonical_papers(processed, tmp_path / "canonical")
-    write_canonical_papers(papers, tmp_path / "canonical")
-    write_canonical_clues(
-        [{"paper_id": "paper-1", "kind": "textual", "model": "m", "prompt_id": "p", "prompt_version": "v1", "output": '{"cue":"topic"}'}],
-        canonical_textual_clues_path(tmp_path / "canonical"),
+def test_query_generation_is_one_query_per_paper_with_paper_relevance(tmp_path):
+    dataset = tmp_path / "processed" / "mineru_pdf_extraction" / "papers"
+    clues = tmp_path / "clues"
+    write_preprocessed_paper(dataset, "paper-1")
+    append_clue_row(
+        textual_clue_path(clues, "paper-1"),
+        {"paper_id": "paper-1", "kind": "textual", "model": "m", "prompt_id": "p", "prompt_version": "v1", "output": '{"cue":"topic"}'},
     )
-    write_canonical_clues(
-        [{"paper_id": "paper-1", "figure_id": papers[0]["figures"][0]["figure_id"], "kind": "visual", "model": "m", "prompt_id": "p", "prompt_version": "v1", "output": '{"figure_type":["line chart"]}'}],
-        canonical_visual_clues_path(tmp_path / "canonical"),
+    append_clue_row(
+        visual_clue_path(clues, "paper-1", "figure-0001"),
+        {"paper_id": "paper-1", "figure_id": "figure-0001", "kind": "visual", "model": "m", "prompt_id": "p", "prompt_version": "v1", "output": '{"figure_type":["line chart"]}'},
     )
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("{selected_cues}", encoding="utf-8")
     output = generate_query_collections(
         QueryGenerationConfig(
-            dataset=tmp_path / "canonical",
+            dataset=dataset,
             visual_interpretations=tmp_path / "unused",
             textual_interpretations=None,
+            clues_dir=clues,
             output_dir=tmp_path / "queries",
             prompt=prompt,
             visual_component_budget=1,
@@ -462,37 +459,24 @@ def test_query_generation_parses_prefixed_empty_visual_json_without_raw_fallback
     assert _split_component_text(text, "visual") == []
 
 
-def test_query_generation_resume_skips_existing_queries_and_avoids_canonical_duplicates(tmp_path):
-    rows = canonical_source_rows(tmp_path)
-    rows.append(
-        {
-            **rows[0],
-            "record_id": "row-4",
-            "filename": "paper-2-Figure1.png",
-            "extracted_paper_id": "paper-2",
-            "normalized_paper_id": "paper-2",
-            "resolved_paper_id": "paper-2",
-            "markdown": "# Paper 2",
-        }
-    )
-    processed = write_processed_rows(tmp_path, rows)
-    papers, _ = build_canonical_papers(processed, tmp_path / "canonical")
-    write_canonical_papers(papers, tmp_path / "canonical")
-    write_canonical_clues(
-        [
+def test_query_generation_resume_skips_existing_queries_and_avoids_clue_duplicates(tmp_path):
+    dataset = tmp_path / "processed" / "mineru_pdf_extraction" / "papers"
+    clues = tmp_path / "clues"
+    write_preprocessed_paper(dataset, "paper-1")
+    write_preprocessed_paper(dataset, "paper-2")
+    for paper_id in ("paper-1", "paper-2"):
+        append_clue_row(
+            visual_clue_path(clues, paper_id, "figure-0001"),
             {
-                "paper_id": paper["paper_id"],
-                "figure_id": paper["figures"][0]["figure_id"],
+                "paper_id": paper_id,
+                "figure_id": "figure-0001",
                 "kind": "visual",
                 "model": "m",
                 "prompt_id": "p",
                 "prompt_version": "v1",
                 "output": '{"figure_type":["line chart"]}',
-            }
-            for paper in papers
-        ],
-        canonical_visual_clues_path(tmp_path / "canonical"),
-    )
+            },
+        )
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("{selected_cues}", encoding="utf-8")
     existing = QueryExample(
@@ -503,13 +487,14 @@ def test_query_generation_resume_skips_existing_queries_and_avoids_canonical_dup
     )
     collection_dir = tmp_path / "queries" / "query_generation_default" / "visual_only"
     write_test_collection([existing], collection_dir)
-    (tmp_path / "canonical" / "queries.jsonl").write_text(json.dumps(asdict(existing)) + "\n", encoding="utf-8")
+    (clues / "queries.jsonl").write_text(json.dumps(asdict(existing)) + "\n", encoding="utf-8")
 
     output = generate_query_collections(
         QueryGenerationConfig(
-            dataset=tmp_path / "canonical",
+            dataset=dataset,
             visual_interpretations=None,
             textual_interpretations=None,
+            clues_dir=clues,
             output_dir=tmp_path / "queries",
             prompt=prompt,
             modes=("visual-only",),
@@ -522,18 +507,18 @@ def test_query_generation_resume_skips_existing_queries_and_avoids_canonical_dup
         json.loads(line)
         for line in (output / "visual_only" / "queries.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    canonical_rows = [
+    clue_query_rows = [
         json.loads(line)
-        for line in (tmp_path / "canonical" / "queries.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (clues / "queries.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert [row["metadata"]["paper_id"] for row in collection_rows] == ["paper-1", "paper-2"]
-    assert [row["metadata"]["paper_id"] for row in canonical_rows] == ["paper-1", "paper-2"]
+    assert [row["metadata"]["paper_id"] for row in clue_query_rows] == ["paper-1", "paper-2"]
     assert collection_rows[0]["query"] == "existing query"
 
 
 def test_canonical_serialization_deserialization_is_stable(tmp_path):
     processed = write_processed_rows(tmp_path, canonical_source_rows(tmp_path))
-    papers, _ = build_canonical_papers(processed, tmp_path / "canonical")
+    papers, _ = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical")
 
     first = (tmp_path / "canonical" / "papers.jsonl").read_text(encoding="utf-8")
     assert first.startswith('{"paper_id":')
@@ -549,7 +534,7 @@ def test_canonical_serialization_deserialization_is_stable(tmp_path):
 
 def test_align_canonical_clues_rewrites_mixed_inputs_to_canonical_ids(tmp_path):
     processed = write_processed_rows(tmp_path, canonical_source_rows(tmp_path))
-    papers, _ = build_canonical_papers(processed, tmp_path / "canonical")
+    papers, _ = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical")
     duplicate_text = {"record_id": "row-1", "kind": "textual", "text": "topic", "model": "m", "prompt_id": "p", "prompt_version": "v1"}
     stale_visual = {
         "record_id": "legacy-unknown",
@@ -662,7 +647,7 @@ def test_strip_thinking_removes_hidden_reasoning():
 
 
 def test_textual_clue_default_dataset_dir_matches_data_dir_layout(tmp_path):
-    assert default_dataset_dir(tmp_path / "data", "train") == tmp_path / "data" / "canonical"
+    assert default_dataset_dir(tmp_path / "data", "train") == tmp_path / "data" / "preprocessed"
 
 
 
@@ -687,7 +672,7 @@ def test_query_component_selection_respects_mode_limits():
 def test_visual_clue_recovery_by_source_row(tmp_path):
     """Visual clues recover via source_rows provenance in papers.jsonl."""
     processed = write_processed_rows(tmp_path, canonical_source_rows(tmp_path))
-    papers, _ = build_canonical_papers(processed, tmp_path / "canonical")
+    papers, _ = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical")
     # Find figure with source_row 2 (row-3 -> different-image)
     target_figure = [fig for fig in papers[0]["figures"] if 2 in fig["source_rows"]][0]
     # Write a visual clue that references via dataset_row metadata
@@ -696,7 +681,7 @@ def test_visual_clue_recovery_by_source_row(tmp_path):
         tmp_path / "visual",
     )
 
-    _, report = build_canonical_papers(processed, tmp_path / "canonical", visual_interpretations=visual)
+    _, report = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical", visual_interpretations=visual)
     clues = read_canonical_clues(canonical_visual_clues_path(tmp_path / "canonical"), kind="visual")
 
     assert len(clues) == 1
@@ -708,7 +693,7 @@ def test_visual_clue_recovery_by_source_row(tmp_path):
 def test_visual_clue_recovery_by_image_sha256(tmp_path):
     """Visual clues recover via exact image SHA256 when it maps to exactly one figure."""
     processed = write_processed_rows(tmp_path, canonical_source_rows(tmp_path))
-    papers, _ = build_canonical_papers(processed, tmp_path / "canonical")
+    papers, _ = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical")
     # Use the figure from the 'different-image' bytes (row-3)
     target_figure = [fig for fig in papers[0]["figures"] if 2 in fig["source_rows"]][0]
     image_sha = target_figure["image_sha256"]
@@ -718,7 +703,7 @@ def test_visual_clue_recovery_by_image_sha256(tmp_path):
         tmp_path / "visual",
     )
 
-    _, report = build_canonical_papers(processed, tmp_path / "canonical", visual_interpretations=visual)
+    _, report = prepare_canonical_papers_from_rows(processed, tmp_path / "canonical", visual_interpretations=visual)
     clues = read_canonical_clues(canonical_visual_clues_path(tmp_path / "canonical"), kind="visual")
 
     assert len(clues) == 1
