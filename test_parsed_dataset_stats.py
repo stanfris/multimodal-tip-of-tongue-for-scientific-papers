@@ -101,4 +101,8 @@ def test_run_writes_json_and_csv_outputs(tmp_path: Path) -> None:
 
     assert report["paper_count"] == 1
     assert json.loads(output_path.read_text(encoding="utf-8"))["paper_count"] == 1
-    assert "paper_id" in csv_path.read_text(encoding="utf-8")
+    csv_text = csv_path.read_text(encoding="utf-8")
+    assert "paper_count" in csv_text
+    assert "abstract_word_jaccard" in csv_text
+    assert "caption_to_image_file_absolute_error" in csv_text
+    assert "paper_id" not in csv_text

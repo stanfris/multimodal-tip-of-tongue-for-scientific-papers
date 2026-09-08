@@ -72,7 +72,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.output:
         write_json(args.output, report)
     if args.csv_output:
-        write_csv(args.csv_output, report["papers"])
+        write_csv(args.csv_output, aggregate_csv_row(report))
     return report
 
 
@@ -257,6 +257,26 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def aggregate_csv_row(report: dict[str, Any]) -> dict[str, Any]:
+    aggregate = report["aggregate"]
+    return {
+        "paper_count": report["paper_count"],
+        "metadata_match_count": aggregate["metadata_match_count"],
+        "metadata_abstract_count": aggregate["metadata_abstract_count"],
+        "parsed_abstract_count": aggregate["parsed_abstract_count"],
+        "abstract_sequence_similarity": aggregate["mean_abstract_sequence_similarity"],
+        "abstract_word_jaccard": aggregate["mean_abstract_word_jaccard"],
+        "metadata_abstract_word_recall": aggregate["mean_metadata_abstract_word_recall"],
+        "parsed_abstract_word_precision": aggregate["mean_parsed_abstract_word_precision"],
+        "caption_to_image_file_delta": aggregate["caption_to_image_file_delta"],
+        "caption_to_image_file_absolute_error": aggregate["caption_to_image_file_absolute_error"],
+        "caption_to_markdown_image_delta": aggregate["caption_to_markdown_image_delta"],
+        "caption_to_markdown_image_absolute_error": aggregate["caption_to_markdown_image_absolute_error"],
+        "papers_with_caption_image_file_mismatch": aggregate["papers_with_caption_image_file_mismatch"],
+        "papers_with_caption_markdown_image_mismatch": aggregate["papers_with_caption_markdown_image_mismatch"],
+    }
+
+
 def mean(values: Any) -> float | None:
     materialized = list(values)
     return round(statistics.fmean(materialized), 6) if materialized else None
@@ -272,14 +292,11 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+def write_csv(path: Path, row: dict[str, Any]) -> None:
     import csv
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        path.write_text("", encoding="utf-8")
-        return
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(handle, fieldnames=list(row.keys()))
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerow(row)
