@@ -205,11 +205,26 @@ def jaccard(left: set[str], right: set[str]) -> float:
 
 
 def count_caption_labels(markdown: str) -> Counter[str]:
-    labels: set[tuple[str, str]] = set()
-    for match in CAPTION_RE.finditer(markdown):
+    counts: Counter[str] = Counter()
+    seen_labels: set[tuple[str, str]] = set()
+    pending_image_panels = 0
+    for line in markdown.splitlines():
+        pending_image_panels += len(extract_markdown_images(line))
+        match = CAPTION_RE.match(line)
+        if not match:
+            continue
         kind = "figure" if match.group("kind").casefold().startswith("fig") else "table"
-        labels.add((kind, match.group("number").casefold()))
-    return Counter(kind for kind, _number in labels)
+        label = (kind, match.group("number").casefold())
+        if label in seen_labels:
+            pending_image_panels = 0
+            continue
+        seen_labels.add(label)
+        if kind == "figure":
+            counts[kind] += max(pending_image_panels, 1)
+        else:
+            counts[kind] += 1
+        pending_image_panels = 0
+    return counts
 
 
 def extract_markdown_images(markdown: str) -> list[str]:
