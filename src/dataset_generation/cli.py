@@ -12,6 +12,8 @@ from dataset_generation.mineru_extraction import build_extract_parser as build_m
 from dataset_generation.mineru_extraction import probe_environment as probe_mineru_environment
 from dataset_generation.mineru_extraction import run_benchmark as run_mineru_benchmark
 from dataset_generation.mineru_extraction import run_extract as run_mineru_extract
+from dataset_generation.parsed_dataset_stats import build_parser as build_parsed_stats_parser
+from dataset_generation.parsed_dataset_stats import run as run_parsed_stats
 from dataset_generation.storage import read_stats
 from dataset_generation.query_generation import build_parser as build_generate_queries_parser
 from dataset_generation.query_generation import run as run_generate_queries
@@ -61,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
     stats = subparsers.add_parser("stats", help="Print stats for a generated artifact.")
     stats.add_argument("--dataset", required=True, help="Generated artifact directory.")
 
+    parsed_stats = subparsers.add_parser(
+        "parsed-dataset-stats",
+        parents=[build_parsed_stats_parser()],
+        add_help=False,
+        help="Compute parsed-paper abstract overlap and figure/table image count statistics.",
+    )
+
     return parser
 
 
@@ -97,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "stats":
         print(json.dumps(read_stats(args.dataset), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "parsed-dataset-stats":
+        print(json.dumps(run_parsed_stats(args), indent=2, sort_keys=True))
         return 0
 
     parser.error(f"Unknown command: {args.command}")
