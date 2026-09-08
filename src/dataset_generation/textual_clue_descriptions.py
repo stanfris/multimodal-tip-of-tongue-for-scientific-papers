@@ -18,13 +18,13 @@ from dataset_generation.interpretations import (
     read_completed_interpretation_keys,
 )
 from dataset_generation.canonical import (
+    DEFAULT_CANONICAL_DIR,
     canonical_dataset_path,
     canonical_textual_clues_path,
     read_canonical_clues,
     read_canonical_markdown,
     read_canonical_papers,
 )
-from dataset_generation.sources import DEFAULT_DATA_DIR
 
 
 DEFAULT_MODELS: dict[str, str | None] = {
@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Model name. Defaults to Qwen/Qwen3-1.7B-MLX-8bit for MLX.",
     )
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Local data root.")
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_CANONICAL_DIR.parent, help="Local data root.")
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID, help="Interpretation artifact run ID.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Interpretation artifact directory.")
     parser.add_argument(

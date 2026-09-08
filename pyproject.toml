@@ -1,14 +1,13 @@
 [project]
 name = "dataset-generation"
 version = "0.1.0"
-description = "Build a persisted ACL-fig plus ACL Anthology markdown research dataset."
+description = "Build a persisted curated ACL Anthology research dataset."
 readme = "README.md"
 authors = [
     { name = "Stan Fris", email = "stanfris2.0@gmail.com" }
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "datasets>=5.0.1",
     "httpx>=0.28.0",
     "ipykernel>=7.3.0",
     "matplotlib>=3.11.1",

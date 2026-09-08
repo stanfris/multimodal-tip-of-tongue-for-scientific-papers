@@ -18,12 +18,12 @@ from dataset_generation.interpretations import (
     read_completed_interpretation_keys,
 )
 from dataset_generation.canonical import (
+    DEFAULT_CANONICAL_DIR,
     canonical_dataset_path,
     canonical_visual_clues_path,
     read_canonical_clues,
     read_canonical_papers,
 )
-from dataset_generation.sources import DEFAULT_DATA_DIR
 
 
 DEFAULT_MODELS = {
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Qwen-VL visual descriptions for scientific figures.")
     parser.add_argument("--backend", choices=sorted(DEFAULT_MODELS), default="mlx")
     parser.add_argument("--model", default=None, help="Model name. Defaults depend on --backend.")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Local data root.")
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_CANONICAL_DIR.parent, help="Local data root.")
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID, help="Interpretation artifact run ID.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Interpretation artifact directory.")
     parser.add_argument(

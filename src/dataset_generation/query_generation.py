@@ -15,12 +15,12 @@ from typing import Any, Callable, Literal
 import yaml
 
 from dataset_generation.canonical import (
+    DEFAULT_CANONICAL_DIR,
     canonical_textual_clues_path,
     canonical_visual_clues_path,
     read_canonical_clues,
     read_canonical_papers,
 )
-from dataset_generation.sources import DEFAULT_DATA_DIR
 from dataset_generation.synthetic import TestCollectionExample, write_test_collection
 from dataset_generation.textual_clue_descriptions import (
     generate_with_mlx,
@@ -92,7 +92,7 @@ class ExistingQueryState:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate query collections from visual/textual clue sidecars.")
     parser.add_argument("--config", type=Path, default=None, help="YAML config file for query generation.")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_CANONICAL_DIR.parent)
     parser.add_argument("--dataset", type=Path, default=None)
     parser.add_argument("--visual-interpretations", type=Path, default=None)
     parser.add_argument("--textual-interpretations", type=Path, default=None)

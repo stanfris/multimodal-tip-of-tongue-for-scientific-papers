@@ -5,12 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 DATA_DIR="${DATA_DIR:-data}"
-SPLIT="${SPLIT:-train}"
-DATASET_DIR="${DATASET_DIR:-$DATA_DIR/processed/acl_fig_markdown/$SPLIT}"
+INPUT_DIR="${INPUT_DIR:-$DATA_DIR/processed/mineru_pdf_extraction/papers}"
 OUTPUT_DIR="${OUTPUT_DIR:-$DATA_DIR/canonical}"
 
 uv run dataset-generation build-canonical \
-  --data-dir "$DATA_DIR" \
-  --dataset "$DATASET_DIR" \
-  --split "$SPLIT" \
+  --input-dir "$INPUT_DIR" \
   --output-dir "$OUTPUT_DIR"

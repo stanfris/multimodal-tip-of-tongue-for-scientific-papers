@@ -1,19 +1,18 @@
-# ACL Figure Markdown Dataset Generation
+# ACL Set Dataset Generation
 
-This repository builds a persisted research dataset that combines figure records from
-[`citeseerx/ACL-fig`](https://huggingface.co/datasets/citeseerx/ACL-fig) with matching paper markdown from
-[`KRLabsOrg/acl-anthology-md`](https://huggingface.co/datasets/KRLabsOrg/acl-anthology-md), config `fulltext`.
-
-The matcher extracts ACL Anthology IDs from ACL-fig image filenames, normalizes IDs, applies known proceedings-volume fallback suffixes, and enriches each figure record with the corresponding paper markdown when available.
+This repository builds a persisted research dataset from a curated ACL
+Anthology subset. The current path starts from official ACL Anthology XML
+metadata, downloads the selected PDFs, extracts markdown and figures with
+MinerU, and writes a canonical paper-level dataset for clue and query
+generation.
 
 ## Repository Layout
 
 ```text
 src/dataset_generation/
-  sources.py     # Hugging Face dataset loading and ACL-fig record extraction
-  matching.py    # ID normalization, filename extraction, matching logic
   schema.py      # Output schema validation
-  build.py       # Reproducible build orchestration
+  acl_subset.py  # ACL Anthology subset metadata and PDF downloads
+  canonical.py   # Canonical paper/figure/clue representation
   storage.py     # Artifact writing and reading
   synthetic.py   # Stable interfaces for later test collection generation
   cli.py         # dataset-generation command line interface
@@ -22,9 +21,9 @@ src/dataset_generation/
 Generated data is intentionally ignored by Git:
 
 ```text
-data/raw/hf/                              # local Hugging Face source cache
-data/interim/interpretations/<run_id>/    # generated visual/textual sidecars
-data/processed/acl_fig_markdown/<split>/  # compact joined base dataset
+data/acl_subset/                          # curated ACL metadata and PDFs
+data/processed/mineru_pdf_extraction/     # extracted PDF markdown and figures
+data/canonical/                           # canonical papers, figures, clues, queries
 data/query_collections/<id>/              # generated query/eval collections
 ```
 
@@ -57,27 +56,30 @@ Run the full dataset generation pipeline from bash:
 scripts/build_everything_from_scratch.sh
 ```
 
-This syncs the environment, downloads source datasets, builds the processed and
-canonical artifacts, generates visual/textual canonical clue files, and
-generates query collections. Set `RUN_VISUAL=0`, `RUN_TEXTUAL=0`, or
-`RUN_QUERIES=0` to skip the expensive model-backed stages.
+This syncs the environment, builds the ACL subset metadata, downloads PDFs,
+runs MinerU extraction, builds the canonical artifact, generates visual/textual
+canonical clue files, and generates query collections. Set `RUN_VISUAL=0`,
+`RUN_TEXTUAL=0`, or `RUN_QUERIES=0` to skip the expensive model-backed stages.
 
 Or run individual steps:
 
 ```bash
 scripts/00_sync_env.sh
-scripts/01_download_sources.sh
-scripts/02_build_dataset.sh
+scripts/01_build_acl_subset.sh
+scripts/02_download_acl_pdfs.sh
+scripts/08_start_mineru_router.sh
+scripts/09_run_mineru_full_extraction.sh
 scripts/03_build_canonical.sh
 scripts/04_describe_all_figures.sh
 scripts/05_describe_all_textual_clues.sh
 scripts/06_generate_queries.sh
 ```
 
-`02_build_dataset.sh` writes the processed figure-row artifact under
-`data/processed/acl_fig_markdown/<split>/`. `03_build_canonical.sh` then builds
-the canonical paper-level artifact under `data/canonical/`, which is the default
-input for clue and query generation.
+Run `08_start_mineru_router.sh` in a separate terminal before
+`09_run_mineru_full_extraction.sh`. `03_build_canonical.sh` builds the
+canonical paper-level artifact under `data/canonical/` from
+`data/processed/mineru_pdf_extraction/papers/`, which is the default input for
+clue and query generation.
 
 The scripts use `DATA_DIR=data` and `SPLIT=train` by default. Override them as
 environment variables, for example:
@@ -103,40 +105,6 @@ overrides:
 TEXT_BATCH_SIZE=16 LIMIT=1000 scripts/05_describe_all_textual_clues.sh
 VISUAL_BATCH_SIZE=1 START_INDEX=5000 scripts/04_describe_all_figures.sh
 ATTN_IMPLEMENTATION= scripts/05_describe_all_textual_clues.sh
-```
-
-## Build The Dataset
-
-Download the source datasets once into the local data folder:
-
-```bash
-uv run dataset-generation download-sources --data-dir data --split train --paper-split train
-```
-
-Build the default train split from local sources when present and write a Parquet artifact:
-
-```bash
-uv run dataset-generation build --data-dir data
-```
-
-Build a specific split with an explicit output format:
-
-```bash
-uv run dataset-generation build \
-  --split train \
-  --output data/processed/acl_fig_markdown/train \
-  --format parquet
-```
-
-Run a small debug build without scanning the full markdown stream:
-
-```bash
-uv run dataset-generation build \
-  --split train \
-  --limit 100 \
-  --paper-limit 1000 \
-  --output data/processed/debug_acl_fig_markdown \
-  --format jsonl
 ```
 
 ## ACL Anthology Subset
@@ -235,31 +203,9 @@ The extraction client requests only production outputs: Markdown, images, and
 content list JSON. It explicitly skips the original PDF, middle JSON, and model
 output in MinerU responses.
 
-## Managed Runs
-
-Config-driven runs keep dataset, parser, prompt, model, and output settings in one YAML file:
-
-```bash
-uv run dataset-generation run --config configs/runs/acl_fig_markdown_smoke.yaml
-```
-
-Example configs live under `configs/runs/`. Relative paths in a run config are resolved from the config file location, so prompt templates and outputs remain portable when the project moves. A managed run writes the normal dataset artifact plus provenance files:
-
-```text
-data/processed/acl_fig_markdown_smoke/
-  data.jsonl
-  metadata.json
-  stats.json
-  resolved_config.yaml
-  resolved_config.json
-  prompt.txt
-```
-
-The first manager implementation uses a parser registry and a model-adapter registry. The default `acl_fig_markdown` parser wraps the existing build pipeline, and the initial `"null"` model adapter validates config without making model calls.
-
 ## Figure Descriptions
 
-Generate Qwen-VL visual descriptions from the processed dataset artifact:
+Generate Qwen-VL visual descriptions from the canonical ACL subset artifact:
 
 ```bash
 uv run dataset-generation describe-figures \
@@ -269,9 +215,9 @@ uv run dataset-generation describe-figures \
   --num-samples 1
 ```
 
-This reads image references from `data/processed/acl_fig_markdown/<split>/data.*`,
-so visual sidecars use the same `record_id` values as textual sidecars. You can
-still pass explicit local images for ad hoc checks:
+This reads figure image references from `data/canonical/papers.jsonl` and writes
+canonical visual clues to `data/canonical/visual_clues.jsonl`. You can still
+pass explicit local images for ad hoc checks:
 
 ```bash
 uv run dataset-generation describe-figures \
@@ -280,11 +226,12 @@ uv run dataset-generation describe-figures \
   --num-samples 1
 ```
 
-Outputs are written under `data/interim/interpretations/qwen3_vl_figure_description/` by default.
+Use `--output-dir` only when intentionally writing a separate interpretation
+artifact instead of the canonical clue sidecar.
 
 ## Textual Clues
 
-Generate semantic memory cues from the matched paper markdown in the same processed dataset artifact:
+Generate semantic memory cues from canonical paper markdown:
 
 ```bash
 uv run dataset-generation describe-textual-clues \
@@ -294,76 +241,56 @@ uv run dataset-generation describe-textual-clues \
   --num-samples 1
 ```
 
-Outputs are written under `data/interim/interpretations/qwen3_textual_clue_description/` by default with `kind=textual`.
+This writes canonical textual clues to `data/canonical/textual_clues.jsonl`.
 
 Print stored coverage statistics:
 
 ```bash
-uv run dataset-generation stats --dataset data/processed/acl_fig_markdown/train
+uv run dataset-generation stats --dataset data/canonical
 ```
 
 ## Artifact Structure
 
-Each build writes:
+Canonical builds write:
 
 ```text
-data/processed/acl_fig_markdown/train/
-  data.parquet      # or data.jsonl / data.csv
-  images/           # ACL-Fig images keyed by record_id
-  metadata.json     # build timestamp, source names/configs/splits, seed, build config
-  stats.json        # match coverage statistics
+data/canonical/
+  papers.jsonl
+  markdown/
+  images/
+  pdfs/
+  build_report.json
+  textual_clues.jsonl
+  visual_clues.jsonl
+  queries.jsonl
 ```
 
-Rows include the matched paper `markdown` plus `image_relpath` and `image_path`
-references when images are materialized. Use `--no-images` on `dataset-generation build`
-to skip writing the image files.
-
-The base dataset should stay compact and canonical: figure/document metadata, stable IDs, labels, and matched markdown. Model-generated descriptions belong in sidecar artifacts keyed by `record_id`:
-
-```text
-data/interim/interpretations/<run_id>/
-  interpretations.jsonl  # record_id, kind=visual|textual, text, model, prompt_id, prompt_version
-  metadata.json          # run-level provenance
-```
-
-The current default pipeline writes canonical clue sidecars directly next to
-`data/canonical/papers.jsonl`:
+The base dataset stays compact and canonical: paper metadata, markdown
+references, figure image references, source PDF references, and source
+provenance. Model-generated descriptions are sidecars keyed by canonical
+`paper_id` and `figure_id`:
 
 ```text
 data/canonical/textual_clues.jsonl
 data/canonical/visual_clues.jsonl
 ```
 
-Prompt templates live in `prompts/` and are referenced by ID/version from sidecar metadata. Later query generation should join the base dataset with one or more interpretation sidecars, then write query collections under `data/query_collections/<collection_id>/`.
+Prompt templates live in `prompts/` and are referenced by ID/version from
+sidecar metadata. Query generation joins canonical papers with clue sidecars and
+writes query collections under `data/query_collections/<collection_id>/`.
 
 ## Output Schema
 
-Required fields:
+Each `papers.jsonl` row contains:
 
 | Field | Description |
 | --- | --- |
-| `record_id` | Stable SHA-1 ID derived from split, index, and filename |
-| `filename` | ACL-fig image filename/path |
-| `extracted_paper_id` | Paper ID extracted from the filename |
-| `normalized_paper_id` | Normalized lookup key |
-| `resolved_paper_id` | Matched markdown paper ID, including fallback suffix when used |
-| `label` | ACL-fig label/class value |
-| `markdown` | Matched paper markdown, or empty string when unmatched |
-| `match_status` | `matched` or `unmatched` |
-| `source_fig_dataset` | Figure source dataset name |
-| `source_fig_split` | Figure source split |
-| `source_paper_dataset` | Markdown source dataset name |
-| `source_paper_config` | Markdown source config |
-
-Additional image metadata fields include `image_width`, `image_height`, and `image_mode` when available.
-
-## Matching Behavior
-
-The matching code preserves the prototype behavior:
-
-- Normalize URLs, trailing `.pdf`, `.dataset`, casing, whitespace, and trailing version suffixes such as `v2`.
-- Extract paper IDs from filenames like `2007.sigdial-1.12.pdf-Figure4.png`.
-- Try direct normalized-ID matches first.
+| `paper_id` | ACL Anthology paper ID |
+| `markdown_relpath` | Relative path to canonical markdown |
+| `markdown_sha256` | SHA-256 of the canonical markdown file |
+| `source` | ACL subset, PDF, and extraction provenance |
+| `figures` | Canonical figures with `figure_id`, `image_relpath`, `image_sha256`, and metadata |
+| `queries` | Reserved query grouping fields |
 - Try fallback suffixes in order: `.0`, `00`, `000`, `0`.
 
 ## Synthetic Test Collections

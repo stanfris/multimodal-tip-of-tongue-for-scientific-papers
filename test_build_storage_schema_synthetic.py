@@ -7,9 +7,9 @@ from dataclasses import asdict
 
 import pytest
 
-from dataset_generation.build import BuildConfig, build_combined_dataset
 from dataset_generation.canonical import (
     align_canonical_clues,
+    build_canonical_from_extracted_papers,
     build_canonical_papers,
     canonical_textual_clues_path,
     canonical_visual_clues_path,
@@ -27,8 +27,6 @@ from dataset_generation.query_generation import (
     generate_query_collections,
     select_components,
 )
-from dataset_generation.schema import validate_record
-from dataset_generation.sources import dataset_cache_path, extract_acl_fig_record, materialize_acl_fig_images
 from dataset_generation.storage import read_dataset_artifact, read_stats, write_dataset_artifact
 from dataset_generation.synthetic import (
     SyntheticCollectionConfig,
@@ -65,63 +63,45 @@ def fixture_records():
             "filename": "2020.acl-main.128.pdf-Figure1.png",
             "extracted_paper_id": "2020.acl-main.128",
             "normalized_paper_id": "2020.acl-main.128",
+            "resolved_paper_id": "2020.acl-main.128",
             "label": "bar chart",
+            "markdown": "# Direct match",
+            "match_status": "matched",
             "image_width": 640,
             "image_height": 480,
             "image_mode": "RGB",
-            "source_fig_dataset": "citeseerx/ACL-fig",
+            "source_fig_dataset": "mineru_pdf_extraction",
             "source_fig_split": "train",
+            "source_paper_dataset": "acl_subset",
+            "source_paper_config": "official_acl_anthology_xml",
+            "source_paper_split": "curated",
         },
         {
             "record_id": "fig-2",
             "filename": "w14-33.pdf-Figure1.png",
             "extracted_paper_id": "w14-33",
             "normalized_paper_id": "w14-33",
+            "resolved_paper_id": "w14-3300",
             "label": "table",
+            "markdown": "# Fallback match",
+            "match_status": "matched",
             "image_width": None,
             "image_height": None,
             "image_mode": None,
-            "source_fig_dataset": "citeseerx/ACL-fig",
+            "source_fig_dataset": "mineru_pdf_extraction",
             "source_fig_split": "train",
+            "source_paper_dataset": "acl_subset",
+            "source_paper_config": "official_acl_anthology_xml",
+            "source_paper_split": "curated",
         },
     ]
 
 
-def fixture_papers():
-    return [
-        {"anthology_id": "2020.acl-main.128", "markdown": "# Direct match"},
-        {"anthology_id": "w14-3300", "markdown": "# Fallback match"},
-    ]
-
-
-def test_build_combined_dataset_with_fixtures():
-    records, stats, metadata = build_combined_dataset(
-        BuildConfig(seed=42),
-        records=fixture_records(),
-        papers=fixture_papers(),
-    )
-
-    assert len(records) == 2
-    assert stats["matched_records"] == 2
-    assert stats["matched_percent"] == 100.0
-    assert metadata["seed"] == 42
-    for record in records:
-        validate_record(record)
-
-
-def test_schema_rejects_missing_required_field():
-    record = fixture_records()[0]
-    with pytest.raises(ValueError, match="resolved_paper_id"):
-        validate_record(record)
-
-
 def test_write_and_read_jsonl_artifact(tmp_path):
-    records, stats, metadata = build_combined_dataset(
-        BuildConfig(),
-        records=fixture_records(),
-        papers=fixture_papers(),
-    )
-    output = write_dataset_artifact(records, tmp_path / "acl_fig_markdown", metadata, stats, "jsonl")
+    records = fixture_records()
+    stats = {"matched_records": 2}
+    metadata = {"source": "fixture"}
+    output = write_dataset_artifact(records, tmp_path / "canonical_fixture", metadata, stats, "jsonl")
 
     frame = read_dataset_artifact(output)
     loaded_stats = read_stats(output)
@@ -131,79 +111,8 @@ def test_write_and_read_jsonl_artifact(tmp_path):
     assert (output / "metadata.json").exists()
 
 
-def test_materialize_acl_fig_images_adds_record_references(monkeypatch, tmp_path):
-    class FakeDataset(list):
-        features = {"label": object()}
-
-        def cast_column(self, name, feature):
-            return self
-
-    def fake_load_dataset(name, split):
-        return FakeDataset(
-            [
-                {
-                    "image": {
-                        "path": "2007.sigdial-1.12.pdf-Figure4.png",
-                        "bytes": b"image-bytes",
-                    },
-                    "label": 0,
-                }
-            ]
-        )
-
-    monkeypatch.setattr("dataset_generation.sources.load_dataset", fake_load_dataset)
-    records = [
-        extract_acl_fig_record(
-            {
-                "image": {
-                    "path": "2007.sigdial-1.12.pdf-Figure4.png",
-                    "bytes": None,
-                },
-                "label": 0,
-            },
-            index=0,
-            split="train",
-        )
-    ]
-
-    stats = materialize_acl_fig_images(records, tmp_path / "artifact", data_dir=None)
-
-    assert stats["images_written"] == 1
-    assert records[0]["image_relpath"] == f"images/{records[0]['record_id']}.png"
-    assert (tmp_path / "artifact" / records[0]["image_relpath"]).read_bytes() == b"image-bytes"
-
-
-def test_source_cache_path_is_stable(tmp_path):
-    path = dataset_cache_path(tmp_path, "KRLabsOrg/acl-anthology-md", "train", "fulltext")
-    assert path == tmp_path / "raw" / "hf" / "KRLabsOrg__acl-anthology-md__fulltext__train"
-
-
-def test_acl_fig_record_uses_undecoded_image_path():
-    record = extract_acl_fig_record(
-        {
-            "image": {
-                "path": "2007.sigdial-1.48.pdf-Figure4.png",
-                "bytes": None,
-            },
-            "label": 0,
-        },
-        index=2,
-        split="train",
-        label_names=["Line graph_chart"],
-    )
-
-    assert record["filename"] == "2007.sigdial-1.48.pdf-Figure4.png"
-    assert record["extracted_paper_id"] == "2007.sigdial-1.48"
-    assert record["normalized_paper_id"] == "2007.sigdial-1.48"
-    assert record["label"] == "Line graph_chart"
-
-
 def test_synthetic_collection_is_deterministic_and_writable(tmp_path):
-    records, _, _ = build_combined_dataset(
-        BuildConfig(),
-        records=fixture_records(),
-        papers=fixture_papers(),
-    )
+    records = fixture_records()
     config = SyntheticCollectionConfig(seed=7, max_examples=1, negative_examples_per_query=1)
     collection = generate_synthetic_queries(records, config)
     repeat = generate_synthetic_queries(records, config)
@@ -230,7 +139,7 @@ def test_interpretations_are_sidecar_artifacts(tmp_path):
             )
         ],
         tmp_path / "interpretations" / "run-1",
-        {"base_dataset": "data/processed/acl_fig_markdown/train"},
+        {"base_dataset": "data/canonical"},
     )
 
     rows = read_interpretations(output)
@@ -238,6 +147,42 @@ def test_interpretations_are_sidecar_artifacts(tmp_path):
     assert rows[0]["record_id"] == "fig-1"
     assert rows[0]["kind"] == "visual"
     assert metadata["record_count"] == 1
+
+
+def test_build_canonical_from_extracted_acl_subset_papers(tmp_path):
+    source = tmp_path / "processed" / "mineru_pdf_extraction" / "papers" / "2026.acl-long.1"
+    (source / "mineru" / "images").mkdir(parents=True)
+    (source / "markdown.md").write_text("# Extracted paper\n\nBody", encoding="utf-8")
+    (source / "2026.acl-long.1.pdf").write_bytes(b"%PDF-1.7\n")
+    image = source / "mineru" / "images" / "fig1.png"
+    image.write_bytes(b"image-bytes")
+    (source / "paper.json").write_text(
+        json.dumps(
+            {
+                "paper_id": "2026.acl-long.1",
+                "title": "Paper",
+                "figures": [
+                    {
+                        "type": "image",
+                        "page_idx": 0,
+                        "caption": "Example figure",
+                        "image_relpath": "mineru/images/fig1.png",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    papers, report = build_canonical_from_extracted_papers(source.parent, tmp_path / "canonical")
+
+    assert report["papers_written"] == 1
+    assert report["canonical_unique_figures"] == 1
+    assert papers[0]["paper_id"] == "2026.acl-long.1"
+    assert papers[0]["source"]["source_paper_dataset"] == "acl_subset"
+    assert read_canonical_markdown(tmp_path / "canonical", papers[0]).startswith("# Extracted paper")
+    assert (tmp_path / "canonical" / papers[0]["figures"][0]["image_relpath"]).exists()
+    assert (tmp_path / "canonical" / "pdfs" / "2026.acl-long.1.pdf").exists()
 
 
 def test_vl_figure_description_helpers_use_local_paths(tmp_path):
