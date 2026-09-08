@@ -223,6 +223,12 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     markdown_image_total = sum(int(row["markdown_image_count"]) for row in rows)
     figure_total = sum(int(row["figure_caption_count"]) for row in rows)
     table_total = sum(int(row["table_caption_count"]) for row in rows)
+    mean_caption_to_image_file_error = mean(row["caption_to_image_file_delta"] for row in rows)
+    mean_caption_to_image_file_absolute_error = mean(row["caption_to_image_file_absolute_error"] for row in rows)
+    mean_caption_to_markdown_image_error = mean(row["caption_to_markdown_image_delta"] for row in rows)
+    mean_caption_to_markdown_image_absolute_error = mean(
+        row["caption_to_markdown_image_absolute_error"] for row in rows
+    )
     return {
         "metadata_match_count": sum(1 for row in rows if row["has_metadata"]),
         "metadata_abstract_count": sum(1 for row in rows if row["has_metadata_abstract"]),
@@ -236,16 +242,12 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "figure_table_caption_count": caption_total,
         "markdown_image_count": markdown_image_total,
         "image_file_count": image_file_total,
-        "caption_to_image_file_delta": caption_total - image_file_total,
-        "caption_to_markdown_image_delta": caption_total - markdown_image_total,
-        "mean_caption_to_image_file_error": mean(row["caption_to_image_file_delta"] for row in rows),
-        "mean_caption_to_image_file_absolute_error": mean(
-            row["caption_to_image_file_absolute_error"] for row in rows
-        ),
-        "mean_caption_to_markdown_image_error": mean(row["caption_to_markdown_image_delta"] for row in rows),
-        "mean_caption_to_markdown_image_absolute_error": mean(
-            row["caption_to_markdown_image_absolute_error"] for row in rows
-        ),
+        "caption_to_image_file_delta": mean_caption_to_image_file_error,
+        "caption_to_image_file_absolute_error": mean_caption_to_image_file_absolute_error,
+        "caption_to_markdown_image_delta": mean_caption_to_markdown_image_error,
+        "caption_to_markdown_image_absolute_error": mean_caption_to_markdown_image_absolute_error,
+        "total_caption_to_image_file_delta": caption_total - image_file_total,
+        "total_caption_to_markdown_image_delta": caption_total - markdown_image_total,
         "papers_with_caption_image_file_mismatch": sum(
             1 for row in rows if row["figure_table_caption_count"] != row["image_file_count"]
         ),
