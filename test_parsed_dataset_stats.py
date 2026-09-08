@@ -43,6 +43,7 @@ def test_compute_stats_compares_abstracts_and_visual_counts(tmp_path: Path) -> N
     (images_dir / "one.jpg").write_bytes(b"fake")
     (images_dir / "two.png").write_bytes(b"fake")
     (images_dir / "three.png").write_bytes(b"fake")
+    (images_dir / "four.png").write_bytes(b"fake")
     (paper_dir / "markdown.md").write_text(
         """# A Paper
 
@@ -57,7 +58,8 @@ Neural systems compare figures and tables with parsed images.
 Figure 1: First multi-panel figure with (a) and (b).
 
 <table><tr><td>x</td></tr></table>
-Table 1: First table.
+<table><tr><td>y</td></tr></table>
+Table 1: First multi-panel table with (a) and (b).
 """,
         encoding="utf-8",
     )
@@ -69,11 +71,11 @@ Table 1: First table.
     assert row["abstract_sequence_similarity"] == 1.0
     assert row["abstract_word_jaccard"] == 1.0
     assert row["figure_caption_count"] == 2
-    assert row["table_caption_count"] == 1
-    assert row["figure_table_caption_count"] == 3
+    assert row["table_caption_count"] == 2
+    assert row["figure_table_caption_count"] == 4
     assert row["markdown_linked_image_count"] == 2
-    assert row["markdown_image_count"] == 3
-    assert row["image_file_count"] == 3
+    assert row["markdown_image_count"] == 4
+    assert row["image_file_count"] == 4
     assert row["markdown_to_image_file_delta"] == 0
     assert row["markdown_to_image_file_absolute_error"] == 0
     assert row["caption_to_image_file_delta"] == 0

@@ -25,6 +25,7 @@ HTML_IMG_RE = re.compile(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"'][^>]*>", re.IGNOR
 CAPTION_RE = re.compile(
     r"(?im)^\s*(?P<kind>fig(?:ure)?|table)\s*\.?\s*(?P<number>[0-9]+[A-Za-z]?)\s*[:.)]"
 )
+TABLE_TAG_RE = re.compile(r"<table\b", re.IGNORECASE)
 WORD_RE = re.compile(r"[A-Za-z0-9]+")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
@@ -208,8 +209,10 @@ def count_caption_labels(markdown: str) -> Counter[str]:
     counts: Counter[str] = Counter()
     seen_labels: set[tuple[str, str]] = set()
     pending_image_panels = 0
+    pending_table_panels = 0
     for line in markdown.splitlines():
         pending_image_panels += len(extract_markdown_images(line))
+        pending_table_panels += len(TABLE_TAG_RE.findall(line))
         match = CAPTION_RE.match(line)
         if not match:
             continue
@@ -217,13 +220,15 @@ def count_caption_labels(markdown: str) -> Counter[str]:
         label = (kind, match.group("number").casefold())
         if label in seen_labels:
             pending_image_panels = 0
+            pending_table_panels = 0
             continue
         seen_labels.add(label)
         if kind == "figure":
             counts[kind] += max(pending_image_panels, 1)
         else:
-            counts[kind] += 1
+            counts[kind] += max(pending_table_panels, 1)
         pending_image_panels = 0
+        pending_table_panels = 0
     return counts
 
 
