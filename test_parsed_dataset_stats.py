@@ -70,24 +70,17 @@ Table 1: First multi-panel table with (a) and (b).
     row = report["papers"][0]
     assert row["abstract_sequence_similarity"] == 1.0
     assert row["abstract_word_jaccard"] == 1.0
-    assert row["figure_caption_count"] == 2
-    assert row["table_caption_count"] == 2
-    assert row["figure_table_caption_count"] == 4
+    assert row["markdown_figure_count"] == 2
+    assert row["markdown_table_count"] == 2
     assert row["markdown_linked_image_count"] == 2
     assert row["markdown_image_count"] == 4
     assert row["image_file_count"] == 4
     assert row["markdown_to_image_file_delta"] == 0
     assert row["markdown_to_image_file_absolute_error"] == 0
-    assert row["caption_to_image_file_delta"] == 0
-    assert row["caption_to_image_file_absolute_error"] == 0
-    assert row["caption_to_markdown_image_delta"] == 0
-    assert row["caption_to_markdown_image_absolute_error"] == 0
     assert report["aggregate"]["markdown_to_image_file_delta"] == 0.0
     assert report["aggregate"]["markdown_to_image_file_absolute_error"] == 0.0
-    assert report["aggregate"]["caption_to_image_file_delta"] == 0.0
-    assert report["aggregate"]["caption_to_image_file_absolute_error"] == 0.0
-    assert report["aggregate"]["caption_to_markdown_image_delta"] == 0.0
-    assert report["aggregate"]["caption_to_markdown_image_absolute_error"] == 0.0
+    assert report["aggregate"]["markdown_figure_count"] == 2
+    assert report["aggregate"]["markdown_table_count"] == 2
 
 
 def test_run_writes_json_and_csv_outputs(tmp_path: Path) -> None:

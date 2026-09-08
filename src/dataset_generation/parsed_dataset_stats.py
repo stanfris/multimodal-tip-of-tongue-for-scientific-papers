@@ -7,7 +7,6 @@ import html
 import json
 import re
 import statistics
-from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -22,9 +21,6 @@ ABSTRACT_HEADING_RE = re.compile(r"^\s*#{1,6}\s+abstract\s*$", re.IGNORECASE | r
 NEXT_HEADING_RE = re.compile(r"^\s*#{1,6}\s+\S", re.MULTILINE)
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 HTML_IMG_RE = re.compile(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"'][^>]*>", re.IGNORECASE)
-CAPTION_RE = re.compile(
-    r"(?im)^\s*(?P<kind>fig(?:ure)?|table)\s*\.?\s*(?P<number>[0-9]+[A-Za-z]?)\s*[:.)]"
-)
 TABLE_TAG_RE = re.compile(r"<table\b", re.IGNORECASE)
 WORD_RE = re.compile(r"[A-Za-z0-9]+")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -130,11 +126,10 @@ def summarize_paper(paper: PaperInputs, metadata: dict[str, Any]) -> dict[str, A
     metadata_tokens = token_set(metadata_abstract)
     parsed_tokens = token_set(parsed_abstract)
     overlap = metadata_tokens & parsed_tokens
-    caption_counts = count_caption_labels(markdown)
     markdown_linked_image_count = len(extract_markdown_images(markdown))
-    markdown_image_count = markdown_linked_image_count + caption_counts["table"]
+    markdown_table_count = count_markdown_tables(markdown)
+    markdown_image_count = markdown_linked_image_count + markdown_table_count
     image_file_count = count_image_files(paper.paper_dir / "images")
-    expected_visual_count = caption_counts["figure"] + caption_counts["table"]
     markdown_to_image_file_delta = markdown_image_count - image_file_count
     return {
         "paper_id": paper.paper_id,
@@ -148,18 +143,13 @@ def summarize_paper(paper: PaperInputs, metadata: dict[str, Any]) -> dict[str, A
         "abstract_word_jaccard": round(jaccard(metadata_tokens, parsed_tokens), 6),
         "metadata_abstract_word_recall": round(len(overlap) / len(metadata_tokens), 6) if metadata_tokens else None,
         "parsed_abstract_word_precision": round(len(overlap) / len(parsed_tokens), 6) if parsed_tokens else None,
-        "figure_caption_count": caption_counts["figure"],
-        "table_caption_count": caption_counts["table"],
-        "figure_table_caption_count": expected_visual_count,
+        "markdown_figure_count": markdown_linked_image_count,
+        "markdown_table_count": markdown_table_count,
         "markdown_linked_image_count": markdown_linked_image_count,
         "markdown_image_count": markdown_image_count,
         "image_file_count": image_file_count,
         "markdown_to_image_file_delta": markdown_to_image_file_delta,
         "markdown_to_image_file_absolute_error": abs(markdown_to_image_file_delta),
-        "caption_to_image_file_delta": expected_visual_count - image_file_count,
-        "caption_to_image_file_absolute_error": abs(expected_visual_count - image_file_count),
-        "caption_to_markdown_image_delta": expected_visual_count - markdown_image_count,
-        "caption_to_markdown_image_absolute_error": abs(expected_visual_count - markdown_image_count),
     }
 
 
@@ -205,35 +195,12 @@ def jaccard(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(left | right)
 
 
-def count_caption_labels(markdown: str) -> Counter[str]:
-    counts: Counter[str] = Counter()
-    seen_labels: set[tuple[str, str]] = set()
-    pending_image_panels = 0
-    pending_table_panels = 0
-    for line in markdown.splitlines():
-        pending_image_panels += len(extract_markdown_images(line))
-        pending_table_panels += len(TABLE_TAG_RE.findall(line))
-        match = CAPTION_RE.match(line)
-        if not match:
-            continue
-        kind = "figure" if match.group("kind").casefold().startswith("fig") else "table"
-        label = (kind, match.group("number").casefold())
-        if label in seen_labels:
-            pending_image_panels = 0
-            pending_table_panels = 0
-            continue
-        seen_labels.add(label)
-        if kind == "figure":
-            counts[kind] += max(pending_image_panels, 1)
-        else:
-            counts[kind] += max(pending_table_panels, 1)
-        pending_image_panels = 0
-        pending_table_panels = 0
-    return counts
-
-
 def extract_markdown_images(markdown: str) -> list[str]:
     return [*MARKDOWN_IMAGE_RE.findall(markdown), *HTML_IMG_RE.findall(markdown)]
+
+
+def count_markdown_tables(markdown: str) -> int:
+    return len(TABLE_TAG_RE.findall(markdown))
 
 
 def count_image_files(images_dir: Path) -> int:
@@ -243,21 +210,14 @@ def count_image_files(images_dir: Path) -> int:
 
 
 def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    caption_total = sum(int(row["figure_table_caption_count"]) for row in rows)
     image_file_total = sum(int(row["image_file_count"]) for row in rows)
     markdown_image_total = sum(int(row["markdown_image_count"]) for row in rows)
     markdown_linked_image_total = sum(int(row["markdown_linked_image_count"]) for row in rows)
-    figure_total = sum(int(row["figure_caption_count"]) for row in rows)
-    table_total = sum(int(row["table_caption_count"]) for row in rows)
+    markdown_figure_total = sum(int(row["markdown_figure_count"]) for row in rows)
+    markdown_table_total = sum(int(row["markdown_table_count"]) for row in rows)
     mean_markdown_to_image_file_error = mean(row["markdown_to_image_file_delta"] for row in rows)
     mean_markdown_to_image_file_absolute_error = mean(
         row["markdown_to_image_file_absolute_error"] for row in rows
-    )
-    mean_caption_to_image_file_error = mean(row["caption_to_image_file_delta"] for row in rows)
-    mean_caption_to_image_file_absolute_error = mean(row["caption_to_image_file_absolute_error"] for row in rows)
-    mean_caption_to_markdown_image_error = mean(row["caption_to_markdown_image_delta"] for row in rows)
-    mean_caption_to_markdown_image_absolute_error = mean(
-        row["caption_to_markdown_image_absolute_error"] for row in rows
     )
     return {
         "metadata_match_count": sum(1 for row in rows if row["has_metadata"]),
@@ -267,27 +227,14 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_abstract_word_jaccard": mean(row["abstract_word_jaccard"] for row in rows),
         "mean_metadata_abstract_word_recall": mean_optional(row["metadata_abstract_word_recall"] for row in rows),
         "mean_parsed_abstract_word_precision": mean_optional(row["parsed_abstract_word_precision"] for row in rows),
-        "figure_caption_count": figure_total,
-        "table_caption_count": table_total,
-        "figure_table_caption_count": caption_total,
+        "markdown_figure_count": markdown_figure_total,
+        "markdown_table_count": markdown_table_total,
         "markdown_linked_image_count": markdown_linked_image_total,
         "markdown_image_count": markdown_image_total,
         "image_file_count": image_file_total,
         "markdown_to_image_file_delta": mean_markdown_to_image_file_error,
         "markdown_to_image_file_absolute_error": mean_markdown_to_image_file_absolute_error,
         "total_markdown_to_image_file_delta": markdown_image_total - image_file_total,
-        "caption_to_image_file_delta": mean_caption_to_image_file_error,
-        "caption_to_image_file_absolute_error": mean_caption_to_image_file_absolute_error,
-        "caption_to_markdown_image_delta": mean_caption_to_markdown_image_error,
-        "caption_to_markdown_image_absolute_error": mean_caption_to_markdown_image_absolute_error,
-        "total_caption_to_image_file_delta": caption_total - image_file_total,
-        "total_caption_to_markdown_image_delta": caption_total - markdown_image_total,
-        "papers_with_caption_image_file_mismatch": sum(
-            1 for row in rows if row["figure_table_caption_count"] != row["image_file_count"]
-        ),
-        "papers_with_caption_markdown_image_mismatch": sum(
-            1 for row in rows if row["figure_table_caption_count"] != row["markdown_image_count"]
-        ),
         "papers_with_markdown_image_file_mismatch": sum(
             1 for row in rows if row["markdown_image_count"] != row["image_file_count"]
         ),
