@@ -9,7 +9,6 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "datasets>=5.0.1",
-    "huggingface-hub>=1.26.0",
     "httpx>=0.28.0",
     "ipykernel>=7.3.0",
     "matplotlib>=3.11.1",
@@ -21,8 +20,7 @@ dependencies = [
     "torch",
     "accelerate",
     "torchvision",
-    "mlx-lm>=0.31.3",
-    "mlx-vlm>=0.6.17",
+    "mineru[core,vllm]==3.4.5",
 ]
 
 [project.scripts]
