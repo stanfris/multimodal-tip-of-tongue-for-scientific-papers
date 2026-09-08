@@ -151,7 +151,9 @@ def summarize_paper(paper: PaperInputs, metadata: dict[str, Any]) -> dict[str, A
         "markdown_image_count": markdown_image_count,
         "image_file_count": image_file_count,
         "caption_to_image_file_delta": expected_visual_count - image_file_count,
+        "caption_to_image_file_absolute_error": abs(expected_visual_count - image_file_count),
         "caption_to_markdown_image_delta": expected_visual_count - markdown_image_count,
+        "caption_to_markdown_image_absolute_error": abs(expected_visual_count - markdown_image_count),
     }
 
 
@@ -236,6 +238,14 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "image_file_count": image_file_total,
         "caption_to_image_file_delta": caption_total - image_file_total,
         "caption_to_markdown_image_delta": caption_total - markdown_image_total,
+        "mean_caption_to_image_file_error": mean(row["caption_to_image_file_delta"] for row in rows),
+        "mean_caption_to_image_file_absolute_error": mean(
+            row["caption_to_image_file_absolute_error"] for row in rows
+        ),
+        "mean_caption_to_markdown_image_error": mean(row["caption_to_markdown_image_delta"] for row in rows),
+        "mean_caption_to_markdown_image_absolute_error": mean(
+            row["caption_to_markdown_image_absolute_error"] for row in rows
+        ),
         "papers_with_caption_image_file_mismatch": sum(
             1 for row in rows if row["figure_table_caption_count"] != row["image_file_count"]
         ),

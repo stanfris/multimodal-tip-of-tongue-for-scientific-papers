@@ -72,7 +72,13 @@ Table 1: First table.
     assert row["markdown_image_count"] == 1
     assert row["image_file_count"] == 2
     assert row["caption_to_image_file_delta"] == 0
+    assert row["caption_to_image_file_absolute_error"] == 0
     assert row["caption_to_markdown_image_delta"] == 1
+    assert row["caption_to_markdown_image_absolute_error"] == 1
+    assert report["aggregate"]["mean_caption_to_image_file_error"] == 0.0
+    assert report["aggregate"]["mean_caption_to_image_file_absolute_error"] == 0.0
+    assert report["aggregate"]["mean_caption_to_markdown_image_error"] == 1.0
+    assert report["aggregate"]["mean_caption_to_markdown_image_absolute_error"] == 1.0
 
 
 def test_run_writes_json_and_csv_outputs(tmp_path: Path) -> None:
