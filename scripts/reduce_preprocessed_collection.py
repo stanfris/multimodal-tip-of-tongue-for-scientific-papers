@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -24,69 +25,130 @@ def main() -> None:
     if not root.exists():
         raise SystemExit(f"Preprocessed directory does not exist: {root}")
 
-    paper_summaries: list[dict[str, Any]] = []
     aggregate_block_types: Counter[str] = Counter()
     aggregate_image_types: Counter[str] = Counter()
     aggregate_image_extensions: Counter[str] = Counter()
     aggregate_equation_types: Counter[str] = Counter()
+    equation_count = 0
+    processed = 0
+    skipped = 0
+    failures: list[dict[str, str]] = []
 
-    for paper_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+    paper_dirs = sorted(path for path in root.iterdir() if path.is_dir())
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+        futures = [executor.submit(reduce_paper_dir, paper_dir, args.max_pages, args.dry_run) for paper_dir in paper_dirs]
+        for index, future in enumerate(as_completed(futures), start=1):
+            try:
+                paper_summary = future.result()
+            except Exception as exc:
+                failures.append({"paper_dir": "<unknown>", "error": str(exc)})
+                if args.fail_fast:
+                    raise
+                continue
+
+            if paper_summary["status"] == "skipped":
+                skipped += 1
+                continue
+            if paper_summary["status"] == "failed":
+                failures.append({"paper_dir": paper_summary["paper_dir"], "error": paper_summary["error"]})
+                if args.fail_fast:
+                    raise RuntimeError(f"{paper_summary['paper_dir']}: {paper_summary['error']}")
+                continue
+
+            processed += 1
+            aggregate_block_types.update(paper_summary["block_type_counts"])
+            aggregate_image_types.update(paper_summary["image_like_type_counts"])
+            aggregate_image_extensions.update(paper_summary["image_extensions"])
+            aggregate_equation_types.update(paper_summary["equation_type_counts"])
+            equation_count += paper_summary["equation_count"]
+            if args.progress_every and index % args.progress_every == 0:
+                print(
+                    json.dumps(
+                        {"stage": "reduce", "seen": index, "processed": processed, "skipped": skipped, "failures": len(failures)},
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+
+    report = {
+        "preprocessed_dir": str(root),
+        "dry_run": args.dry_run,
+        "max_pages": args.max_pages,
+        "paper_count": processed,
+        "skipped_count": skipped,
+        "failure_count": len(failures),
+        "failures": failures,
+        "aggregate": {
+            "block_type_counts": dict(sorted(aggregate_block_types.items())),
+            "image_like_type_counts": dict(sorted(aggregate_image_types.items())),
+            "image_extensions": dict(sorted(aggregate_image_extensions.items())),
+            "equation_type_counts": dict(sorted(aggregate_equation_types.items())),
+            "equation_count": equation_count,
+        },
+    }
+
+    if args.report:
+        if not args.dry_run:
+            write_json(args.report, report)
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(report["aggregate"], indent=2, sort_keys=True))
+
+    if failures:
+        raise SystemExit(1)
+
+
+def reduce_paper_dir(paper_dir: Path, max_pages: int, dry_run: bool) -> dict[str, Any]:
+    try:
         paper_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
         figures_path = paper_dir / "figures.json"
         if not paper_path.exists() or not markdown_path.exists():
-            continue
+            return {"status": "skipped", "paper_dir": str(paper_dir)}
 
         paper = read_json(paper_path)
         paper_id = str(paper.get("paper_id") or paper_dir.name)
         structured_outputs = paper.get("structured_outputs") or {}
 
-        content_summaries: list[dict[str, Any]] = []
         content_results: list[dict[str, Any]] = []
-
         for name, relpath in sorted(structured_outputs.items()):
             content_path = paper_dir / str(relpath)
             if not content_path.exists():
-                content_summaries.append({"name": name, "path": str(relpath), "missing": True})
                 continue
 
             content = read_json(content_path)
             if is_v2_content_list(content):
-                trimmed, summary, found_equations = trim_v2_content_list(content, args.max_pages)
+                trimmed, summary, found_equations = trim_v2_content_list(content, max_pages)
             else:
-                trimmed, summary, found_equations = trim_v1_content_list(content, args.max_pages)
+                trimmed, summary, found_equations = trim_v1_content_list(content, max_pages)
 
-            if not args.dry_run:
+            if not dry_run:
                 write_json(content_path, trimmed)
 
             content_result = {"name": name, "path": str(relpath), **summary}
-            content_summaries.append(content_result)
             content_results.append({"summary": content_result, "equations": found_equations})
 
         markdown = markdown_path.read_text(encoding="utf-8", errors="replace")
         trimmed_markdown, markdown_summary = trim_markdown_after_references(markdown)
-        if not args.dry_run and trimmed_markdown != markdown:
+        if not dry_run and trimmed_markdown != markdown:
             markdown_path.write_text(trimmed_markdown, encoding="utf-8")
 
         if figures_path.exists():
             figures = read_json(figures_path)
-            trimmed_figures = trim_page_indexed_records(figures, args.max_pages)
-            if not args.dry_run and trimmed_figures != figures:
+            trimmed_figures = trim_page_indexed_records(figures, max_pages)
+            if not dry_run and trimmed_figures != figures:
                 write_json(figures_path, trimmed_figures)
-        else:
-            figures = []
-            trimmed_figures = []
 
-        if not args.dry_run:
+        if not dry_run:
             paper["num_pages_original"] = paper.get("num_pages_original", paper.get("num_pages"))
-            paper["num_pages"] = min(args.max_pages, int(paper.get("num_pages") or args.max_pages))
+            paper["num_pages"] = min(max_pages, int(paper.get("num_pages") or max_pages))
             paper["markdown_sha256"] = sha256_text(
                 markdown_path.read_text(encoding="utf-8", errors="replace")
             )
             if isinstance(paper.get("figures"), list):
-                paper["figures"] = trim_page_indexed_records(paper["figures"], args.max_pages)
+                paper["figures"] = trim_page_indexed_records(paper["figures"], max_pages)
             paper["preprocessed_reduction"] = {
-                "max_pages": args.max_pages,
+                "max_pages": max_pages,
                 "markdown_trim_rule": "keep References; remove the first level-2 heading after References and everything after it",
                 "equations_relpath": "equations.json",
                 "report_relpath": "../preprocessed_reduction_report.json",
@@ -101,47 +163,21 @@ def main() -> None:
         paper_image_extensions = Counter(primary.get("image_extensions", {}))
         paper_equation_types = Counter(primary.get("equation_type_counts", {}))
         paper_summary = {
+            "status": "processed",
             "paper_id": paper_id,
-            "paper_dir": paper_dir.name,
+            "paper_dir": str(paper_dir),
             "original_num_pages": paper.get("num_pages_original", paper.get("num_pages")),
-            "current_num_pages": min(args.max_pages, int(paper.get("num_pages") or args.max_pages)),
+            "current_num_pages": min(max_pages, int(paper.get("num_pages") or max_pages)),
             "markdown": markdown_summary,
-            "figures_json_count_before": len(figures) if isinstance(figures, list) else None,
-            "figures_json_count_after": len(trimmed_figures) if isinstance(trimmed_figures, list) else None,
-            "content_lists": content_summaries,
             "block_type_counts": dict(sorted(paper_block_types.items())),
             "image_like_type_counts": dict(sorted(paper_image_types.items())),
             "image_extensions": dict(sorted(paper_image_extensions.items())),
             "equation_type_counts": dict(sorted(paper_equation_types.items())),
             "equation_count": len(equations),
         }
-        paper_summaries.append(paper_summary)
-        aggregate_block_types.update(paper_block_types)
-        aggregate_image_types.update(paper_image_types)
-        aggregate_image_extensions.update(paper_image_extensions)
-        aggregate_equation_types.update(paper_equation_types)
-
-    report = {
-        "preprocessed_dir": str(root),
-        "dry_run": args.dry_run,
-        "max_pages": args.max_pages,
-        "paper_count": len(paper_summaries),
-        "aggregate": {
-            "block_type_counts": dict(sorted(aggregate_block_types.items())),
-            "image_like_type_counts": dict(sorted(aggregate_image_types.items())),
-            "image_extensions": dict(sorted(aggregate_image_extensions.items())),
-            "equation_type_counts": dict(sorted(aggregate_equation_types.items())),
-            "equation_count": sum(summary["equation_count"] for summary in paper_summaries),
-        },
-        "papers": paper_summaries,
-    }
-
-    if args.report:
-        if not args.dry_run:
-            write_json(args.report, report)
-        print(json.dumps(report, indent=2, sort_keys=True))
-    else:
-        print(json.dumps(report["aggregate"], indent=2, sort_keys=True))
+        return paper_summary
+    except Exception as exc:
+        return {"status": "failed", "paper_dir": str(paper_dir), "error": str(exc)}
 
 
 def parse_args() -> argparse.Namespace:
@@ -165,6 +201,9 @@ def parse_args() -> argparse.Namespace:
         help="Report JSON path. The report is printed even when this is set.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report planned changes without writing files.")
+    parser.add_argument("--workers", type=int, default=1, help="Number of paper directories to process concurrently.")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop on the first failed paper.")
+    parser.add_argument("--progress-every", type=int, default=100, help="Print progress every N completed papers; 0 disables.")
     return parser.parse_args()
 
 

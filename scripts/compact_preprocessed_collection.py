@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -22,33 +24,91 @@ def main() -> None:
     if not pdf_dir.exists():
         raise SystemExit(f"ACL subset PDF directory does not exist: {pdf_dir}")
 
-    report: list[dict[str, Any]] = []
-    for paper_dir in sorted(path for path in preprocessed_dir.iterdir() if path.is_dir()):
+    processed = 0
+    skipped = 0
+    failures: list[dict[str, str]] = []
+    image_count = 0
+    image_type_counts: Counter[str] = Counter()
+
+    paper_dirs = sorted(path for path in preprocessed_dir.iterdir() if path.is_dir())
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+        futures = [
+            executor.submit(compact_paper_dir, paper_dir, pdf_dir, args.dry_run)
+            for paper_dir in paper_dirs
+        ]
+        for index, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            if result["status"] == "processed":
+                processed += 1
+                image_count += result["image_count"]
+                image_type_counts.update(result["image_type_counts"])
+            elif result["status"] == "skipped":
+                skipped += 1
+            else:
+                failures.append({"paper_dir": result["paper_dir"], "error": result["error"]})
+                if args.fail_fast:
+                    raise RuntimeError(f"{result['paper_dir']}: {result['error']}")
+
+            if args.progress_every and index % args.progress_every == 0:
+                print(
+                    json.dumps(
+                        {"stage": "compact", "seen": index, "processed": processed, "skipped": skipped, "failures": len(failures)},
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+
+    print(
+        json.dumps(
+            {
+                "dry_run": args.dry_run,
+                "paper_count": processed,
+                "skipped_count": skipped,
+                "failure_count": len(failures),
+                "failures": failures,
+                "image_count": image_count,
+                "image_type_counts": dict(sorted(image_type_counts.items())),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+    if failures:
+        raise SystemExit(1)
+
+
+def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str, Any]:
+    try:
+        if is_compacted_paper_dir(paper_dir):
+            return {"status": "skipped", "paper_dir": str(paper_dir), "reason": "already_compacted"}
+
         paper_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
         if not paper_path.exists() or not markdown_path.exists():
-            continue
+            return {"status": "skipped", "paper_dir": str(paper_dir), "reason": "missing_inputs"}
 
         paper = json.loads(paper_path.read_text(encoding="utf-8"))
         paper_id = str(paper.get("paper_id") or paper_dir.name)
         v2_path = find_v2_content_list(paper_dir, paper)
         if not v2_path:
-            raise SystemExit(f"No v2 content list found for {paper_id}")
+            raise RuntimeError(f"No v2 content list found for {paper_id}")
 
         visual_sources = collect_visual_sources(v2_path)
         staged_dir = paper_dir / ".compact_images_tmp"
         if staged_dir.exists():
             shutil.rmtree(staged_dir)
-        staged_dir.mkdir()
+        if not dry_run:
+            staged_dir.mkdir()
 
         copied_images: list[dict[str, Any]] = []
-        for index, source in enumerate(visual_sources, start=1):
+        for source in visual_sources:
             source_path = resolve_source_image(v2_path.parent, source["source"])
             if not source_path.exists():
-                raise SystemExit(f"Missing source image for {paper_id}: {source_path}")
+                raise RuntimeError(f"Missing source image for {paper_id}: {source_path}")
             destination_name = destination_image_name(source_path)
             destination_path = staged_dir / destination_name
-            if not args.dry_run:
+            if not dry_run:
                 shutil.copy2(source_path, destination_path)
             copied_images.append(
                 {
@@ -61,31 +121,37 @@ def main() -> None:
 
         source_pdf = pdf_dir / f"{paper_id}.pdf"
         if not source_pdf.exists():
-            raise SystemExit(f"Missing ACL subset PDF for {paper_id}: {source_pdf}")
+            raise RuntimeError(f"Missing ACL subset PDF for {paper_id}: {source_pdf}")
 
-        if not args.dry_run:
+        if not dry_run:
             final_images_dir = paper_dir / "images"
             if final_images_dir.exists():
                 shutil.rmtree(final_images_dir)
             staged_dir.rename(final_images_dir)
             shutil.copy2(source_pdf, paper_dir / source_pdf.name)
             remove_unwanted_files(paper_dir, keep={markdown_path.name, source_pdf.name, "images"})
-        else:
+
+        return {
+            "status": "processed",
+            "paper_id": paper_id,
+            "paper_dir": str(paper_dir),
+            "image_count": len(copied_images),
+            "image_type_counts": count_by_type(copied_images),
+        }
+    except Exception as exc:
+        staged_dir = paper_dir / ".compact_images_tmp"
+        if staged_dir.exists():
             shutil.rmtree(staged_dir)
+        return {"status": "failed", "paper_dir": str(paper_dir), "error": str(exc)}
 
-        report.append(
-            {
-                "paper_id": paper_id,
-                "paper_dir": str(paper_dir),
-                "pdf": source_pdf.name,
-                "markdown": markdown_path.name,
-                "image_count": len(copied_images),
-                "image_type_counts": count_by_type(copied_images),
-                "images": copied_images,
-            }
-        )
 
-    print(json.dumps({"paper_count": len(report), "papers": report}, indent=2, sort_keys=True))
+def is_compacted_paper_dir(paper_dir: Path) -> bool:
+    if not (paper_dir / "markdown.md").exists() or not (paper_dir / "images").is_dir():
+        return False
+    if len(list(paper_dir.glob("*.pdf"))) != 1:
+        return False
+    allowed = {"markdown.md", "images"} | {path.name for path in paper_dir.glob("*.pdf")}
+    return all(child.name in allowed for child in paper_dir.iterdir())
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +169,9 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing ACL subset PDFs named <paper_id>.pdf.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the planned compaction without writing.")
+    parser.add_argument("--workers", type=int, default=1, help="Number of paper directories to process concurrently.")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop on the first failed paper.")
+    parser.add_argument("--progress-every", type=int, default=100, help="Print progress every N completed papers; 0 disables.")
     return parser.parse_args()
 
 
