@@ -14,6 +14,7 @@ from typing import Any, Callable, Literal
 
 import yaml
 
+from dataset_generation.document_splits import filter_papers_by_split
 from dataset_generation.preprocessed import (
     DEFAULT_CLUES_DIR,
     DEFAULT_DATA_DIR,
@@ -52,6 +53,8 @@ class QueryGenerationConfig:
     textual_interpretations: Path | None
     clues_dir: Path
     output_dir: Path
+    split_index: Path | None = None
+    split_name: str | None = None
     prompt: Path = DEFAULT_PROMPT
     prompt_id: str = "query_generation"
     prompt_version: str = "v1"
@@ -99,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clues-dir", type=Path, default=None)
     parser.add_argument("--visual-interpretations", type=Path, default=None)
     parser.add_argument("--textual-interpretations", type=Path, default=None)
+    parser.add_argument(
+        "--split-index",
+        type=Path,
+        default=None,
+        help="JSON train/test paper-id index. When set, --split selects the paper-id list to process.",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--collection-id", default=None)
     parser.add_argument("--prompt", type=Path, default=None)
@@ -124,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-index", type=int, default=None)
     parser.add_argument("--end-index", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--split", default="train", help="Dataset split used when --dataset is omitted.")
+    parser.add_argument("--split", default=None, help="Split name to read from --split-index, usually train or test.")
     return parser
 
 
@@ -134,13 +143,15 @@ def run(args: argparse.Namespace) -> Path:
 
 
 def load_query_generation_config(args: argparse.Namespace) -> QueryGenerationConfig:
-    base = _config_from_yaml(args.config) if args.config else _default_config(args.data_dir, args.split)
+    base = _config_from_yaml(args.config) if args.config else _default_config(args.data_dir, args.split or "train")
     max_examples = args.max_examples if args.max_examples is not None else args.limit
     overrides = {
         "dataset": args.dataset,
         "clues_dir": args.clues_dir,
         "visual_interpretations": args.visual_interpretations,
         "textual_interpretations": args.textual_interpretations,
+        "split_index": args.split_index,
+        "split_name": args.split if args.split is not None else None,
         "output_dir": args.output_dir,
         "collection_id": args.collection_id,
         "prompt": args.prompt,
@@ -205,7 +216,7 @@ def _generate_query_collections_from_preprocessed(
     root = config.output_dir / config.collection_id
     root.mkdir(parents=True, exist_ok=True)
     root_query_path = config.clues_dir / "queries.jsonl"
-    query_keys = _read_existing_query_keys(root_query_path) if config.resume else set()
+    query_keys = _read_existing_query_keys(root_query_path)
     for mode in config.modes:
         collection_dir = root / mode.replace("-", "_")
         existing = _read_existing_query_state(collection_dir / "queries.jsonl", mode) if config.resume else None
@@ -257,7 +268,7 @@ def _generate_mode_examples_from_papers(
             break
         scanned += 1
         paper_id = str(paper["paper_id"])
-        query_id = f"{mode.replace('-', '_')}_q{paper_index:05d}"
+        query_id = _query_id(mode, paper_index, config)
         if existing is not None and (paper_id in existing.paper_ids or query_id in existing.query_ids):
             resumed += 1
             progress.set_status(scanned=scanned, skipped=empty + underfilled + resumed)
@@ -294,6 +305,9 @@ def _generate_mode_examples_from_papers(
                 "model": config.model,
                 "seed": config.seed,
                 "paper_id": paper_id,
+                "split": config.split_name,
+                "split_index": str(config.split_index) if config.split_index is not None else None,
+                "split_paper_index": paper_index if config.split_index is not None else None,
                 "selected_component_count": len(selected),
                 "selected_visual_count": visual_count,
                 "selected_text_count": text_count,
@@ -419,6 +433,11 @@ def _query_paper_id(row: dict[str, Any]) -> str | None:
 
 
 def _eligible_papers(papers: list[dict[str, Any]], config: QueryGenerationConfig) -> list[dict[str, Any]]:
+    papers = filter_papers_by_split(
+        papers,
+        split_index_path=config.split_index,
+        split_name=config.split_name,
+    )
     selected: list[dict[str, Any]] = []
     for index, paper in enumerate(papers):
         if index < config.start_index:
@@ -427,6 +446,13 @@ def _eligible_papers(papers: list[dict[str, Any]], config: QueryGenerationConfig
             break
         selected.append(paper)
     return selected
+
+
+def _query_id(mode: QueryMode, paper_index: int, config: QueryGenerationConfig) -> str:
+    prefix = mode.replace("-", "_")
+    if config.split_index is not None and config.split_name:
+        prefix = f"{config.split_name}_{prefix}"
+    return f"{prefix}_q{paper_index:05d}"
 
 
 def _components_by_paper(
@@ -726,6 +752,8 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
         dataset=_resolve_path(inputs["dataset"], config_dir),
         visual_interpretations=_resolve_optional_path(inputs.get("visual_interpretations"), config_dir),
         textual_interpretations=_resolve_optional_path(inputs.get("textual_interpretations"), config_dir),
+        split_index=_resolve_optional_path(inputs.get("split_index"), config_dir),
+        split_name=inputs.get("split_name"),
         clues_dir=_resolve_path(inputs.get("clues_dir", DEFAULT_CLUES_DIR), config_dir),
         output_dir=_resolve_path(output["dir"], config_dir),
         prompt=_resolve_path(prompt["template"], config_dir),
@@ -769,6 +797,8 @@ def _default_config(data_dir: Path, split: str) -> QueryGenerationConfig:
         dataset=Path(data_dir) / "preprocessed",
         visual_interpretations=None,
         textual_interpretations=None,
+        split_index=None,
+        split_name=None,
         clues_dir=Path(data_dir) / "clues",
         output_dir=Path(data_dir) / "query_collections",
     )
@@ -811,6 +841,11 @@ def _validate_config(config: QueryGenerationConfig) -> None:
         raise ValueError("start_index must be non-negative")
     if config.end_index is not None and config.end_index < config.start_index:
         raise ValueError("end_index must be greater than or equal to start_index")
+    if config.split_index is not None:
+        if config.split_name is None:
+            raise ValueError("split_name is required when split_index is set")
+        if not config.split_index.exists():
+            raise FileNotFoundError(f"Split index does not exist: {config.split_index}")
     for mode in config.modes:
         if mode not in ("visual-only", "visual-and-text"):
             raise ValueError(f"Unsupported query mode: {mode}")
@@ -858,6 +893,7 @@ def _metadata_config(config: QueryGenerationConfig) -> dict[str, Any]:
         "dataset",
         "visual_interpretations",
         "textual_interpretations",
+        "split_index",
         "clues_dir",
         "output_dir",
         "prompt",

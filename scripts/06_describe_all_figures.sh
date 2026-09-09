@@ -8,6 +8,7 @@ DATA_DIR="${DATA_DIR:-data}"
 DATASET_DIR="${DATASET_DIR:-$DATA_DIR/preprocessed}"
 CLUES_DIR="${CLUES_DIR:-$DATA_DIR/clues}"
 SPLIT="${SPLIT:-train}"
+SPLIT_INDEX="${SPLIT_INDEX:-}"
 VISUAL_BACKEND="${VISUAL_BACKEND:-transformers}"
 VISUAL_MODEL="${VISUAL_MODEL:-Qwen/Qwen3-VL-4B-Instruct}"
 MAX_TOKENS="${VISUAL_MAX_TOKENS:-600}"
@@ -47,6 +48,9 @@ if [[ -n "$END_INDEX" ]]; then
 fi
 if [[ -n "$LIMIT" ]]; then
   args+=(--limit "$LIMIT")
+fi
+if [[ -n "$SPLIT_INDEX" ]]; then
+  args+=(--split-index "$SPLIT_INDEX")
 fi
 if [[ "$RESUME" == "1" ]]; then
   args+=(--resume)

@@ -17,6 +17,7 @@ from dataset_generation.interpretations import (
     interpretation_key,
     read_completed_interpretation_keys,
 )
+from dataset_generation.document_splits import filter_papers_by_split
 from dataset_generation.preprocessed import (
     DEFAULT_DATA_DIR,
     append_clue_row,
@@ -66,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt-id", default="textual_interpretation", help="Prompt identifier for metadata.")
     parser.add_argument("--prompt-version", default="v1", help="Prompt version for metadata.")
     parser.add_argument("--split", default="train", help="Combined dataset split to read when --dataset is omitted.")
+    parser.add_argument(
+        "--split-index",
+        type=Path,
+        default=None,
+        help="JSON train/test paper-id index. When set, --split selects the paper-id list to process.",
+    )
     parser.add_argument("--num-samples", type=int, default=3, help="Number of samples to process, clamped to 1-5.")
     parser.add_argument(
         "--all",
@@ -112,6 +119,8 @@ def iter_samples_from_dataset(
     max_markdown_chars: int,
     start_index: int = 0,
     end_index: int | None = None,
+    split_index: Path | None = None,
+    split_name: str | None = None,
 ) -> list[TextSample]:
     if start_index < 0:
         raise ValueError("start-index must be non-negative")
@@ -123,6 +132,8 @@ def iter_samples_from_dataset(
         max_markdown_chars=max_markdown_chars,
         start_index=start_index,
         end_index=end_index,
+        split_index=split_index,
+        split_name=split_name,
     )
 
 
@@ -133,8 +144,14 @@ def iter_samples_from_preprocessed_dataset(
     max_markdown_chars: int,
     start_index: int = 0,
     end_index: int | None = None,
+    split_index: Path | None = None,
+    split_name: str | None = None,
 ) -> list[TextSample]:
-    papers = read_preprocessed_papers(dataset_dir)
+    papers = filter_papers_by_split(
+        read_preprocessed_papers(dataset_dir),
+        split_index_path=split_index,
+        split_name=split_name,
+    )
     selected: list[TextSample] = []
     for paper_index, paper in enumerate(papers):
         if paper_index < start_index:
@@ -394,6 +411,8 @@ def run(args: argparse.Namespace) -> Path:
         max_markdown_chars=args.max_markdown_chars,
         start_index=args.start_index,
         end_index=args.end_index,
+        split_index=args.split_index,
+        split_name=args.split,
     )
 
     loaded, generate_description = load_generator(args, model_name)
@@ -492,6 +511,7 @@ def run(args: argparse.Namespace) -> Path:
             "prompt_version": args.prompt_version,
             "base_dataset": str(dataset_dir),
             "source_split": args.split,
+            "split_index": str(args.split_index) if args.split_index is not None else None,
             "max_markdown_chars": args.max_markdown_chars,
             "thinking": args.thinking,
             "all": args.all,

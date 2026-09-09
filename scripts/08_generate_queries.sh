@@ -17,6 +17,12 @@ fi
 if [[ -n "${CLUES_DIR:-}" ]]; then
   args+=(--clues-dir "$CLUES_DIR")
 fi
+if [[ -n "${SPLIT_INDEX:-}" ]]; then
+  args+=(--split-index "$SPLIT_INDEX")
+fi
+if [[ -n "${SPLIT:-}" ]]; then
+  args+=(--split "$SPLIT")
+fi
 if [[ -n "${MAX_EXAMPLES:-}" ]]; then
   args+=(--max-examples "$MAX_EXAMPLES")
 fi

@@ -73,6 +73,28 @@ environment variables, for example:
 LIMIT=100 scripts/07_describe_all_textual_clues.sh
 ```
 
+Build a fixed-seed stratified document split before clue/query generation:
+
+```bash
+uv run python scripts/build_document_split.py \
+  --dataset data/preprocessed \
+  --output data/splits/document_split_seed42.json
+```
+
+Then run a specific set by passing the split index and `SPLIT=train` or
+`SPLIT=test`:
+
+```bash
+SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=train scripts/06_describe_all_figures.sh
+SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=train scripts/07_describe_all_textual_clues.sh
+SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh
+SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh
+```
+
+The split index stores ordered paper IDs. `START_INDEX`, `END_INDEX`, `LIMIT`,
+`RESUME`, and `OVERWRITE` apply after the split is selected, so restarts and
+partial reruns operate on the chosen train/test set instead of the whole corpus.
+
 The clue-generation scripts write per-paper clue files:
 
 ```text

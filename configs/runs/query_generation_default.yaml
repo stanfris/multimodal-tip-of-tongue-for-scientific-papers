@@ -5,6 +5,8 @@ run:
 inputs:
   dataset: ../../data/preprocessed
   clues_dir: ../../data/clues
+  split_index:
+  split_name:
 
 prompt:
   name: query_generation
