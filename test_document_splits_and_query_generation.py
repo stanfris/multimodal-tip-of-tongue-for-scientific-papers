@@ -4,8 +4,28 @@ import json
 from pathlib import Path
 
 from dataset_generation.document_splits import build_split_index, write_split_index
-from dataset_generation.preprocessed import paper_clue_dir
+from dataset_generation.preprocessed import paper_clue_dir, read_preprocessed_papers
 from dataset_generation.query_generation import QueryGenerationConfig, generate_query_collections
+
+
+def test_read_preprocessed_papers_accepts_minimal_layout(tmp_path: Path) -> None:
+    paper_dir = tmp_path / "preprocessed" / "2023.acl-long.3"
+    images_dir = paper_dir / "images"
+    images_dir.mkdir(parents=True)
+    (paper_dir / "markdown.md").write_text("# paper", encoding="utf-8")
+    (paper_dir / "2023.acl-long.3.pdf").write_bytes(b"%PDF")
+    (images_dir / "figure-a.jpg").write_bytes(b"jpg")
+    (images_dir / "ignore.txt").write_text("not an image", encoding="utf-8")
+
+    papers = read_preprocessed_papers(tmp_path / "preprocessed")
+
+    assert len(papers) == 1
+    assert papers[0]["paper_id"] == "2023.acl-long.3"
+    assert papers[0]["venue"] == "ACL"
+    assert papers[0]["year"] == 2023
+    assert papers[0]["volume_id"] == "2023.acl-long"
+    assert papers[0]["figures"][0]["figure_id"] == "figure-a"
+    assert papers[0]["figures"][0]["image_path"].endswith("figure-a.jpg")
 
 
 def test_build_split_index_is_seeded_and_stratified() -> None:

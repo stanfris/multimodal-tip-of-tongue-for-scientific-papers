@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from typing import Any
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_PREPROCESSED_PAPERS_DIR = DEFAULT_DATA_DIR / "preprocessed"
 DEFAULT_CLUES_DIR = DEFAULT_DATA_DIR / "clues"
+IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 
 
 def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR) -> list[dict[str, Any]]:
@@ -21,9 +23,12 @@ def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR)
     for paper_dir in sorted(candidate for candidate in root.iterdir() if candidate.is_dir()):
         paper_json_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
-        if not paper_json_path.exists() or not markdown_path.exists():
+        if not markdown_path.exists():
             continue
-        paper = json.loads(paper_json_path.read_text(encoding="utf-8"))
+        if paper_json_path.exists():
+            paper = json.loads(paper_json_path.read_text(encoding="utf-8"))
+        else:
+            paper = _minimal_paper_record(paper_dir)
         paper_id = str(paper.get("paper_id") or paper_dir.name).strip()
         if not paper_id:
             continue
@@ -33,6 +38,45 @@ def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR)
         paper["figures"] = _resolve_figures(paper_dir, paper.get("figures") or [])
         papers.append(paper)
     return papers
+
+
+def _minimal_paper_record(paper_dir: Path) -> dict[str, Any]:
+    pdfs = sorted(paper_dir.glob("*.pdf"))
+    metadata = _metadata_from_paper_id(paper_dir.name)
+    return {
+        "paper_id": paper_dir.name,
+        "pdf_path": str(pdfs[0]) if pdfs else None,
+        **metadata,
+        "figures": [
+            {
+                "figure_id": image_path.stem,
+                "filename": image_path.name,
+                "image_relpath": str(image_path.relative_to(paper_dir)),
+            }
+            for image_path in _iter_image_files(paper_dir / "images")
+        ],
+    }
+
+
+def _iter_image_files(images_dir: Path) -> list[Path]:
+    if not images_dir.exists():
+        return []
+    return sorted(
+        image_path
+        for image_path in images_dir.iterdir()
+        if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def _metadata_from_paper_id(paper_id: str) -> dict[str, Any]:
+    match = re.match(r"^(?P<year>\d{4})\.(?P<venue>[^.-]+)(?:-[^.]+)?\.\d+$", paper_id)
+    if match is None:
+        return {}
+    return {
+        "year": int(match.group("year")),
+        "venue": match.group("venue").upper(),
+        "volume_id": paper_id.rsplit(".", 1)[0],
+    }
 
 
 def _paper_root(path: Path) -> Path:
