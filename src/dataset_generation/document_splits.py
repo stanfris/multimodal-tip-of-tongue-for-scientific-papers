@@ -13,6 +13,8 @@ from typing import Any, Iterable
 
 DEFAULT_SPLIT_SEED = 42
 DEFAULT_TEST_FRACTION = 0.2
+DEFAULT_TRAIN_SIZE = 1000
+DEFAULT_TEST_SIZE = 200
 DEFAULT_SPLIT_NAME = "document_split"
 
 
@@ -26,11 +28,19 @@ class SplitIndex:
 def build_split_index(
     papers: Iterable[dict[str, Any]],
     *,
-    test_fraction: float = DEFAULT_TEST_FRACTION,
+    train_size: int | None = None,
+    test_size: int | None = None,
+    test_fraction: float | None = DEFAULT_TEST_FRACTION,
     seed: int = DEFAULT_SPLIT_SEED,
     stratify_field: str | None = None,
 ) -> SplitIndex:
-    if not 0 < test_fraction < 1:
+    if train_size is not None and train_size < 1:
+        raise ValueError("train_size must be at least 1 when set")
+    if test_size is not None and test_size < 1:
+        raise ValueError("test_size must be at least 1 when set")
+    if (train_size is None) != (test_size is None):
+        raise ValueError("train_size and test_size must be provided together")
+    if test_fraction is not None and not 0 < test_fraction < 1:
         raise ValueError("test_fraction must be between 0 and 1")
 
     paper_rows = list(papers)
@@ -42,12 +52,36 @@ def build_split_index(
     train: list[str] = []
     test: list[str] = []
     rng = random.Random(seed)
-    for stratum in sorted(groups):
-        ids = list(groups[stratum])
-        rng.shuffle(ids)
-        test_count = _test_count(len(ids), test_fraction)
-        test.extend(sorted(ids[:test_count]))
-        train.extend(sorted(ids[test_count:]))
+    shuffled_groups = {stratum: _shuffled(ids, rng) for stratum, ids in sorted(groups.items())}
+    if train_size is not None and test_size is not None:
+        if train_size + test_size > len(paper_rows):
+            raise ValueError(
+                f"Requested {train_size} train and {test_size} test documents, "
+                f"but only {len(paper_rows)} papers are available."
+            )
+        test_counts = _allocate_counts(
+            {stratum: len(ids) for stratum, ids in shuffled_groups.items()},
+            test_size,
+        )
+        remaining_groups: dict[str, list[str]] = {}
+        for stratum, ids in shuffled_groups.items():
+            test_count = test_counts[stratum]
+            test.extend(ids[:test_count])
+            remaining_groups[stratum] = ids[test_count:]
+        train_counts = _allocate_counts(
+            {stratum: len(ids) for stratum, ids in remaining_groups.items()},
+            train_size,
+        )
+        for stratum, ids in remaining_groups.items():
+            train.extend(ids[: train_counts[stratum]])
+    else:
+        if test_fraction is None:
+            raise ValueError("test_fraction is required when fixed train/test sizes are not set")
+        for stratum in sorted(shuffled_groups):
+            ids = shuffled_groups[stratum]
+            test_count = _test_count(len(ids), test_fraction)
+            test.extend(ids[:test_count])
+            train.extend(ids[test_count:])
 
     train.sort()
     test.sort()
@@ -65,6 +99,8 @@ def build_split_index(
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "seed": seed,
         "test_fraction": test_fraction,
+        "train_size": train_size,
+        "test_size": test_size,
         "stratify_field": stratify_field,
         "paper_count": len(paper_rows),
         "train_count": len(train),
@@ -139,6 +175,51 @@ def _test_count(group_size: int, test_fraction: float) -> int:
     if group_size <= 1:
         return 0
     return min(group_size - 1, max(1, round(group_size * test_fraction)))
+
+
+def _shuffled(ids: list[str], rng: random.Random) -> list[str]:
+    copied = list(ids)
+    rng.shuffle(copied)
+    return copied
+
+
+def _allocate_counts(group_sizes: dict[str, int], total: int) -> dict[str, int]:
+    capacity = sum(group_sizes.values())
+    if total > capacity:
+        raise ValueError(f"Cannot allocate {total} documents across only {capacity} available documents.")
+    if total == 0:
+        return {stratum: 0 for stratum in group_sizes}
+
+    allocations: dict[str, int] = {}
+    remainders: list[tuple[float, str]] = []
+    for stratum, size in sorted(group_sizes.items()):
+        exact = total * (size / capacity) if capacity else 0
+        count = min(size, int(exact))
+        allocations[stratum] = count
+        remainders.append((exact - count, stratum))
+
+    remaining = total - sum(allocations.values())
+    for _, stratum in sorted(remainders, reverse=True):
+        if remaining == 0:
+            break
+        if allocations[stratum] >= group_sizes[stratum]:
+            continue
+        allocations[stratum] += 1
+        remaining -= 1
+
+    while remaining > 0:
+        changed = False
+        for stratum in sorted(group_sizes):
+            if allocations[stratum] >= group_sizes[stratum]:
+                continue
+            allocations[stratum] += 1
+            remaining -= 1
+            changed = True
+            if remaining == 0:
+                break
+        if not changed:
+            raise RuntimeError("Failed to allocate requested document count.")
+    return allocations
 
 
 def _stratum_for_paper(paper: dict[str, Any], stratify_field: str | None) -> str:

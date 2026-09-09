@@ -47,6 +47,28 @@ def test_build_split_index_is_seeded_and_stratified() -> None:
     assert set(first.train).isdisjoint(first.test)
 
 
+def test_build_split_index_supports_fixed_train_test_sizes() -> None:
+    papers = [
+        {"paper_id": f"acl-{index}", "venue": "ACL", "year": 2025}
+        for index in range(5000)
+    ] + [
+        {"paper_id": f"emnlp-{index}", "venue": "EMNLP", "year": 2025}
+        for index in range(5000)
+    ]
+
+    split = build_split_index(papers, train_size=1000, test_size=200, test_fraction=None, seed=42)
+
+    assert len(split.train) == 1000
+    assert len(split.test) == 200
+    assert split.metadata["train_size"] == 1000
+    assert split.metadata["test_size"] == 200
+    assert split.metadata["counts_by_stratum"]["ACL:2025"]["train"] == 500
+    assert split.metadata["counts_by_stratum"]["ACL:2025"]["test"] == 100
+    assert split.metadata["counts_by_stratum"]["EMNLP:2025"]["train"] == 500
+    assert split.metadata["counts_by_stratum"]["EMNLP:2025"]["test"] == 100
+    assert set(split.train).isdisjoint(split.test)
+
+
 def test_query_generation_uses_split_index_for_stable_resume(tmp_path: Path) -> None:
     dataset = tmp_path / "preprocessed" / "papers"
     clues_dir = tmp_path / "clues"

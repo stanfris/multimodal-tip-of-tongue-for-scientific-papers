@@ -10,6 +10,8 @@ from pathlib import Path
 from dataset_generation.document_splits import (
     DEFAULT_SPLIT_NAME,
     DEFAULT_SPLIT_SEED,
+    DEFAULT_TEST_SIZE,
+    DEFAULT_TRAIN_SIZE,
     DEFAULT_TEST_FRACTION,
     build_split_index,
     write_split_index,
@@ -26,7 +28,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data/splits") / f"{DEFAULT_SPLIT_NAME}.json",
         help="Output JSON split index.",
     )
-    parser.add_argument("--test-fraction", type=float, default=DEFAULT_TEST_FRACTION)
+    parser.add_argument("--train-size", type=int, default=DEFAULT_TRAIN_SIZE)
+    parser.add_argument("--test-size", type=int, default=DEFAULT_TEST_SIZE)
+    parser.add_argument(
+        "--test-fraction",
+        type=float,
+        default=None,
+        help=f"Use fraction mode instead of fixed sizes. Previous default was {DEFAULT_TEST_FRACTION}.",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SPLIT_SEED)
     parser.add_argument(
         "--stratify-field",
@@ -38,12 +47,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    split_index = build_split_index(
-        read_preprocessed_papers(args.dataset),
-        test_fraction=args.test_fraction,
-        seed=args.seed,
-        stratify_field=args.stratify_field,
-    )
+    if args.test_fraction is None:
+        split_index = build_split_index(
+            read_preprocessed_papers(args.dataset),
+            train_size=args.train_size,
+            test_size=args.test_size,
+            test_fraction=None,
+            seed=args.seed,
+            stratify_field=args.stratify_field,
+        )
+    else:
+        split_index = build_split_index(
+            read_preprocessed_papers(args.dataset),
+            test_fraction=args.test_fraction,
+            seed=args.seed,
+            stratify_field=args.stratify_field,
+        )
     output_path = write_split_index(split_index, args.output)
     print(json.dumps({"output": str(output_path), **split_index.metadata}, indent=2, sort_keys=True))
     return 0

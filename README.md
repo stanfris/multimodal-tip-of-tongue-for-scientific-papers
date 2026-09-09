@@ -73,7 +73,8 @@ environment variables, for example:
 LIMIT=100 scripts/07_describe_all_textual_clues.sh
 ```
 
-Build a fixed-seed stratified document split before clue/query generation:
+Build a fixed-seed stratified document split before clue/query generation.
+The default split is 1,000 train documents and 200 test documents:
 
 ```bash
 uv run python scripts/build_document_split.py \
