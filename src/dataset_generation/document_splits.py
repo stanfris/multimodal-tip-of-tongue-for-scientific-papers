@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 DEFAULT_SPLIT_SEED = 42
 DEFAULT_TEST_FRACTION = 0.2
-DEFAULT_SPLIT_NAME = "document_split_seed42"
+DEFAULT_SPLIT_NAME = "document_split"
 
 
 @dataclass(frozen=True)

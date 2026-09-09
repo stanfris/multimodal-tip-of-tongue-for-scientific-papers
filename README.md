@@ -78,17 +78,17 @@ Build a fixed-seed stratified document split before clue/query generation:
 ```bash
 uv run python scripts/build_document_split.py \
   --dataset data/preprocessed \
-  --output data/splits/document_split_seed42.json
+  --output data/splits/document_split.json
 ```
 
 Then run a specific set by passing the split index and `SPLIT=train` or
 `SPLIT=test`:
 
 ```bash
-SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=train scripts/06_describe_all_figures.sh
-SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=train scripts/07_describe_all_textual_clues.sh
-SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh
-SPLIT_INDEX=data/splits/document_split_seed42.json SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh
+SPLIT_INDEX=data/splits/document_split.json SPLIT=train scripts/06_describe_all_figures.sh
+SPLIT_INDEX=data/splits/document_split.json SPLIT=train scripts/07_describe_all_textual_clues.sh
+SPLIT_INDEX=data/splits/document_split.json SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh
+SPLIT_INDEX=data/splits/document_split.json SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh
 ```
 
 The split index stores ordered paper IDs. `START_INDEX`, `END_INDEX`, `LIMIT`,
