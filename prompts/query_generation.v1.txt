@@ -4,13 +4,17 @@ You are simulating a researcher who previously encountered a scientific
 paper and is now trying to find it again.
 
 The researcher cannot remember the title or authors. They only remember
-the pieces of information listed below.
+some aspects of the paper imperfectly.
 
-Your job is to write the search request that this researcher might
-naturally give to a search engine or conversational retrieval system.
+Your job is to write a natural search request that this researcher might
+give to a search engine or conversational retrieval system.
 
 This is a tip-of-the-tongue known-item search: the user knows that the
 paper exists and wants to re-find that particular paper.
+
+The supplied memory cues are a pool of possible recollections. You do not
+need to use all of them. Select and combine the cues that would make for a
+plausible remembered search request.
 
 USER
 
@@ -19,7 +23,7 @@ Let's do a role play.
 You previously read a scientific paper, but some time has passed and you
 cannot remember what it was called.
 
-These are the ONLY things you currently remember:
+These are the things you may remember:
 
 MEMORY CUES:
 {selected_cues}
@@ -28,41 +32,47 @@ Write one natural-language request that you might use to find the paper.
 
 MUST:
 
-1. Use only information contained in the memory cues.
-2. Preserve uncertainty: phrase the request as recollection rather than
+1. Use only information contained in the supplied memory cues.
+2. Do not try to include every cue. Select the cues that seem most useful,
+   distinctive, or plausible to mention from memory.
+3. Compress related cues when possible instead of describing every small
+   detail separately.
+4. Preserve uncertainty: phrase the request as recollection rather than
    authoritative description.
-3. Make it clear that the user is trying to re-find a previously
+5. Make it clear that the user is trying to re-find a previously
    encountered paper.
-4. Express the cues naturally rather than listing them mechanically.
-5. Do not mention the title, authors, venue, DOI, citation, or figure number.
-6. Do not introduce scientific facts that are absent from the supplied cues.
-7. Respect the modality of the supplied memory: if only visual cues are
+6. Express the remembered information naturally rather than as a checklist.
+7. Do not mention the title, authors, venue, DOI, citation, or figure number.
+8. Do not introduce scientific facts that are absent from the supplied cues.
+9. Respect the modality of the supplied memory: if only visual cues are
    supplied, do not infer the topic, method, dataset, or result.
 
-COULD:
+GUIDANCE:
 
-1. Use expressions such as "I remember", "I think", "there was", or
-   "if I remember correctly" where natural.
-2. Be somewhat verbose, as real tip-of-the-tongue requests often contain
-   several remembered details.
-3. Describe spatial or relational visual properties informally rather
-   than using caption-like language.
-4. Combine cues into approximate recollections rather than preserving
-   their original wording.
-5. Include mild uncertainty about a remembered detail.
-6. Mention that one particular figure, diagram, or plot stood out.
-7. Use ordinary first-person language rather than academic prose.
-
-IMPORTANT:
-
-Uncertainty may be expressed linguistically, but DO NOT create false
-memories or alter the supplied facts.
+* Focus on the remembered gist rather than reconstructing all available
+  details.
+* Specific details are fine when they seem memorable or distinctive, but
+  avoid unnecessary enumeration.
+* Different queries may emphasize different kinds of memory, such as a
+  visual impression, a method, a result, a topic, a dataset, or a
+  combination of these, depending on the supplied cues.
+* It is fine to mention only one strong recollection, or several weaker
+  recollections.
+* The wording, length, and level of specificity may vary naturally.
+* The request should sound like someone remembering the paper after some
+  time, not someone describing it while looking at it.
 
 Bad:
-"Figure 3 shows the model's cross-attention mechanism..."
+"I'm trying to find a paper with two side-by-side panels containing blue
+and green dots in one panel and orange and purple nodes in the other, with
+lines connecting all the nodes and a legend with colored markers. There
+was also a table with bold headers, a horizontal separator, and aligned
+values."
 
 Better:
-"I'm trying to find a paper I saw before. I remember one of the diagrams
-had two parallel branches that came back together near the end..."
+"I'm trying to find a paper I saw before. I remember a figure with two
+network-like diagrams side by side, with differently colored groups of
+nodes connected by lines. I vaguely remember there being a large number 
+of results tables as well, with bold headers and aligned values."
 
 Return only the query.

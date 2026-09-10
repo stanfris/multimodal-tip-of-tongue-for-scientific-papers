@@ -1,98 +1,52 @@
 SYSTEM
 
-You are validating synthetic tip-of-the-tongue queries for a scientific
-paper re-finding benchmark.
+You are validating a synthetic query for a scientific paper re-finding benchmark.
 
-Be conservative. The query is valid only if all required conditions are
-satisfied.
+Your only task is to determine whether the characteristics described in the query are grounded in the supplied source material.
 
-Do not judge whether the query is well written in general. Judge whether
-it faithfully realizes the supplied simulated memory.
+A characteristic is grounded if it is directly supported by the paper text, figure contents, or other supplied evidence.
+
+Be conservative:
+
+* Do not infer details that are merely plausible.
+* Do not reward general consistency with the paper topic.
+* A claim must correspond to something actually present in the supplied material.
+* Paraphrases are allowed.
+* Approximate or uncertain descriptions are allowed if they still refer to a real characteristic of the source.
+* Minor imprecision in wording is acceptable as long as the remembered characteristic clearly corresponds to the source.
+
+Ignore:
+
+* writing quality
+* tip-of-the-tongue style
+* whether the query is too vague or too specific
+* title, author, or identifier leakage
+* whether the query reproduces the supplied memory cues
+* retrieval usefulness
 
 USER
 
-CONDITION:
-{visual_only | visual_text}
+SOURCE PAPER:
+{paper_text}
 
-SELECTED MEMORY CUES:
-{selected_cues}
+SOURCE FIGURES:
+{figures}
 
 GENERATED QUERY:
 {query}
 
-FORBIDDEN TARGET INFORMATION:
-Title: {title}
-Authors: {authors}
-Identifiers: {doi_arxiv}
-Caption: {caption}
-
-Evaluate the query on the following dimensions.
-
-A. GROUNDEDNESS
-Every concrete claim about the remembered paper or figure must be
-supported by the selected memory cues.
-
-Paraphrases and vague uncertainty are allowed.
-New factual information is not.
-
-B. TIP-OF-THE-TONGUE STYLE
-The query should plausibly represent someone trying to re-find a
-previously encountered scientific paper from incomplete recollection.
-
-Reject if it reads primarily like:
-- a caption
-- an abstract
-- a factual QA question
-- a keyword dump
-- a generic topical literature search
-
-C. TARGET LEAKAGE
-The query must not reveal or closely reproduce:
-- paper title
-- author names
-- DOI/arXiv identifier
-- figure number
-- distinctive caption wording
-- another direct identifier that trivially gives away the target
-
-D. MODALITY COMPLIANCE
-
-For visual_only:
-Every descriptive clue must be obtainable from the supplied visual cues.
-Reject semantic claims about the research problem, method, dataset,
-motivation, or results unless they are explicitly contained in the
-visual cues themselves.
-
-For visual_text:
-Both visual and textual clues may be used, but no information outside
-the selected cues is allowed.
-
-E. MEMORY REALIZATION
-The query should not simply reproduce the supplied cues verbatim.
-It should transform them into a plausible recollection.
+Identify each concrete characteristic of the paper or figures mentioned in the query and determine whether it is supported by the supplied source material.
 
 Return JSON only:
 
 {
-  "groundedness": {
-    "pass": true,
-    "unsupported_claims": []
-  },
-  "tot_style": {
-    "pass": true,
-    "reason": "..."
-  },
-  "target_leakage": {
-    "pass": true,
-    "leaked_content": []
-  },
-  "modality_compliance": {
-    "pass": true,
-    "violations": []
-  },
-  "memory_realization": {
-    "pass": true,
-    "reason": "..."
-  },
-  "overall_pass": true
+"claims": [
+{
+"claim": "...",
+"supported": true,
+"evidence": "..."
+}
+],
+"unsupported_claims": [],
+"overall_grounded": true
 }
