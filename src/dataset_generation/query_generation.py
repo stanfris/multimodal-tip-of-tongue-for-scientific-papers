@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import random
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -123,10 +122,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--thinking", action="store_true")
     parser.add_argument("--mode", choices=["visual-only", "visual-and-text"], action="append", default=None)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--visual-component-budget", type=int, default=None)
-    parser.add_argument("--textual-component-budget", type=int, default=None)
-    parser.add_argument("--component-budget", type=int, default=None, help="Legacy alias: sets both visual/textual budgets.")
-    parser.add_argument("--max-text-components", type=int, default=None, help="Legacy alias for --textual-component-budget.")
+    parser.add_argument("--visual-component-budget", type=int, default=None, help="Legacy ignored option; all visual cues are used.")
+    parser.add_argument(
+        "--textual-component-budget",
+        type=int,
+        default=None,
+        help="Legacy ignored option; all textual cues are used.",
+    )
+    parser.add_argument("--component-budget", type=int, default=None, help="Legacy ignored option; all cues are used.")
+    parser.add_argument("--max-text-components", type=int, default=None, help="Legacy ignored option; all textual cues are used.")
     parser.add_argument("--max-examples", type=int, default=None)
     parser.add_argument("--limit", type=int, default=None, help="Alias for --max-examples.")
     parser.add_argument("--allow-partial-components", action="store_true")
@@ -262,6 +266,7 @@ def _generate_mode_examples_from_papers(
     scanned = 0
     underfilled = 0
     empty = 0
+    incomplete_clues = 0
     resumed = 0
     for paper_index, paper in enumerate(papers):
         if target_new_examples == 0:
@@ -274,22 +279,18 @@ def _generate_mode_examples_from_papers(
             progress.set_status(scanned=scanned, skipped=empty + underfilled + resumed)
             continue
         components = components_by_paper.get(paper_id, [])
-        selected = select_components(
-            components,
-            mode=mode,
-            seed=config.seed,
-            source_record_id=paper_id,
-            visual_component_budget=config.visual_component_budget,
-            textual_component_budget=config.textual_component_budget,
-        )
+        if not _has_complete_clue_coverage(paper, components):
+            incomplete_clues += 1
+            progress.set_status(scanned=scanned, skipped=empty + underfilled + incomplete_clues + resumed)
+            continue
+        selected = select_components(components, mode=mode)
         if not selected:
             empty += 1
-            progress.set_status(scanned=scanned, skipped=empty + underfilled)
+            progress.set_status(scanned=scanned, skipped=empty + underfilled + incomplete_clues)
             continue
-        expected_count = _expected_component_count(mode, config)
-        if not config.allow_partial_components and len(selected) < expected_count:
+        if not config.allow_partial_components and not _has_required_modalities(selected, mode):
             underfilled += 1
-            progress.set_status(scanned=scanned, skipped=empty + underfilled)
+            progress.set_status(scanned=scanned, skipped=empty + underfilled + incomplete_clues)
             continue
         query = generate_query_text(selected, config, prompt_template, loaded_generator)
         visual_count = sum(component.kind == "visual" for component in selected)
@@ -311,6 +312,7 @@ def _generate_mode_examples_from_papers(
                 "selected_component_count": len(selected),
                 "selected_visual_count": visual_count,
                 "selected_text_count": text_count,
+                "component_selection": "all_available",
                 "visual_component_budget": config.visual_component_budget,
                 "textual_component_budget": config.textual_component_budget,
                 "prompt_id": config.prompt_id,
@@ -321,7 +323,7 @@ def _generate_mode_examples_from_papers(
         examples.append(example)
         if root_query_path is not None:
             _append_query(example, root_query_path, query_keys)
-        progress.update(scanned=scanned, skipped=empty + underfilled + resumed)
+        progress.update(scanned=scanned, skipped=empty + underfilled + incomplete_clues + resumed)
         if target_new_examples is not None and len(examples) >= target_new_examples:
             break
     progress.close()
@@ -330,9 +332,10 @@ def _generate_mode_examples_from_papers(
         raise RuntimeError(
             f"Only have {final_count} {mode} queries, but {config.max_examples} were requested. "
             f"Generated {len(examples)} new queries and resumed {existing_count} existing queries. "
-            f"Scanned {scanned} papers; {underfilled} had fewer than {_expected_component_count(mode, config)} "
-            f"required components, {empty} had no usable {mode} components, and {resumed} were already generated. "
-            f"Regenerate clues, lower budgets, or pass --allow-partial-components."
+            f"Scanned {scanned} papers; {incomplete_clues} were missing one or more image/textual clue files, "
+            f"{underfilled} were missing required modalities, "
+            f"{empty} had no usable {mode} components, and {resumed} were already generated. "
+            f"Regenerate clues or pass --allow-partial-components."
         )
     return examples
 
@@ -464,19 +467,20 @@ def _components_by_paper(
 ) -> dict[str, list[MemoryComponent]]:
     papers = read_preprocessed_papers(dataset)
     paper_ids = set()
-    figure_to_paper = {}
-    figure_to_name = {}
+    figure_ids_by_paper: dict[str, set[str]] = {}
+    figure_names: dict[tuple[str, str], str] = {}
     for paper in papers:
-        paper_ids.add(str(paper["paper_id"]))
+        paper_id = str(paper["paper_id"])
+        paper_ids.add(paper_id)
         for index, figure in enumerate(paper.get("figures", [])):
             fid = str(figure["figure_id"])
-            figure_to_paper[fid] = str(paper["paper_id"])
+            figure_ids_by_paper.setdefault(paper_id, set()).add(fid)
             filename = str(figure.get("filename", ""))
             match = re.search(r"Figure\s*(\d+[a-zA-Z]?)", filename, re.IGNORECASE)
             if match:
-                figure_to_name[fid] = f"Figure {match.group(1)}"
+                figure_names[(paper_id, fid)] = f"Figure {match.group(1)}"
             else:
-                figure_to_name[fid] = f"Figure {index + 1}"
+                figure_names[(paper_id, fid)] = f"Figure {index + 1}"
     
     components: dict[str, list[MemoryComponent]] = {}
     if textual_clues_path is not None and textual_clues_path.is_file():
@@ -492,7 +496,8 @@ def _components_by_paper(
     else:
         visual_rows = [
             clue
-            for figure_id, paper_id in sorted(figure_to_paper.items())
+            for paper_id, figure_ids in sorted(figure_ids_by_paper.items())
+            for figure_id in sorted(figure_ids)
             for clue in read_clue_rows(visual_clue_path(clues_dir, paper_id, figure_id))
         ]
     for clue in textual_rows:
@@ -510,9 +515,9 @@ def _components_by_paper(
             continue
         figure_id = str(clue.get("figure_id", ""))
         paper_id = str(clue.get("paper_id", ""))
-        if paper_id in paper_ids and figure_id in figure_to_paper:
+        if paper_id in paper_ids and figure_id in figure_ids_by_paper.get(paper_id, set()):
             text = str(clue.get("output", "")).strip()
-            figure_name = figure_to_name.get(figure_id, "Figure")
+            figure_name = figure_names.get((paper_id, figure_id), "Figure")
             for component_text in _split_component_text(text, "visual"):
                 components.setdefault(paper_id, []).append(
                     MemoryComponent(record_id=figure_id, kind="visual", text=f"{figure_name}: {component_text}")
@@ -520,10 +525,21 @@ def _components_by_paper(
     return components
 
 
-def _expected_component_count(mode: QueryMode, config: QueryGenerationConfig) -> int:
+def _has_required_modalities(selected: list[MemoryComponent], mode: QueryMode) -> bool:
+    has_visual = any(component.kind == "visual" for component in selected)
+    has_textual = any(component.kind == "textual" for component in selected)
     if mode == "visual-only":
-        return config.visual_component_budget
-    return config.visual_component_budget + config.textual_component_budget
+        return has_visual
+    return has_visual and has_textual
+
+
+def _has_complete_clue_coverage(paper: dict[str, Any], components: list[MemoryComponent]) -> bool:
+    textual_present = any(component.kind == "textual" for component in components)
+    if not textual_present:
+        return False
+    described_figures = {component.record_id for component in components if component.kind == "visual"}
+    expected_figures = {str(figure["figure_id"]) for figure in paper.get("figures", [])}
+    return bool(expected_figures) and expected_figures <= described_figures
 
 
 class QueryProgress:
@@ -560,22 +576,12 @@ def select_components(
     components: list[MemoryComponent],
     *,
     mode: QueryMode,
-    seed: int,
-    source_record_id: str,
-    visual_component_budget: int = DEFAULT_VISUAL_COMPONENT_BUDGET,
-    textual_component_budget: int = DEFAULT_TEXTUAL_COMPONENT_BUDGET,
 ) -> list[MemoryComponent]:
-    rng = random.Random(f"{seed}:{source_record_id}:{mode}")
     visual = [component for component in components if component.kind == "visual"]
     textual = [component for component in components if component.kind == "textual"]
     if mode == "visual-only":
-        selected = _sample(rng, visual, visual_component_budget)
-    else:
-        selected_text = _sample(rng, textual, textual_component_budget)
-        selected_visual = _sample(rng, visual, visual_component_budget)
-        selected = selected_text + selected_visual
-    rng.shuffle(selected)
-    return selected
+        return visual
+    return textual + visual
 
 
 def load_query_generator(config: QueryGenerationConfig) -> tuple[dict[str, Any], Callable[..., str]] | None:
@@ -707,32 +713,41 @@ def _decode_jsonish_components(text: str) -> list[Any] | None:
 def _textual_component(value: Any) -> str | None:
     if isinstance(value, dict):
         cue = value.get("cue")
-        return str(cue) if cue is not None else None
+        if cue is None:
+            return None
+        category = value.get("category")
+        if category is None:
+            return str(cue)
+        return f"textual {category}: {cue}"
     return str(value)
 
 
 def _visual_components(value: Any) -> list[str]:
     if isinstance(value, dict):
         components: list[str] = []
-        for field_value in value.values():
+        for field_name, field_value in _ordered_visual_fields(value):
             if isinstance(field_value, list):
-                components.extend(str(item) for item in field_value)
+                components.extend(f"{field_name}: {item}" for item in field_value)
             elif field_value is not None:
-                components.append(str(field_value))
+                components.append(f"{field_name}: {field_value}")
         return components
     if isinstance(value, list):
         return [str(item) for item in value]
     return [str(value)]
 
 
-def _sample(rng: random.Random, components: list[MemoryComponent], count: int) -> list[MemoryComponent]:
-    if count <= 0:
-        return []
-    if len(components) <= count:
-        copied = list(components)
-        rng.shuffle(copied)
-        return copied
-    return rng.sample(components, count)
+def _ordered_visual_fields(value: dict[str, Any]) -> list[tuple[str, Any]]:
+    preferred = [
+        "figure_type",
+        "layout",
+        "visual_elements",
+        "colors_and_styles",
+        "relationships",
+        "distinctive_visual_cues",
+    ]
+    ordered = [(field_name, value[field_name]) for field_name in preferred if field_name in value]
+    ordered.extend((field_name, field_value) for field_name, field_value in value.items() if field_name not in preferred)
+    return ordered
 
 
 def _config_from_yaml(path: Path) -> QueryGenerationConfig:
@@ -831,10 +846,6 @@ def _validate_config(config: QueryGenerationConfig) -> None:
         raise ValueError("Non-null query-generation providers require a real model name.")
     if config.max_tokens < 1:
         raise ValueError("max_tokens must be at least 1")
-    if config.visual_component_budget < 1:
-        raise ValueError("visual_component_budget must be at least 1")
-    if config.textual_component_budget < 0:
-        raise ValueError("textual_component_budget must be non-negative")
     if config.max_examples is not None and config.max_examples < 1:
         raise ValueError("max_examples must be at least 1 when set")
     if config.start_index < 0:

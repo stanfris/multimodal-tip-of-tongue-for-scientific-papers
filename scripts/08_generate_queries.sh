@@ -5,23 +5,28 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 CONFIG="${QUERY_CONFIG:-configs/runs/query_generation_default.yaml}"
+DATA_DIR="${DATA_DIR:-data}"
+DATASET_DIR="${DATASET_DIR:-$DATA_DIR/preprocessed}"
+CLUES_DIR="${CLUES_DIR:-$DATA_DIR/clues}"
+SPLIT="${SPLIT:-train}"
+SPLIT_INDEX="${SPLIT_INDEX:-$DATA_DIR/splits/document_split.json}"
 
-args=(--config "$CONFIG")
+if [[ ! -f "$SPLIT_INDEX" ]]; then
+  echo "Split index not found: $SPLIT_INDEX" >&2
+  echo "Build it with: uv run python scripts/build_document_split.py --dataset $DATASET_DIR --output $SPLIT_INDEX" >&2
+  exit 1
+fi
+
+args=(
+  --config "$CONFIG"
+  --dataset "$DATASET_DIR"
+  --clues-dir "$CLUES_DIR"
+  --split-index "$SPLIT_INDEX"
+  --split "$SPLIT"
+)
 
 if [[ -n "${LIMIT:-}" ]]; then
   args+=(--limit "$LIMIT")
-fi
-if [[ -n "${DATASET_DIR:-}" ]]; then
-  args+=(--dataset "$DATASET_DIR")
-fi
-if [[ -n "${CLUES_DIR:-}" ]]; then
-  args+=(--clues-dir "$CLUES_DIR")
-fi
-if [[ -n "${SPLIT_INDEX:-}" ]]; then
-  args+=(--split-index "$SPLIT_INDEX")
-fi
-if [[ -n "${SPLIT:-}" ]]; then
-  args+=(--split "$SPLIT")
 fi
 if [[ -n "${MAX_EXAMPLES:-}" ]]; then
   args+=(--max-examples "$MAX_EXAMPLES")
