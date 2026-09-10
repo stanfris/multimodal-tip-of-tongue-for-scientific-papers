@@ -24,8 +24,8 @@ Ignore:
 * whether the query reproduces the supplied memory cues
 * retrieval usefulness
 
-You are given the generated query, the selected memory cues, the full
-paper text, and all extracted figure images for the target paper.
+You are given the generated query, the full paper text, and all
+extracted figure images for the target paper.
 
 USER
 

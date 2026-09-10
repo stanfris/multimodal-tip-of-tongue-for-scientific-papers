@@ -812,9 +812,12 @@ def format_judgement_prompt(
     selected_cues = "\n".join(f"- {component.kind}: {component.text}" for component in selected)
     captions = "\n".join(str(figure.get("caption", "")).strip() for figure in paper.get("figures", []) if figure.get("caption"))
     paper_text = read_preprocessed_markdown(paper)
+    figures_text = format_figures_for_judgement(paper)
     replacements = {
         "{visual_only | visual_text}": "visual_only" if mode == "visual-only" else "visual_text",
         "{selected_cues}": selected_cues,
+        "{paper_text}": paper_text,
+        "{figures}": figures_text,
         "{query}": query,
         "{title}": str(paper.get("title") or ""),
         "{authors}": format_authors(paper.get("authors")),
@@ -824,13 +827,11 @@ def format_judgement_prompt(
     prompt = prompt_template
     for placeholder, value in replacements.items():
         prompt = prompt.replace(placeholder, value)
-    return (
-        f"{prompt}\n\n"
-        "FULL PAPER TEXT PROVIDED TO JUDGE GROUNDEDNESS:\n"
-        f"{paper_text}\n\n"
-        "All extracted figure images for this paper are attached to this message. "
-        "Use them together with the full paper text and generated query when judging groundedness."
-    )
+    if "{paper_text}" not in prompt_template:
+        prompt = f"{prompt}\n\nFULL PAPER TEXT PROVIDED TO JUDGE GROUNDEDNESS:\n{paper_text}"
+    if "{figures}" not in prompt_template:
+        prompt = f"{prompt}\n\nSOURCE FIGURES:\n{figures_text}"
+    return prompt
 
 
 def paper_image_paths(paper: dict[str, Any]) -> list[Path]:
@@ -843,6 +844,24 @@ def paper_image_paths(paper: dict[str, Any]) -> list[Path]:
         if path.exists():
             paths.append(path)
     return paths
+
+
+def format_figures_for_judgement(paper: dict[str, Any]) -> str:
+    rows = []
+    for index, figure in enumerate(paper.get("figures", []), start=1):
+        figure_id = str(figure.get("figure_id") or f"figure-{index}")
+        filename = str(figure.get("filename") or Path(str(figure.get("image_path") or figure_id)).name)
+        caption = str(figure.get("caption") or "").strip()
+        image_path = str(figure.get("image_path") or "").strip()
+        parts = [f"{index}. id={figure_id}", f"filename={filename}"]
+        if caption:
+            parts.append(f"caption={caption}")
+        if image_path:
+            parts.append(f"attached_image_path={image_path}")
+        rows.append("; ".join(parts))
+    if not rows:
+        return "No extracted figure images were found."
+    return "\n".join(rows)
 
 
 def format_authors(authors: Any) -> str:
