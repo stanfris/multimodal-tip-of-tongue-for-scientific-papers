@@ -11,6 +11,7 @@ CLUES_DIR="${CLUES_DIR:-$DATA_DIR/clues}"
 SPLIT="${SPLIT:-train}"
 SPLIT_INDEX="${SPLIT_INDEX:-$DATA_DIR/splits/document_split.json}"
 COLLECTION_ID="${COLLECTION_ID:-query_generation_${SPLIT}_judged}"
+JUDGEMENT_MODEL="${JUDGEMENT_MODEL:-google/gemma-3-27b-it}"
 
 if [[ ! -f "$SPLIT_INDEX" ]]; then
   echo "Split index not found: $SPLIT_INDEX" >&2
@@ -58,9 +59,7 @@ fi
 if [[ -n "${QUERY_TEMPERATURE:-}" ]]; then
   args+=(--temperature "$QUERY_TEMPERATURE")
 fi
-if [[ -n "${JUDGEMENT_MODEL:-}" ]]; then
-  args+=(--judgement-model "$JUDGEMENT_MODEL")
-fi
+args+=(--judgement-model "$JUDGEMENT_MODEL")
 if [[ -n "${JUDGEMENT_MAX_TOKENS:-}" ]]; then
   args+=(--judgement-max-tokens "$JUDGEMENT_MAX_TOKENS")
 fi
