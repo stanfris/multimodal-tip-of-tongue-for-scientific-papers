@@ -15,10 +15,11 @@ dependencies = [
     "pyarrow>=19.0.0",
     "pillow>=12.3.0",
     "pyyaml>=6.0.0",
-    "transformers>=5.0",
+    "transformers>=4.40.2",
     "torch",
     "accelerate",
     "torchvision",
+    "mineru[core,vllm]==3.4.5",
 ]
 
 [project.scripts]
