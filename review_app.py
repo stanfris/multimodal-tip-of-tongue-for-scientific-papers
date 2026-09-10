@@ -17,11 +17,13 @@ import pandas as pd
 import streamlit as st
 
 from src.dataset_generation.query_generation import _split_component_text
+from src.dataset_generation.preprocessed import read_preprocessed_papers
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_COLLECTION = PROJECT_ROOT / "data/canonical"
 DEFAULT_DATASET = PROJECT_ROOT / "data/canonical"
+DEFAULT_PREPROCESSED_DATASET = PROJECT_ROOT / "data/preprocessed"
 ANNOTATIONS_PATH = PROJECT_ROOT / "data/reviews/query_review_annotations.jsonl"
 QUERY_COLLECTION_ROOT = PROJECT_ROOT / "data/query_collections"
 PRIORITY_COLLECTION_IDS = ("query_generation_train", "query_generation_test")
@@ -77,9 +79,10 @@ def main() -> None:
         return
 
     dataset_dir = dataset_dir_for_collection(collection)
+    clues_dir = clues_dir_for_collection(collection)
     records = load_dataset_records(dataset_dir)
-    visual_rows = load_interpretations(dataset_dir / "visual_clues.jsonl")
-    textual_rows = load_interpretations(dataset_dir / "textual_clues.jsonl")
+    visual_rows = load_clue_rows_for_kind(clues_dir, "visual")
+    textual_rows = load_clue_rows_for_kind(clues_dir, "textual")
 
     filtered = filter_examples(examples, annotations)
     if not filtered:
@@ -439,7 +442,13 @@ def render_paper_text(record: dict[str, Any], dataset_dir: Path) -> None:
         markdown_path = dataset_dir / str(record.get("markdown_relpath"))
         if markdown_path.exists():
             markdown = markdown_path.read_text(encoding="utf-8")
-    
+    if not markdown and record.get("markdown_path"):
+        markdown_path = Path(str(record.get("markdown_path"))).expanduser()
+        if not markdown_path.is_absolute():
+            markdown_path = dataset_dir / markdown_path
+        if markdown_path.exists():
+            markdown = markdown_path.read_text(encoding="utf-8")
+
     if not markdown:
         return
     st.subheader("Paper Text")
@@ -602,7 +611,7 @@ def load_dataset_records(dataset_dir: Path) -> dict[str, dict[str, Any]]:
     elif (dataset_dir / "papers.jsonl").exists():
         frame = pd.read_json(dataset_dir / "papers.jsonl", orient="records", lines=True)
     else:
-        return {}
+        return load_preprocessed_records(dataset_dir)
     records = {}
     for row in frame.to_dict(orient="records"):
         cleaned = clean_values(row)
@@ -616,6 +625,47 @@ def load_dataset_records(dataset_dir: Path) -> dict[str, dict[str, Any]]:
             for legacy_id in fig.get("legacy_record_ids", []):
                 records[str(legacy_id)] = cleaned
     return records
+
+
+@st.cache_data(show_spinner=False)
+def load_preprocessed_records(dataset_dir: Path) -> dict[str, dict[str, Any]]:
+    try:
+        papers = read_preprocessed_papers(dataset_dir)
+    except FileNotFoundError:
+        return {}
+    records = {}
+    for paper in papers:
+        cleaned = clean_values(paper)
+        paper_id = str(cleaned.get("paper_id") or cleaned.get("record_id") or "")
+        if paper_id:
+            records[paper_id] = cleaned
+        for figure in cleaned.get("figures", []):
+            figure_id = str(figure.get("figure_id") or figure.get("record_id") or "")
+            if figure_id:
+                records[figure_id] = cleaned
+    return records
+
+
+@st.cache_data(show_spinner=False)
+def load_clue_rows_for_kind(clues_dir: Path, kind: str) -> list[dict[str, Any]]:
+    if not clues_dir.exists():
+        return []
+    if kind == "textual":
+        paths = sorted(clues_dir.glob("*/base/textual_clues.jsonl"))
+    elif kind == "visual":
+        paths = sorted(clues_dir.glob("*/images/*.jsonl"))
+    else:
+        paths = []
+    rows = []
+    for path in paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not row.get("kind"):
+                row["kind"] = kind
+            rows.append(row)
+    return rows
 
 
 @st.cache_data(show_spinner=False)
@@ -669,7 +719,22 @@ def dataset_dir_for_collection(collection: Path) -> Path:
         if dataset:
             path = Path(dataset)
             return path if path.is_absolute() else PROJECT_ROOT / path
+    if QUERY_COLLECTION_ROOT in collection.parents or collection == QUERY_COLLECTION_ROOT:
+        return DEFAULT_PREPROCESSED_DATASET
     return DEFAULT_DATASET
+
+
+def clues_dir_for_collection(collection: Path) -> Path:
+    for candidate in (collection, collection.parent):
+        metadata_path = candidate / "metadata.json"
+        if not metadata_path.exists():
+            continue
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        clues_dir = metadata.get("config", {}).get("clues_dir")
+        if clues_dir:
+            path = Path(clues_dir)
+            return path if path.is_absolute() else PROJECT_ROOT / path
+    return PROJECT_ROOT / "data/clues"
 
 
 def clues_for_paper(rows: list[dict[str, Any]], same_paper_records: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
@@ -685,7 +750,7 @@ def clues_for_paper(rows: list[dict[str, Any]], same_paper_records: list[dict[st
     clues = []
     for row in rows:
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-        if row.get("kind") and row.get("kind") != kind:
+        if row.get("kind") and normalized_kind(row.get("kind")) != kind:
             continue
         row_id = str(row.get("record_id", "") or row.get("figure_id", "") or row.get("paper_id", ""))
         filename = str(metadata.get("filename", "") or "")
@@ -709,7 +774,7 @@ def visual_clues_for_record(rows: list[dict[str, Any]], figure_record: dict[str,
     clues = []
     for row in rows:
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-        if row.get("kind") and row.get("kind") != "visual":
+        if row.get("kind") and normalized_kind(row.get("kind")) != "visual":
             continue
         row_id = str(row.get("record_id", "") or row.get("figure_id", ""))
         if row_id != record_id and str(metadata.get("filename", "")) != filename:
@@ -881,6 +946,9 @@ def local_pdf_for_record(record: dict[str, Any], dataset_dir: Path, paper_id: st
             path = dataset_dir / str(value)
             if path.exists():
                 return path
+    preprocessed_pdf = dataset_dir / str(paper_id) / f"{paper_id}.pdf"
+    if preprocessed_pdf.exists():
+        return preprocessed_pdf
     return None
 
 
