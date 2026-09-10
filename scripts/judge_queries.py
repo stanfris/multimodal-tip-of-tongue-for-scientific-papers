@@ -88,22 +88,23 @@ def main() -> int:
         query_path = input_dir / MODE_DIRS[mode] / "queries.jsonl"
         if not query_path.exists():
             raise FileNotFoundError(f"Query file does not exist: {query_path}")
+        judgement_path = query_path.with_name("query_judgements.jsonl")
+        if args.overwrite:
+            judgement_path.unlink(missing_ok=True)
+        completed_query_ids = read_completed_query_ids(judgement_path)
         rows = read_jsonl(query_path)
-        updated = []
-        for row in rows:
+        for index, row in progress_rows(rows, description=f"Judging {mode} queries"):
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            if metadata.get("query_judgement") is not None and not args.overwrite:
+            query_id = str(row.get("query_id") or "")
+            if query_id in completed_query_ids and not args.overwrite:
                 skipped += 1
-                updated.append(row)
                 continue
             if args.limit is not None and processed >= args.limit:
-                updated.append(row)
                 continue
             paper_id = str(metadata.get("paper_id") or (row.get("relevant_ids") or [""])[0])
             paper = papers.get(paper_id)
             if paper is None:
                 missing += 1
-                updated.append(row)
                 continue
             selected = components_from_metadata(metadata)
             judgement = judge_query(
@@ -114,15 +115,38 @@ def main() -> int:
                 config,
                 loaded_judge,
             )
-            row = dict(row)
-            metadata = dict(metadata)
-            metadata["query_judgement"] = judgement
-            row["metadata"] = metadata
-            updated.append(row)
+            append_judgement_row(
+                judgement_path,
+                {
+                    "query_id": query_id,
+                    "mode": mode,
+                    "paper_id": paper_id,
+                    "query": str(row.get("query") or ""),
+                    "relevant_ids": row.get("relevant_ids") or [],
+                    "judgement": judgement,
+                },
+            )
+            completed_query_ids.add(query_id)
             processed += 1
-        write_jsonl_atomic(query_path, updated)
     print(json.dumps({"processed": processed, "skipped": skipped, "missing_papers": missing}, indent=2, sort_keys=True))
     return 0
+
+
+def progress_rows(rows: list[dict[str, Any]], *, description: str):
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:
+        total = len(rows)
+        next_report = 10
+        for index, row in enumerate(rows):
+            yield index, row
+            processed = index + 1
+            percent = int((processed / total) * 100) if total else 100
+            if percent >= next_report or processed == total:
+                print(f"{description}: {processed}/{total} rows ({percent}%)", flush=True)
+                next_report += 10
+        return
+    yield from tqdm(enumerate(rows), total=len(rows), desc=description, unit="query")
 
 
 def components_from_metadata(metadata: dict[str, Any]) -> list[MemoryComponent]:
@@ -158,15 +182,29 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def write_jsonl_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
-            handle.write("\n")
+def read_completed_query_ids(path: Path) -> set[str]:
+    completed = set()
+    if not path.exists():
+        return completed
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError(f"Expected JSON object at {path}:{line_number}")
+        query_id = row.get("query_id")
+        if query_id:
+            completed.add(str(query_id))
+    return completed
+
+
+def append_judgement_row(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+        handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    temp_path.replace(path)
 
 
 if __name__ == "__main__":
