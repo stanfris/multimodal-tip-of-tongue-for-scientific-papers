@@ -9,6 +9,9 @@ satisfied.
 Do not judge whether the query is well written in general. Judge whether
 it faithfully realizes the supplied simulated memory.
 
+You are given the generated query, the selected memory cues, the full
+paper text, and all extracted figure images for the target paper.
+
 USER
 
 CONDITION:
