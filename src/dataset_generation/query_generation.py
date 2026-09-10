@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -223,7 +224,12 @@ def _generate_query_collections_from_preprocessed(
     query_keys = _read_existing_query_keys(root_query_path)
     for mode in config.modes:
         collection_dir = root / mode.replace("-", "_")
-        existing = _read_existing_query_state(collection_dir / "queries.jsonl", mode) if config.resume else None
+        collection_dir.mkdir(parents=True, exist_ok=True)
+        collection_query_path = collection_dir / "queries.jsonl"
+        if not config.resume:
+            collection_query_path.unlink(missing_ok=True)
+        existing = _read_existing_query_state(collection_query_path, mode) if config.resume else None
+        collection_query_keys = _read_existing_query_keys(collection_query_path)
         examples = _generate_mode_examples_from_papers(
             mode,
             selected_papers,
@@ -234,6 +240,8 @@ def _generate_query_collections_from_preprocessed(
             existing=existing,
             query_keys=query_keys,
             root_query_path=root_query_path,
+            collection_query_keys=collection_query_keys,
+            collection_query_path=collection_query_path,
         )
         collection = (existing.examples if existing is not None else []) + examples
         write_test_collection(collection, collection_dir)
@@ -253,6 +261,8 @@ def _generate_mode_examples_from_papers(
     existing: ExistingQueryState | None = None,
     query_keys: set[str] | None = None,
     root_query_path: Path | None = None,
+    collection_query_keys: set[str] | None = None,
+    collection_query_path: Path | None = None,
 ) -> list[TestCollectionExample]:
     examples: list[TestCollectionExample] = []
     existing_count = len(existing.examples) if existing is not None else 0
@@ -321,6 +331,8 @@ def _generate_mode_examples_from_papers(
             },
         )
         examples.append(example)
+        if collection_query_path is not None:
+            _append_query(example, collection_query_path, collection_query_keys)
         if root_query_path is not None:
             _append_query(example, root_query_path, query_keys)
         progress.update(scanned=scanned, skipped=empty + underfilled + incomplete_clues + resumed)
@@ -408,8 +420,11 @@ def _append_query(
         if keys & existing_keys:
             return
         existing_keys.update(keys)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def _query_identity_keys(row: dict[str, Any]) -> set[str]:

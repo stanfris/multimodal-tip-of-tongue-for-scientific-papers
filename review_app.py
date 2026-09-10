@@ -23,6 +23,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_COLLECTION = PROJECT_ROOT / "data/canonical"
 DEFAULT_DATASET = PROJECT_ROOT / "data/canonical"
 ANNOTATIONS_PATH = PROJECT_ROOT / "data/reviews/query_review_annotations.jsonl"
+QUERY_COLLECTION_ROOT = PROJECT_ROOT / "data/query_collections"
+PRIORITY_COLLECTION_IDS = ("query_generation_train", "query_generation_test")
+QUERY_MODES = ("visual_only", "visual_and_text")
+GENERATE_QUERY_COMMANDS = {
+    "query_generation_train": "SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh",
+    "query_generation_test": "SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh",
+}
 
 RATINGS = ["Unreviewed", "Good", "Questionable", "Bad"]
 ISSUES = [
@@ -66,7 +73,7 @@ def main() -> None:
     examples = load_examples(collection)
     annotations = load_annotations(ANNOTATIONS_PATH)
     if not examples:
-        st.warning(f"No queries found under {collection}")
+        render_no_queries_message(collection)
         return
 
     dataset_dir = dataset_dir_for_collection(collection)
@@ -105,30 +112,126 @@ def main() -> None:
 
 
 def collection_sidebar() -> Path:
-    roots = [PROJECT_ROOT / "data/canonical", PROJECT_ROOT / "data/query_collections", PROJECT_ROOT / "data/processed/test_collections"]
-    collections = []
-    for root in roots:
-        if root.exists():
-            if (root / "queries.jsonl").exists():
-                collections.append(root)
-            collections.extend(path for path in sorted(root.iterdir()) if path.is_dir() and list(path.glob("*/queries.jsonl")))
-    if DEFAULT_COLLECTION not in collections and DEFAULT_COLLECTION.exists():
-        collections.insert(0, DEFAULT_COLLECTION)
-    
-    # Deduplicate while preserving order
-    unique_collections = []
-    for c in collections:
-        if c not in unique_collections:
-            unique_collections.append(c)
-    collections = unique_collections
-    
-    labels = [str(path.relative_to(PROJECT_ROOT)) for path in collections]
-    default_index = collections.index(DEFAULT_COLLECTION) if DEFAULT_COLLECTION in collections else 0
+    collections = discover_query_collections()
+    default_collection = QUERY_COLLECTION_ROOT / "query_generation_train"
+    default_index = collections.index(default_collection) if default_collection in collections else 0
     with st.sidebar:
         st.header("Data")
-        selected = st.selectbox("Query collection", labels, index=default_index if labels else 0)
+        selected_collection = st.selectbox(
+            "Split / collection",
+            collections,
+            index=default_index,
+            format_func=collection_label,
+        )
+        modes = mode_options_for_collection(selected_collection)
+        mode = st.selectbox("Mode", modes, format_func=mode_label)
+        selected = query_path_for_mode(selected_collection, mode)
+        st.caption(f"Reading `{relative_path(selected)}`")
         st.caption("Annotations are saved separately in data/reviews.")
-    return PROJECT_ROOT / selected
+    return selected
+
+
+def discover_query_collections() -> list[Path]:
+    roots = [QUERY_COLLECTION_ROOT, PROJECT_ROOT / "data/processed/test_collections", DEFAULT_COLLECTION]
+    priority = [QUERY_COLLECTION_ROOT / collection_id for collection_id in PRIORITY_COLLECTION_IDS]
+    collections = [*priority]
+    for root in roots:
+        if not root.exists():
+            continue
+        if is_query_collection_root(root):
+            collections.append(root)
+        for path in sorted(root.iterdir()):
+            if path.is_dir() and is_query_collection_root(path):
+                collections.append(path)
+    return dedupe_paths(collections)
+
+
+def is_query_collection_root(path: Path) -> bool:
+    return (path / "queries.jsonl").exists() or any((path / mode / "queries.jsonl").exists() for mode in QUERY_MODES) or (
+        path / "metadata.json"
+    ).exists()
+
+
+def mode_options_for_collection(collection: Path) -> list[str]:
+    modes = []
+    if collection.name in PRIORITY_COLLECTION_IDS:
+        modes.extend(QUERY_MODES)
+    if collection.exists():
+        modes.extend(
+            path.name
+            for path in sorted(collection.iterdir())
+            if path.is_dir() and (path / "queries.jsonl").exists()
+        )
+    if (collection / "queries.jsonl").exists():
+        modes.append("default")
+    return dedupe_strings(modes) or list(QUERY_MODES)
+
+
+def query_path_for_mode(collection: Path, mode: str) -> Path:
+    return collection if mode == "default" else collection / mode
+
+
+def collection_label(path: Path) -> str:
+    prefix = ""
+    if path.name == "query_generation_train":
+        prefix = "train - "
+    elif path.name == "query_generation_test":
+        prefix = "test - "
+    missing = "" if path.exists() else " (missing)"
+    return f"{prefix}{relative_path(path)}{missing}"
+
+
+def mode_label(mode: str) -> str:
+    labels = {
+        "visual_only": "visual_only",
+        "visual_and_text": "visual_and_text",
+        "default": "default / legacy",
+    }
+    return labels.get(mode, mode)
+
+
+def dedupe_paths(paths: list[Path]) -> list[Path]:
+    unique = []
+    for path in paths:
+        if path not in unique:
+            unique.append(path)
+    return unique
+
+
+def dedupe_strings(values: list[str]) -> list[str]:
+    unique = []
+    for value in values:
+        if value not in unique:
+            unique.append(value)
+    return unique
+
+
+def relative_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def render_no_queries_message(collection: Path) -> None:
+    st.warning(f"No queries found under `{relative_path(collection)}`.")
+    root = collection.parent if collection.parent.name in PRIORITY_COLLECTION_IDS else collection
+    command = GENERATE_QUERY_COMMANDS.get(root.name)
+    if command:
+        st.info(
+            "Generate the selected split collection with:\n\n"
+            f"```bash\n{command}\n```"
+        )
+        return
+    expected = [QUERY_COLLECTION_ROOT / collection_id for collection_id in PRIORITY_COLLECTION_IDS]
+    if not any(path.exists() for path in expected):
+        st.info(
+            "Expected train/test query collections were not found. Generate them with:\n\n"
+            "```bash\n"
+            "SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh\n"
+            "SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh\n"
+            "```"
+        )
 
 
 def filter_examples(examples: list[dict[str, Any]], annotations: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -201,6 +304,8 @@ def render_example(
 
     st.subheader("Generated Query")
     st.markdown(f"<div class='query-box'>{html.escape(str(example.get('query', '')))}</div>", unsafe_allow_html=True)
+    render_query_metadata(example)
+    render_selected_components(selected)
     render_missing_selected(visual_clues + textual_clues, selected)
     with st.expander("Paper JSON Description"):
         st.json(metadata_context(collection, example, record), expanded=False)
@@ -364,6 +469,75 @@ def render_missing_selected(all_clues: list[dict[str, str]], selected: list[dict
             )
 
 
+def render_query_metadata(example: dict[str, Any]) -> None:
+    metadata = query_metadata(example)
+    st.subheader("Query Metadata")
+    current_fields = [
+        ("split", "Split"),
+        ("split_index", "Split index"),
+        ("split_paper_index", "Split paper index"),
+        ("component_selection", "Component selection"),
+        ("selected_component_count", "Selected components"),
+        ("selected_visual_count", "Selected visual"),
+        ("selected_text_count", "Selected textual"),
+    ]
+    rows = [{"Field": label, "Value": format_metadata_value(metadata.get(key))} for key, label in current_fields if key in metadata]
+    if rows:
+        st.table(rows)
+    else:
+        st.caption("This query does not include the newer split/component metadata fields.")
+
+    legacy_fields = [
+        ("component_budget", "Component budget"),
+        ("visual_component_budget", "Visual component budget"),
+        ("textual_component_budget", "Textual component budget"),
+        ("max_text_components", "Max text components"),
+    ]
+    legacy_rows = [
+        {"Legacy field": label, "Value": format_metadata_value(metadata.get(key))}
+        for key, label in legacy_fields
+        if key in metadata and metadata.get(key) is not None
+    ]
+    if legacy_rows:
+        with st.expander("Legacy Selection Budget Fields", expanded=False):
+            st.caption("These fields may appear in older metadata but are ignored by all-available component selection.")
+            st.table(legacy_rows)
+
+
+def render_selected_components(selected: list[dict[str, str]]) -> None:
+    st.subheader("Selected Components")
+    if not selected:
+        st.caption("No selected components were recorded in this query metadata.")
+        return
+    grouped: dict[str, list[dict[str, str]]] = {"visual": [], "textual": [], "other": []}
+    for component in selected:
+        kind = normalized_kind(component.get("kind"))
+        grouped.setdefault(kind, []).append(component)
+    for kind in ("visual", "textual", "other"):
+        components = grouped.get(kind, [])
+        if not components:
+            continue
+        expanded = len(selected) <= 8
+        with st.expander(f"{kind.title()} Components ({len(components)})", expanded=expanded):
+            for index, component in enumerate(components, start=1):
+                record_id = html.escape(str(component.get("record_id", "")))
+                text = html.escape(str(component.get("text", "")))
+                category = html.escape(str(component.get("category", kind)))
+                st.markdown(
+                    f"<div class='clue clue-selected'><strong>{index}</strong> "
+                    f"<span class='small-muted'>{category} | {record_id}</span><br>{text}</div>",
+                    unsafe_allow_html=True,
+                )
+
+
+def format_metadata_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
 def render_annotation(
     collection: Path,
     example: dict[str, Any],
@@ -410,7 +584,7 @@ def load_examples(collection: Path) -> list[dict[str, Any]]:
             row = json.loads(line)
             if not row.get("query"):
                 continue
-            row["_condition"] = row.get("metadata", {}).get("mode", condition)
+            row["_condition"] = query_metadata(row).get("mode", condition)
             row["_collection"] = str(collection.relative_to(PROJECT_ROOT))
             examples.append(row)
     return examples
@@ -486,8 +660,10 @@ def save_annotation(collection: Path, example: dict[str, Any], values: dict[str,
 def dataset_dir_for_collection(collection: Path) -> Path:
     if collection == DEFAULT_COLLECTION:
         return DEFAULT_DATASET
-    metadata_path = collection / "metadata.json"
-    if metadata_path.exists():
+    for candidate in (collection, collection.parent):
+        metadata_path = candidate / "metadata.json"
+        if not metadata_path.exists():
+            continue
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         dataset = metadata.get("config", {}).get("dataset")
         if dataset:
@@ -591,8 +767,28 @@ def metadata_context(collection: Path, example: dict[str, Any], record: dict[str
 
 
 def selected_components(example: dict[str, Any]) -> list[dict[str, str]]:
-    components = example.get("metadata", {}).get("selected_components", [])
-    return [component for component in components if isinstance(component, dict)]
+    components = query_metadata(example).get("selected_components", [])
+    return [normalize_selected_component(component) for component in components if isinstance(component, dict)]
+
+
+def normalize_selected_component(component: dict[str, Any]) -> dict[str, str]:
+    kind = normalized_kind(component.get("kind"))
+    return {
+        **component,
+        "kind": kind,
+        "record_id": str(component.get("record_id") or component.get("figure_id") or component.get("paper_id") or ""),
+        "category": str(component.get("category") or kind),
+        "text": str(component.get("text") or component.get("description") or component.get("output") or ""),
+    }
+
+
+def normalized_kind(value: Any) -> str:
+    cleaned = str(value or "").strip().replace("-", "_").casefold()
+    if cleaned in {"visual", "image", "figure", "visual_clue"}:
+        return "visual"
+    if cleaned in {"textual", "text", "paper_text", "textual_clue"}:
+        return "textual"
+    return cleaned or "other"
 
 
 def sync_index(examples: list[dict[str, Any]]) -> None:
@@ -620,7 +816,7 @@ def annotation_key_for_example(example: dict[str, Any]) -> str:
 
 
 def source_record_id(example: dict[str, Any]) -> str:
-    metadata = example.get("metadata", {})
+    metadata = query_metadata(example)
     if metadata.get("source_record_id"):
         return str(metadata["source_record_id"])
     if metadata.get("paper_id"):
@@ -634,7 +830,7 @@ def resolved_paper_id(example: dict[str, Any], record: dict[str, Any]) -> str:
 
 
 def paper_id_for_example(example: dict[str, Any], record: dict[str, Any]) -> str:
-    metadata = example.get("metadata", {})
+    metadata = query_metadata(example)
     relevant_ids = example.get("relevant_ids", [])
     return str(
         metadata.get("resolved_paper_id")
@@ -647,7 +843,12 @@ def paper_id_for_example(example: dict[str, Any], record: dict[str, Any]) -> str
 
 
 def condition_name(example: dict[str, Any]) -> str:
-    return str(example.get("metadata", {}).get("mode") or example.get("_condition", "")).replace("-", "_")
+    return str(query_metadata(example).get("mode") or example.get("_condition", "")).replace("-", "_")
+
+
+def query_metadata(example: dict[str, Any]) -> dict[str, Any]:
+    metadata = example.get("metadata", {})
+    return metadata if isinstance(metadata, dict) else {}
 
 
 def image_for_record(record: dict[str, Any], dataset_dir: Path) -> Path | None:
