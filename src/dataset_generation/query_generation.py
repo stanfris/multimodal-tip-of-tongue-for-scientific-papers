@@ -19,6 +19,7 @@ from dataset_generation.preprocessed import (
     DEFAULT_CLUES_DIR,
     DEFAULT_DATA_DIR,
     read_clue_rows,
+    read_preprocessed_markdown,
     read_preprocessed_papers,
     textual_clue_path,
     visual_clue_path,
@@ -34,6 +35,7 @@ from dataset_generation.textual_clue_descriptions import (
 
 QueryMode = Literal["visual-only", "visual-and-text"]
 DEFAULT_PROMPT = Path("prompts/query_generation.v1.txt")
+DEFAULT_JUDGEMENT_PROMPT = Path("prompts/query_judgement.v1.txt")
 DEFAULT_VISUAL_INTERPRETATIONS = "qwen3_vl_figure_description"
 DEFAULT_TEXTUAL_INTERPRETATIONS = "qwen3_textual_clue_description"
 DEFAULT_VISUAL_COMPONENT_BUDGET = 3
@@ -44,6 +46,7 @@ DEFAULT_MODELS = {
     "mlx": "Qwen/Qwen3-1.7B-MLX-8bit",
     "transformers": "Qwen/Qwen3-4B",
 }
+DEFAULT_JUDGEMENT_MODEL = "google/gemma-3-27b-it"
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,17 @@ class QueryGenerationConfig:
     dtype: str = "bfloat16"
     attn_implementation: str | None = "sdpa"
     thinking: bool = False
+    judge_queries: bool = False
+    judgement_prompt: Path = DEFAULT_JUDGEMENT_PROMPT
+    judgement_prompt_id: str = "query_judgement"
+    judgement_prompt_version: str = "v1"
+    judgement_model_provider: str = "transformers"
+    judgement_model: str = DEFAULT_JUDGEMENT_MODEL
+    judgement_temperature: float = 0.0
+    judgement_max_tokens: int = 900
+    judgement_device_map: str = "auto"
+    judgement_dtype: str = "bfloat16"
+    judgement_attn_implementation: str | None = "sdpa"
     modes: tuple[QueryMode, ...] = ("visual-only", "visual-and-text")
     seed: int = 13
     visual_component_budget: int = DEFAULT_VISUAL_COMPONENT_BUDGET
@@ -92,6 +106,9 @@ class ExistingQueryState:
     examples: list[TestCollectionExample]
     paper_ids: set[str]
     query_ids: set[str]
+
+
+JudgementGenerator = Callable[[dict[str, Any], list[Path], str, int, float], str]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -121,6 +138,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default=None)
     parser.add_argument("--attn-implementation", default=None)
     parser.add_argument("--thinking", action="store_true")
+    parser.add_argument("--judge-queries", action="store_true", help="Run Gemma VL judgement for every generated query.")
+    parser.add_argument("--judgement-prompt", type=Path, default=None)
+    parser.add_argument("--judgement-prompt-id", default=None)
+    parser.add_argument("--judgement-prompt-version", default=None)
+    parser.add_argument("--judgement-model-provider", default=None)
+    parser.add_argument("--judgement-model", default=None)
+    parser.add_argument("--judgement-temperature", type=float, default=None)
+    parser.add_argument("--judgement-max-tokens", type=int, default=None)
+    parser.add_argument("--judgement-device-map", default=None)
+    parser.add_argument("--judgement-dtype", default=None)
+    parser.add_argument("--judgement-attn-implementation", default=None)
     parser.add_argument("--mode", choices=["visual-only", "visual-and-text"], action="append", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--visual-component-budget", type=int, default=None, help="Legacy ignored option; all visual cues are used.")
@@ -170,6 +198,17 @@ def load_query_generation_config(args: argparse.Namespace) -> QueryGenerationCon
         "dtype": args.dtype,
         "attn_implementation": args.attn_implementation,
         "thinking": True if args.thinking else None,
+        "judge_queries": True if args.judge_queries else None,
+        "judgement_prompt": args.judgement_prompt,
+        "judgement_prompt_id": args.judgement_prompt_id,
+        "judgement_prompt_version": args.judgement_prompt_version,
+        "judgement_model_provider": args.judgement_model_provider,
+        "judgement_model": args.judgement_model,
+        "judgement_temperature": args.judgement_temperature,
+        "judgement_max_tokens": args.judgement_max_tokens,
+        "judgement_device_map": args.judgement_device_map,
+        "judgement_dtype": args.judgement_dtype,
+        "judgement_attn_implementation": args.judgement_attn_implementation,
         "modes": tuple(args.mode) if args.mode else None,
         "seed": args.seed,
         "visual_component_budget": args.visual_component_budget,
@@ -198,7 +237,8 @@ def generate_query_collections(config: QueryGenerationConfig) -> Path:
     prompt_text = config.prompt.read_text(encoding="utf-8")
     prompt_sha256 = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     loaded_generator = load_query_generator(config)
-    return _generate_query_collections_from_preprocessed(config, prompt_text, prompt_sha256, loaded_generator)
+    loaded_judge = load_query_judge(config)
+    return _generate_query_collections_from_preprocessed(config, prompt_text, prompt_sha256, loaded_generator, loaded_judge)
 
 
 
@@ -209,6 +249,7 @@ def _generate_query_collections_from_preprocessed(
     prompt_text: str,
     prompt_sha256: str,
     loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
+    loaded_judge: tuple[dict[str, Any], JudgementGenerator] | None,
 ) -> Path:
     papers = read_preprocessed_papers(config.dataset)
     components_by_paper = _components_by_paper(
@@ -237,6 +278,7 @@ def _generate_query_collections_from_preprocessed(
             config,
             prompt_text,
             loaded_generator,
+            loaded_judge,
             existing=existing,
             query_keys=query_keys,
             root_query_path=root_query_path,
@@ -257,6 +299,7 @@ def _generate_mode_examples_from_papers(
     config: QueryGenerationConfig,
     prompt_template: str,
     loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
+    loaded_judge: tuple[dict[str, Any], JudgementGenerator] | None,
     *,
     existing: ExistingQueryState | None = None,
     query_keys: set[str] | None = None,
@@ -305,30 +348,34 @@ def _generate_mode_examples_from_papers(
         query = generate_query_text(selected, config, prompt_template, loaded_generator)
         visual_count = sum(component.kind == "visual" for component in selected)
         text_count = sum(component.kind == "textual" for component in selected)
+        judgement = judge_query(mode, paper, selected, query, config, loaded_judge)
+        metadata = {
+            "mode": mode,
+            "method": "preprocessed_acl_paper_query_generation",
+            "model_provider": config.model_provider,
+            "model": config.model,
+            "seed": config.seed,
+            "paper_id": paper_id,
+            "split": config.split_name,
+            "split_index": str(config.split_index) if config.split_index is not None else None,
+            "split_paper_index": paper_index if config.split_index is not None else None,
+            "selected_component_count": len(selected),
+            "selected_visual_count": visual_count,
+            "selected_text_count": text_count,
+            "component_selection": "all_available",
+            "visual_component_budget": config.visual_component_budget,
+            "textual_component_budget": config.textual_component_budget,
+            "prompt_id": config.prompt_id,
+            "prompt_version": config.prompt_version,
+            "selected_components": [asdict(component) for component in selected],
+        }
+        if judgement is not None:
+            metadata["query_judgement"] = judgement
         example = TestCollectionExample(
             query_id=query_id,
             query=query,
             relevant_ids=[paper_id],
-            metadata={
-                "mode": mode,
-                "method": "preprocessed_acl_paper_query_generation",
-                "model_provider": config.model_provider,
-                "model": config.model,
-                "seed": config.seed,
-                "paper_id": paper_id,
-                "split": config.split_name,
-                "split_index": str(config.split_index) if config.split_index is not None else None,
-                "split_paper_index": paper_index if config.split_index is not None else None,
-                "selected_component_count": len(selected),
-                "selected_visual_count": visual_count,
-                "selected_text_count": text_count,
-                "component_selection": "all_available",
-                "visual_component_budget": config.visual_component_budget,
-                "textual_component_budget": config.textual_component_budget,
-                "prompt_id": config.prompt_id,
-                "prompt_version": config.prompt_version,
-                "selected_components": [asdict(component) for component in selected],
-            },
+            metadata=metadata,
         )
         examples.append(example)
         if collection_query_path is not None:
@@ -619,6 +666,83 @@ def load_query_generator(config: QueryGenerationConfig) -> tuple[dict[str, Any],
     raise ValueError(f"Unsupported model provider: {config.model_provider}")
 
 
+def load_query_judge(config: QueryGenerationConfig) -> tuple[dict[str, Any], JudgementGenerator] | None:
+    if not config.judge_queries:
+        return None
+    print(f"Loading query judgement backend: {config.judgement_model_provider}")
+    print(f"Loading query judgement model: {config.judgement_model}")
+    if config.judgement_model_provider != "transformers":
+        raise ValueError(f"Unsupported judgement model provider: {config.judgement_model_provider}")
+    return (
+        load_multimodal_transformers_model(
+            model_name=config.judgement_model,
+            device_map=config.judgement_device_map,
+            dtype=config.judgement_dtype,
+            attn_implementation=config.judgement_attn_implementation,
+        ),
+        generate_multimodal_judgement_with_transformers,
+    )
+
+
+def load_multimodal_transformers_model(
+    model_name: str,
+    device_map: str,
+    dtype: str,
+    attn_implementation: str | None,
+) -> dict[str, Any]:
+    from transformers import AutoModelForImageTextToText, AutoModelForMultimodalLM, AutoProcessor
+
+    kwargs: dict[str, Any] = {"device_map": device_map, "dtype": dtype}
+    if attn_implementation:
+        kwargs["attn_implementation"] = attn_implementation
+    try:
+        model = AutoModelForMultimodalLM.from_pretrained(model_name, **kwargs)
+    except (OSError, ValueError):
+        model = AutoModelForImageTextToText.from_pretrained(model_name, **kwargs)
+    processor = AutoProcessor.from_pretrained(model_name)
+    return {"model": model, "processor": processor}
+
+
+def generate_multimodal_judgement_with_transformers(
+    loaded: dict[str, Any],
+    image_paths: list[Path],
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    from PIL import Image
+
+    model = loaded["model"]
+    processor = loaded["processor"]
+    images = [Image.open(image_path).convert("RGB") for image_path in image_paths]
+    content: list[dict[str, Any]] = [{"type": "image", "image": image} for image in images]
+    content.append({"type": "text", "text": prompt})
+    messages = [{"role": "user", "content": content}]
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    inputs = inputs.to(model.device)
+    generate_kwargs: dict[str, Any] = {"max_new_tokens": max_tokens}
+    if temperature > 0:
+        generate_kwargs.update({"do_sample": True, "temperature": temperature})
+    else:
+        generate_kwargs["do_sample"] = False
+    generated_ids = model.generate(**inputs, **generate_kwargs)
+    generated_ids_trimmed = [
+        out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids, strict=True)
+    ]
+    output_text = processor.batch_decode(
+        generated_ids_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )
+    return output_text[0].strip()
+
+
 def generate_query_text(
     selected: list[MemoryComponent],
     config: QueryGenerationConfig,
@@ -636,6 +760,126 @@ def generate_query_text(
         temperature=config.temperature,
         thinking=config.thinking,
     ).strip()
+
+
+def judge_query(
+    mode: QueryMode,
+    paper: dict[str, Any],
+    selected: list[MemoryComponent],
+    query: str,
+    config: QueryGenerationConfig,
+    loaded_judge: tuple[dict[str, Any], JudgementGenerator] | None,
+) -> dict[str, Any] | None:
+    if loaded_judge is None:
+        return None
+    prompt_template = config.judgement_prompt.read_text(encoding="utf-8")
+    prompt = format_judgement_prompt(prompt_template, mode, paper, selected, query)
+    image_paths = paper_image_paths(paper)
+    loaded, generate = loaded_judge
+    raw_output = generate(
+        loaded=loaded,
+        image_paths=image_paths,
+        prompt=prompt,
+        max_tokens=config.judgement_max_tokens,
+        temperature=config.judgement_temperature,
+    ).strip()
+    parsed = parse_json_object(raw_output)
+    if parsed is None:
+        return {
+            "parse_error": True,
+            "raw_output": raw_output,
+            "model_provider": config.judgement_model_provider,
+            "model": config.judgement_model,
+            "prompt_id": config.judgement_prompt_id,
+            "prompt_version": config.judgement_prompt_version,
+        }
+    return {
+        **parsed,
+        "model_provider": config.judgement_model_provider,
+        "model": config.judgement_model,
+        "prompt_id": config.judgement_prompt_id,
+        "prompt_version": config.judgement_prompt_version,
+    }
+
+
+def format_judgement_prompt(
+    prompt_template: str,
+    mode: QueryMode,
+    paper: dict[str, Any],
+    selected: list[MemoryComponent],
+    query: str,
+) -> str:
+    selected_cues = "\n".join(f"- {component.kind}: {component.text}" for component in selected)
+    captions = "\n".join(str(figure.get("caption", "")).strip() for figure in paper.get("figures", []) if figure.get("caption"))
+    paper_text = read_preprocessed_markdown(paper)
+    replacements = {
+        "{visual_only | visual_text}": "visual_only" if mode == "visual-only" else "visual_text",
+        "{selected_cues}": selected_cues,
+        "{query}": query,
+        "{title}": str(paper.get("title") or ""),
+        "{authors}": format_authors(paper.get("authors")),
+        "{doi_arxiv}": format_identifiers(paper),
+        "{caption}": captions,
+    }
+    prompt = prompt_template
+    for placeholder, value in replacements.items():
+        prompt = prompt.replace(placeholder, value)
+    return (
+        f"{prompt}\n\n"
+        "FULL PAPER TEXT PROVIDED TO JUDGE GROUNDEDNESS:\n"
+        f"{paper_text}\n\n"
+        "All extracted figure images for this paper are attached to this message. "
+        "Use them together with the full paper text and generated query when judging groundedness."
+    )
+
+
+def paper_image_paths(paper: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    for figure in paper.get("figures", []):
+        image_path = figure.get("image_path")
+        if not image_path:
+            continue
+        path = Path(str(image_path))
+        if path.exists():
+            paths.append(path)
+    return paths
+
+
+def format_authors(authors: Any) -> str:
+    if isinstance(authors, list):
+        formatted = []
+        for author in authors:
+            if isinstance(author, dict):
+                formatted.append(str(author.get("name") or " ".join(str(value) for value in author.values() if value)))
+            else:
+                formatted.append(str(author))
+        return ", ".join(value for value in formatted if value)
+    return "" if authors is None else str(authors)
+
+
+def format_identifiers(paper: dict[str, Any]) -> str:
+    values = []
+    for key in ("doi", "arxiv", "arxiv_id", "acl_id", "anthology_id", "paper_id"):
+        value = paper.get(key)
+        if value:
+            values.append(f"{key}: {value}")
+    return "; ".join(values)
+
+
+def parse_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else None
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match is None:
+        return None
+    try:
+        value = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def format_query_prompt(prompt_template: str, selected: list[MemoryComponent]) -> str:
@@ -777,6 +1021,7 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
     model = _section(raw, "model")
     selection = _section(raw, "selection")
     output = _section(raw, "output")
+    judgement = raw.get("judgement") if isinstance(raw.get("judgement"), dict) else {}
     modes = tuple(selection.get("modes", ["visual-only", "visual-and-text"]))
     return QueryGenerationConfig(
         dataset=_resolve_path(inputs["dataset"], config_dir),
@@ -797,6 +1042,17 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
         dtype=model.get("dtype", "bfloat16"),
         attn_implementation=model.get("attn_implementation", "sdpa"),
         thinking=bool(model.get("thinking", False)),
+        judge_queries=bool(judgement.get("enabled", False)),
+        judgement_prompt=_resolve_path(judgement.get("template", DEFAULT_JUDGEMENT_PROMPT), config_dir),
+        judgement_prompt_id=judgement.get("name", "query_judgement"),
+        judgement_prompt_version=judgement.get("version", "v1"),
+        judgement_model_provider=judgement.get("provider", "transformers"),
+        judgement_model=judgement.get("model", DEFAULT_JUDGEMENT_MODEL),
+        judgement_temperature=float(judgement.get("temperature", 0.0)),
+        judgement_max_tokens=int(judgement.get("max_tokens", 900)),
+        judgement_device_map=judgement.get("device_map", "auto"),
+        judgement_dtype=judgement.get("dtype", "bfloat16"),
+        judgement_attn_implementation=judgement.get("attn_implementation", "sdpa"),
         modes=modes,
         seed=int(run.get("seed", 13)),
         visual_component_budget=int(
@@ -859,8 +1115,14 @@ def _validate_config(config: QueryGenerationConfig) -> None:
         raise ValueError("The null query-generation provider expects model to be 'null'.")
     if config.model_provider != "null" and config.model == "null":
         raise ValueError("Non-null query-generation providers require a real model name.")
+    if config.judgement_model_provider != "transformers":
+        raise ValueError("The query-judgement model provider must be 'transformers'.")
+    if not config.judgement_model:
+        raise ValueError("judgement_model must be set")
     if config.max_tokens < 1:
         raise ValueError("max_tokens must be at least 1")
+    if config.judgement_max_tokens < 1:
+        raise ValueError("judgement_max_tokens must be at least 1")
     if config.max_examples is not None and config.max_examples < 1:
         raise ValueError("max_examples must be at least 1 when set")
     if config.start_index < 0:
@@ -877,6 +1139,8 @@ def _validate_config(config: QueryGenerationConfig) -> None:
             raise ValueError(f"Unsupported query mode: {mode}")
     if not config.prompt.exists():
         raise FileNotFoundError(f"Prompt template does not exist: {config.prompt}")
+    if config.judge_queries and not config.judgement_prompt.exists():
+        raise FileNotFoundError(f"Judgement prompt template does not exist: {config.judgement_prompt}")
 
 
 def _write_collection_metadata(
@@ -923,6 +1187,7 @@ def _metadata_config(config: QueryGenerationConfig) -> dict[str, Any]:
         "clues_dir",
         "output_dir",
         "prompt",
+        "judgement_prompt",
         "config_path",
     ):
         if data.get(key) is not None:

@@ -25,6 +25,19 @@ model:
   attn_implementation: "sdpa"
   thinking: false
 
+judgement:
+  enabled: false
+  name: query_judgement
+  version: v1
+  template: ../../prompts/query_judgement.v1.txt
+  provider: "transformers"
+  model: "google/gemma-3-27b-it"
+  temperature: 0.0
+  max_tokens: 900
+  device_map: "auto"
+  dtype: "bfloat16"
+  attn_implementation: "sdpa"
+
 selection:
   modes:
     - visual-only
