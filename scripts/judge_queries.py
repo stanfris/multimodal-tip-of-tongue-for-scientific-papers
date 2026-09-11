@@ -6,16 +6,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from dataset_generation.document_splits import filter_papers_by_split
+from dataset_generation.managed_settings import DEFAULT_SETTINGS_PATH, load_managed_settings, section
 from dataset_generation.preprocessed import DEFAULT_DATA_DIR, read_preprocessed_papers
 from dataset_generation.query_generation import (
     DEFAULT_JUDGEMENT_MODEL,
     DEFAULT_JUDGEMENT_PROMPT,
     MemoryComponent,
     QueryGenerationConfig,
+    _config_from_yaml,
     judge_query,
     load_query_judge,
 )
@@ -29,6 +32,8 @@ MODE_DIRS = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Judge groundedness for existing query JSONL files.")
+    parser.add_argument("--settings", type=Path, default=None, help="Managed settings YAML for standard judgement runs.")
+    parser.add_argument("--set", choices=["train", "test"], default="train", help="Managed query set to judge.")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--dataset", type=Path, default=None)
     parser.add_argument("--split-index", type=Path, default=None)
@@ -52,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.settings is not None:
+        args, config = load_managed_judgement_args(args)
+    else:
+        config = None
     dataset = args.dataset or (args.data_dir / "preprocessed")
     input_dir = args.input_dir or (args.data_dir / "query_collections" / (args.collection_id or f"query_generation_{args.split}"))
     modes = args.mode or ["visual-only", "visual-and-text"]
@@ -63,23 +72,24 @@ def main() -> int:
             split_name=args.split if args.split_index is not None else None,
         )
     }
-    config = QueryGenerationConfig(
-        dataset=dataset,
-        visual_interpretations=None,
-        textual_interpretations=None,
-        clues_dir=args.data_dir / "clues",
-        output_dir=input_dir.parent,
-        judge_queries=True,
-        judgement_prompt=args.prompt,
-        judgement_prompt_id=args.prompt_id,
-        judgement_prompt_version=args.prompt_version,
-        judgement_model=args.model,
-        judgement_temperature=args.temperature,
-        judgement_max_tokens=args.max_tokens,
-        judgement_device_map=args.device_map,
-        judgement_dtype=args.dtype,
-        judgement_attn_implementation=args.attn_implementation,
-    )
+    if config is None:
+        config = QueryGenerationConfig(
+            dataset=dataset,
+            visual_interpretations=None,
+            textual_interpretations=None,
+            clues_dir=args.data_dir / "clues",
+            output_dir=input_dir.parent,
+            judge_queries=True,
+            judgement_prompt=args.prompt,
+            judgement_prompt_id=args.prompt_id,
+            judgement_prompt_version=args.prompt_version,
+            judgement_model=args.model,
+            judgement_temperature=args.temperature,
+            judgement_max_tokens=args.max_tokens,
+            judgement_device_map=args.device_map,
+            judgement_dtype=args.dtype,
+            judgement_attn_implementation=args.attn_implementation,
+        )
     loaded_judge = load_query_judge(config)
     processed = 0
     skipped = 0
@@ -130,6 +140,37 @@ def main() -> int:
             processed += 1
     print(json.dumps({"processed": processed, "skipped": skipped, "missing_papers": missing}, indent=2, sort_keys=True))
     return 0
+
+
+def load_managed_judgement_args(args: argparse.Namespace) -> tuple[argparse.Namespace, QueryGenerationConfig]:
+    settings_path = args.settings or DEFAULT_SETTINGS_PATH
+    raw, _ = load_managed_settings(settings_path)
+    query_config = replace(_config_from_yaml(settings_path, query_set=args.set), judge_queries=True)
+
+    visual_query = section(raw, "visual_query")
+    judgement = section(visual_query, "judgement")
+    run = judgement.get("run") if isinstance(judgement.get("run"), dict) else {}
+
+    managed = argparse.Namespace(**vars(args))
+    managed.data_dir = query_config.output_dir.parent
+    managed.dataset = query_config.dataset
+    managed.split_index = query_config.split_index
+    managed.split = query_config.split_name or args.set
+    managed.input_dir = query_config.output_dir / query_config.collection_id
+    managed.collection_id = query_config.collection_id
+    managed.mode = list(run.get("modes", query_config.modes))
+    managed.prompt = query_config.judgement_prompt
+    managed.prompt_id = query_config.judgement_prompt_id
+    managed.prompt_version = query_config.judgement_prompt_version
+    managed.model = query_config.judgement_model
+    managed.temperature = query_config.judgement_temperature
+    managed.max_tokens = query_config.judgement_max_tokens
+    managed.device_map = query_config.judgement_device_map
+    managed.dtype = query_config.judgement_dtype
+    managed.attn_implementation = query_config.judgement_attn_implementation
+    managed.limit = run.get("limit")
+    managed.overwrite = bool(run.get("overwrite", False))
+    return managed, query_config
 
 
 def progress_rows(rows: list[dict[str, Any]], *, description: str):

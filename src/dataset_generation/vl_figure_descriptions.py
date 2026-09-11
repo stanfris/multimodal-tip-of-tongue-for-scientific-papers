@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import time
-from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable
 
+from dataset_generation.document_splits import filter_papers_by_split
+from dataset_generation.generation_utils import batched, progress
 from dataset_generation.interpretations import (
     InterpretationRecord,
     append_failure_record,
     interpretation_key,
     read_completed_interpretation_keys,
 )
-from dataset_generation.document_splits import filter_papers_by_split
+from dataset_generation.managed_settings import (
+    DEFAULT_SETTINGS_PATH,
+    load_managed_settings,
+    resolve_dataset_path,
+    resolve_path,
+    section,
+)
 from dataset_generation.preprocessed import (
     DEFAULT_DATA_DIR,
     append_clue_row,
@@ -33,7 +39,6 @@ DEFAULT_MODELS = {
 }
 DEFAULT_PROMPT = Path("prompts/visual_interpretation.v1.txt")
 DEFAULT_RUN_ID = "qwen3_vl_figure_description"
-T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,8 @@ class FigureSample:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Qwen-VL visual descriptions for scientific figures.")
+    parser.add_argument("--settings", type=Path, default=None, help="Managed settings YAML for standard full runs.")
+    parser.add_argument("--set", choices=["train", "test"], default="train", help="Managed dataset split to process.")
     parser.add_argument("--backend", choices=sorted(DEFAULT_MODELS), default="mlx")
     parser.add_argument("--model", default=None, help="Model name. Defaults depend on --backend.")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Local data root.")
@@ -97,12 +104,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional Transformers attention implementation, e.g. flash_attention_2 on DGX.",
     )
     return parser
-
-
-def safe_stem(value: str, fallback: str) -> str:
-    stem = Path(value).stem or fallback
-    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._")
-    return cleaned or fallback
 
 
 def samples_from_paths(paths: list[Path], limit: int) -> list[FigureSample]:
@@ -318,32 +319,6 @@ def print_sample(index: int, sample: FigureSample, backend: str, model_name: str
     print("=" * 60)
 
 
-def batched(items: list[FigureSample], batch_size: int) -> list[list[FigureSample]]:
-    if batch_size < 1:
-        raise ValueError("batch-size must be at least 1")
-    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
-
-
-def progress(items: Iterable[T], *, total: int, enabled: bool, description: str) -> Iterator[T]:
-    if not enabled:
-        yield from items
-        return
-    try:
-        from tqdm.auto import tqdm
-    except ImportError:
-        processed = 0
-        next_report = 10
-        for item in items:
-            yield item
-            processed += 1
-            percent = int((processed / total) * 100) if total else 100
-            if percent >= next_report or processed == total:
-                print(f"{description}: {processed}/{total} rows ({percent}%)", flush=True)
-                next_report += 10
-        return
-    yield from tqdm(items, total=total, desc=description, unit="batch")
-
-
 def print_debug_trace(sample: FigureSample, prompt: str, description: str) -> None:
     print("=" * 60, flush=True)
     print("DEBUG VISUAL GENERATION", flush=True)
@@ -358,6 +333,8 @@ def print_debug_trace(sample: FigureSample, prompt: str, description: str) -> No
 
 
 def run(args: argparse.Namespace) -> Path:
+    if args.settings is not None:
+        args = load_managed_visual_description_args(args)
     model_name = args.model or DEFAULT_MODELS[args.backend]
     dataset_dir = args.dataset or (Path(args.data_dir) / "preprocessed")
     output_dir = args.output_dir or args.clues_dir or (Path(args.data_dir) / "clues")
@@ -378,7 +355,6 @@ def run(args: argparse.Namespace) -> Path:
         )
 
     loaded, generate_description = load_generator(args, model_name)
-    records: list[InterpretationRecord] = []
     completed = set()
     if args.resume and not args.overwrite:
         completed = read_completed_interpretation_keys(
@@ -465,7 +441,6 @@ def run(args: argparse.Namespace) -> Path:
                     "image_path": str(sample.image_path),
                 },
             )
-            records.append(record)
             _append_visual_clue(record, output_path)
             completed.add(interpretation_key(record))
             processed += 1
@@ -499,6 +474,44 @@ def run(args: argparse.Namespace) -> Path:
     )
     print(f"Wrote {processed} interpretation records to {output_path.resolve()} ({skipped} skipped, {failed} failed)")
     return output_path
+
+
+def load_managed_visual_description_args(args: argparse.Namespace) -> argparse.Namespace:
+    raw, settings_path = load_managed_settings(args.settings or DEFAULT_SETTINGS_PATH)
+    config_dir = settings_path.parent
+    dataset = section(raw, "dataset")
+    visual = section(raw, "visual_descriptions")
+    prompt = section(visual, "prompt")
+    model = section(visual, "model")
+    selection = section(visual, "selection")
+    generation = section(visual, "generation")
+
+    managed = argparse.Namespace(**vars(args))
+    managed.backend = model.get("provider", "transformers")
+    managed.model = model.get("name")
+    managed.data_dir = resolve_path(dataset.get("root", "../data"), config_dir)
+    managed.dataset = resolve_dataset_path(dataset, "preprocessed", config_dir)
+    managed.clues_dir = resolve_dataset_path(dataset, "clues_dir", config_dir)
+    managed.output_dir = None
+    managed.prompt = resolve_path(prompt["template"], config_dir)
+    managed.prompt_id = prompt.get("name", "visual_interpretation")
+    managed.prompt_version = prompt.get("version", "v1")
+    managed.split = args.set
+    managed.split_index = resolve_dataset_path(dataset, "split_index", config_dir)
+    managed.all = bool(selection.get("all", True))
+    managed.limit = selection.get("limit")
+    managed.start_index = int(selection.get("start_index", 0))
+    managed.end_index = selection.get("end_index")
+    managed.resume = bool(selection.get("resume", True))
+    managed.overwrite = bool(selection.get("overwrite", False))
+    managed.batch_size = int(generation.get("batch_size", 1))
+    managed.max_tokens = int(generation.get("max_tokens", 180))
+    managed.temperature = float(generation.get("temperature", 0.0))
+    managed.debug = bool(generation.get("debug", False))
+    managed.device_map = generation.get("device_map", "auto")
+    managed.dtype = generation.get("dtype", "auto")
+    managed.attn_implementation = generation.get("attn_implementation")
+    return managed
 
 
 def _append_visual_clue(record: InterpretationRecord, clues_dir: str | Path) -> None:

@@ -60,18 +60,15 @@ scripts/05_reduce_and_compact_preprocessed.sh
 scripts/06_describe_all_figures.sh
 scripts/07_describe_all_textual_clues.sh
 scripts/08_generate_queries.sh
+scripts/09_judge_train_queries.sh
 ```
 
 Run `03_start_mineru_router.sh` in a separate terminal before
 `04_run_mineru_full_extraction.sh`. The clue and query stages read directly
 from `data/preprocessed` or `data/preprocessed/papers`.
 
-The scripts use `DATA_DIR=data` and `SPLIT=train` by default. Override them as
-environment variables, for example:
-
-```bash
-LIMIT=100 scripts/07_describe_all_textual_clues.sh
-```
+The bash scripts are intentionally thin wrappers for the standard workflow.
+Use the Python CLIs directly for ad hoc runs.
 
 Build a fixed-seed stratified document split before clue/query generation.
 The default split is 1,000 train documents and 200 test documents:
@@ -82,19 +79,28 @@ uv run python scripts/build_document_split.py \
   --output data/splits/document_split.json
 ```
 
-Then run a specific set by passing the split index and `SPLIT=train` or
-`SPLIT=test`:
+Figure descriptions, textual clues, query generation, and query judgement are managed by
+`configs/settings.yaml`. That file contains the overall dataset pointer,
+dataset paths, split index, stage-specific prompt/model/generation settings,
+and the standardized train/test query-set definitions. Runtime overrides for
+managed query settings are intentionally not supported.
+
+Generate the training set by default, or explicitly select the test set:
 
 ```bash
-SPLIT_INDEX=data/splits/document_split.json SPLIT=train scripts/06_describe_all_figures.sh
-SPLIT_INDEX=data/splits/document_split.json SPLIT=train scripts/07_describe_all_textual_clues.sh
-SPLIT_INDEX=data/splits/document_split.json SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh
-SPLIT_INDEX=data/splits/document_split.json SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh
+scripts/06_describe_all_figures.sh
+scripts/07_describe_all_textual_clues.sh
+scripts/08_generate_queries.sh
+scripts/09_judge_train_queries.sh
+scripts/06_describe_all_figures.sh --set test
+scripts/07_describe_all_textual_clues.sh --set test
+scripts/08_generate_queries.sh --set test
+scripts/09_judge_train_queries.sh --set test
 ```
 
-The split index stores ordered paper IDs. `START_INDEX`, `END_INDEX`, `LIMIT`,
-`RESUME`, and `OVERWRITE` apply after the split is selected, so restarts and
-partial reruns operate on the chosen train/test set instead of the whole corpus.
+The split index stores ordered paper IDs. For standard full-run behavior, edit
+`visual_descriptions`, `textual_descriptions`, `visual_query`, or
+`visual_query.judgement` in `configs/settings.yaml`.
 
 The clue-generation scripts write per-paper clue files:
 
@@ -104,16 +110,8 @@ data/clues/<paper_id>/images/<figure_id>.jsonl
 ```
 
 The full-run scripts are single-process and do not launch multi-GPU workers.
-They default to `RESUME=1`, write clues incrementally, and record failures under
-`data/clues/`. They use PyTorch SDPA attention by default; set
-`ATTN_IMPLEMENTATION=` to let Transformers choose automatically. Useful
-overrides:
-
-```bash
-TEXT_BATCH_SIZE=16 LIMIT=1000 scripts/07_describe_all_textual_clues.sh
-VISUAL_BATCH_SIZE=1 START_INDEX=5000 scripts/06_describe_all_figures.sh
-ATTN_IMPLEMENTATION= scripts/07_describe_all_textual_clues.sh
-```
+They resume by default, write clues incrementally, and record failures under
+`data/clues/`.
 
 ## ACL Anthology Subset
 
@@ -150,27 +148,22 @@ First inspect the machine:
 uv run dataset-generation probe-mineru-env
 ```
 
-On the DGX, start a persistent router. Limit GPUs with `CUDA_VISIBLE_DEVICES`
-when needed; do not hardcode GPU IDs in the extraction command.
+On the DGX, start a persistent router:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 scripts/03_start_mineru_router.sh
+scripts/03_start_mineru_router.sh
 ```
 
-The script defaults to `uv run mineru-router --local-gpus auto`, preloads VLM
-workers, uses `MINERU_API_MAX_CONCURRENT_REQUESTS=1` per worker, and exposes the
-MinerU API at `http://127.0.0.1:8002`. It writes MinerU service output under
-`data/mineru_api_output` unless `MINERU_API_OUTPUT_ROOT` is overridden.
+Use `uv run mineru-router --help` directly for custom router settings.
 
 Run extraction against the downloaded ACL subset PDFs:
 
 ```bash
-MAX_IN_FLIGHT=4 START_PAGE_ID=0 END_PAGE_ID=9 scripts/04_run_mineru_full_extraction.sh
+scripts/04_run_mineru_full_extraction.sh
 ```
 
-By default the full-run script parses only page IDs `0..9`, i.e. the first 10
-pages. Override `START_PAGE_ID` and `END_PAGE_ID` for a different slice, or use
-`END_PAGE_ID=99999` to request the whole PDF.
+Use `uv run dataset-generation extract-mineru-pdfs --help` directly for custom
+extraction settings.
 
 Completed papers are skipped on restart. Each successful paper has:
 
@@ -216,11 +209,7 @@ output in MinerU responses.
 Generate Qwen-VL visual descriptions from preprocessed ACL subset papers:
 
 ```bash
-uv run dataset-generation describe-figures \
-  --backend transformers \
-  --data-dir data \
-  --split train \
-  --num-samples 1
+scripts/06_describe_all_figures.sh
 ```
 
 This reads figure image references from
@@ -242,11 +231,7 @@ Use `--clues-dir` to write to a different clue directory.
 Generate semantic memory cues from preprocessed paper markdown:
 
 ```bash
-uv run dataset-generation describe-textual-clues \
-  --backend transformers \
-  --data-dir data \
-  --split train \
-  --num-samples 1
+scripts/07_describe_all_textual_clues.sh
 ```
 
 This writes textual clues to `data/clues/<paper_id>/base/textual_clues.jsonl`.
@@ -254,7 +239,7 @@ This writes textual clues to `data/clues/<paper_id>/base/textual_clues.jsonl`.
 Print stored coverage statistics:
 
 ```bash
-uv run dataset-generation stats --dataset data/query_collections/query_generation_default/visual_only
+uv run dataset-generation stats --dataset data/query_collections/query_generation_train/visual_only
 ```
 
 ## Artifact Structure

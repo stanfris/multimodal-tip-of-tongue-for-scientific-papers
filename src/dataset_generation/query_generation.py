@@ -12,12 +12,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-import yaml
-
+from dataset_generation.component_parsing import split_component_text
 from dataset_generation.document_splits import filter_papers_by_split
+from dataset_generation.managed_settings import (
+    DEFAULT_SETTINGS_PATH,
+    ManagedSet,
+    load_managed_settings,
+    resolve_dataset_path,
+    resolve_optional_dataset_path,
+    resolve_path,
+    section,
+)
 from dataset_generation.preprocessed import (
-    DEFAULT_CLUES_DIR,
-    DEFAULT_DATA_DIR,
     read_clue_rows,
     read_preprocessed_markdown,
     read_preprocessed_papers,
@@ -40,7 +46,7 @@ DEFAULT_VISUAL_INTERPRETATIONS = "qwen3_vl_figure_description"
 DEFAULT_TEXTUAL_INTERPRETATIONS = "qwen3_textual_clue_description"
 DEFAULT_VISUAL_COMPONENT_BUDGET = 3
 DEFAULT_TEXTUAL_COMPONENT_BUDGET = 3
-DEFAULT_RUN_ID = "query_generation_default"
+DEFAULT_VISUAL_QUERY_NAME = "query_generation"
 DEFAULT_MODELS = {
     "null": "null",
     "mlx": "Qwen/Qwen3-1.7B-MLX-8bit",
@@ -89,7 +95,7 @@ class QueryGenerationConfig:
     start_index: int = 0
     end_index: int | None = None
     resume: bool = False
-    collection_id: str = DEFAULT_RUN_ID
+    collection_id: str = "query_generation_train"
     config_path: Path | None = None
     extra_metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -113,60 +119,18 @@ JudgementGenerator = Callable[[dict[str, Any], list[Path], str, int, float], str
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate query collections from visual/textual clue sidecars.")
-    parser.add_argument("--config", type=Path, default=None, help="YAML config file for query generation.")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--dataset", type=Path, default=None)
-    parser.add_argument("--clues-dir", type=Path, default=None)
-    parser.add_argument("--visual-interpretations", type=Path, default=None)
-    parser.add_argument("--textual-interpretations", type=Path, default=None)
     parser.add_argument(
-        "--split-index",
+        "--settings",
         type=Path,
-        default=None,
-        help="JSON train/test paper-id index. When set, --split selects the paper-id list to process.",
+        default=DEFAULT_SETTINGS_PATH,
+        help="Managed settings YAML. All generation settings are read from this file.",
     )
-    parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--collection-id", default=None)
-    parser.add_argument("--prompt", type=Path, default=None)
-    parser.add_argument("--prompt-id", default=None)
-    parser.add_argument("--prompt-version", default=None)
-    parser.add_argument("--model-provider", default=None)
-    parser.add_argument("--model", default=None)
-    parser.add_argument("--temperature", type=float, default=None)
-    parser.add_argument("--max-tokens", type=int, default=None)
-    parser.add_argument("--device-map", default=None)
-    parser.add_argument("--dtype", default=None)
-    parser.add_argument("--attn-implementation", default=None)
-    parser.add_argument("--thinking", action="store_true")
-    parser.add_argument("--judge-queries", action="store_true", help="Run Gemma VL judgement for every generated query.")
-    parser.add_argument("--judgement-prompt", type=Path, default=None)
-    parser.add_argument("--judgement-prompt-id", default=None)
-    parser.add_argument("--judgement-prompt-version", default=None)
-    parser.add_argument("--judgement-model-provider", default=None)
-    parser.add_argument("--judgement-model", default=None)
-    parser.add_argument("--judgement-temperature", type=float, default=None)
-    parser.add_argument("--judgement-max-tokens", type=int, default=None)
-    parser.add_argument("--judgement-device-map", default=None)
-    parser.add_argument("--judgement-dtype", default=None)
-    parser.add_argument("--judgement-attn-implementation", default=None)
-    parser.add_argument("--mode", choices=["visual-only", "visual-and-text"], action="append", default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--visual-component-budget", type=int, default=None, help="Legacy ignored option; all visual cues are used.")
     parser.add_argument(
-        "--textual-component-budget",
-        type=int,
-        default=None,
-        help="Legacy ignored option; all textual cues are used.",
+        "--set",
+        choices=["train", "test"],
+        default="train",
+        help="Managed query set to generate. Defaults to train.",
     )
-    parser.add_argument("--component-budget", type=int, default=None, help="Legacy ignored option; all cues are used.")
-    parser.add_argument("--max-text-components", type=int, default=None, help="Legacy ignored option; all textual cues are used.")
-    parser.add_argument("--max-examples", type=int, default=None)
-    parser.add_argument("--limit", type=int, default=None, help="Alias for --max-examples.")
-    parser.add_argument("--allow-partial-components", action="store_true")
-    parser.add_argument("--start-index", type=int, default=None)
-    parser.add_argument("--end-index", type=int, default=None)
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--split", default=None, help="Split name to read from --split-index, usually train or test.")
     return parser
 
 
@@ -176,59 +140,7 @@ def run(args: argparse.Namespace) -> Path:
 
 
 def load_query_generation_config(args: argparse.Namespace) -> QueryGenerationConfig:
-    base = _config_from_yaml(args.config) if args.config else _default_config(args.data_dir, args.split or "train")
-    max_examples = args.max_examples if args.max_examples is not None else args.limit
-    overrides = {
-        "dataset": args.dataset,
-        "clues_dir": args.clues_dir,
-        "visual_interpretations": args.visual_interpretations,
-        "textual_interpretations": args.textual_interpretations,
-        "split_index": args.split_index,
-        "split_name": args.split if args.split is not None else None,
-        "output_dir": args.output_dir,
-        "collection_id": args.collection_id,
-        "prompt": args.prompt,
-        "prompt_id": args.prompt_id,
-        "prompt_version": args.prompt_version,
-        "model_provider": args.model_provider,
-        "model": args.model,
-        "temperature": args.temperature,
-        "max_tokens": args.max_tokens,
-        "device_map": args.device_map,
-        "dtype": args.dtype,
-        "attn_implementation": args.attn_implementation,
-        "thinking": True if args.thinking else None,
-        "judge_queries": True if args.judge_queries else None,
-        "judgement_prompt": args.judgement_prompt,
-        "judgement_prompt_id": args.judgement_prompt_id,
-        "judgement_prompt_version": args.judgement_prompt_version,
-        "judgement_model_provider": args.judgement_model_provider,
-        "judgement_model": args.judgement_model,
-        "judgement_temperature": args.judgement_temperature,
-        "judgement_max_tokens": args.judgement_max_tokens,
-        "judgement_device_map": args.judgement_device_map,
-        "judgement_dtype": args.judgement_dtype,
-        "judgement_attn_implementation": args.judgement_attn_implementation,
-        "modes": tuple(args.mode) if args.mode else None,
-        "seed": args.seed,
-        "visual_component_budget": args.visual_component_budget,
-        "textual_component_budget": args.textual_component_budget,
-        "max_examples": max_examples,
-        "allow_partial_components": True if args.allow_partial_components else None,
-        "start_index": args.start_index,
-        "end_index": args.end_index,
-        "resume": True if args.resume else None,
-    }
-    data = asdict(base)
-    if args.component_budget is not None:
-        data["visual_component_budget"] = args.component_budget
-        data["textual_component_budget"] = args.component_budget
-    if args.max_text_components is not None:
-        data["textual_component_budget"] = args.max_text_components
-    for key, value in overrides.items():
-        if value is not None:
-            data[key] = value
-    config = QueryGenerationConfig(**data)
+    config = _config_from_yaml(args.settings, query_set=args.set)
     _validate_config(config)
     return config
 
@@ -294,7 +206,7 @@ def _generate_query_collections_from_preprocessed(
 
 def _generate_mode_examples_from_papers(
     mode: QueryMode,
-    papers: list[dict[str, Any]],
+    papers: list[tuple[int, dict[str, Any]]],
     components_by_paper: dict[str, list[MemoryComponent]],
     config: QueryGenerationConfig,
     prompt_template: str,
@@ -321,7 +233,7 @@ def _generate_mode_examples_from_papers(
     empty = 0
     incomplete_clues = 0
     resumed = 0
-    for paper_index, paper in enumerate(papers):
+    for paper_index, paper in papers:
         if target_new_examples == 0:
             break
         scanned += 1
@@ -497,19 +409,19 @@ def _query_paper_id(row: dict[str, Any]) -> str | None:
     return None
 
 
-def _eligible_papers(papers: list[dict[str, Any]], config: QueryGenerationConfig) -> list[dict[str, Any]]:
+def _eligible_papers(papers: list[dict[str, Any]], config: QueryGenerationConfig) -> list[tuple[int, dict[str, Any]]]:
     papers = filter_papers_by_split(
         papers,
         split_index_path=config.split_index,
         split_name=config.split_name,
     )
-    selected: list[dict[str, Any]] = []
+    selected: list[tuple[int, dict[str, Any]]] = []
     for index, paper in enumerate(papers):
         if index < config.start_index:
             continue
         if config.end_index is not None and index >= config.end_index:
             break
-        selected.append(paper)
+        selected.append((index, paper))
     return selected
 
 
@@ -568,7 +480,7 @@ def _components_by_paper(
         paper_id = str(clue.get("paper_id", ""))
         if paper_id in paper_ids:
             text = str(clue.get("output", "")).strip()
-            for component_text in _split_component_text(text, "textual"):
+            for component_text in split_component_text(text, "textual"):
                 components.setdefault(paper_id, []).append(
                     MemoryComponent(record_id=paper_id, kind="textual", text=component_text)
                 )
@@ -580,7 +492,7 @@ def _components_by_paper(
         if paper_id in paper_ids and figure_id in figure_ids_by_paper.get(paper_id, set()):
             text = str(clue.get("output", "")).strip()
             figure_name = figure_names.get((paper_id, figure_id), "Figure")
-            for component_text in _split_component_text(text, "visual"):
+            for component_text in split_component_text(text, "visual"):
                 components.setdefault(paper_id, []).append(
                     MemoryComponent(record_id=figure_id, kind="visual", text=f"{figure_name}: {component_text}")
                 )
@@ -906,151 +818,36 @@ def format_query_prompt(prompt_template: str, selected: list[MemoryComponent]) -
     return prompt_template.replace("{selected_cues}", selected_cues)
 
 
-
-
-
 def _render_null_query(selected: list[MemoryComponent]) -> str:
     memories = " ".join(component.text.rstrip(".") for component in selected)
     return f"I'm trying to find a paper I read before. I remember that {memories}."
 
 
-def _split_component_text(text: str, kind: Literal["visual", "textual"]) -> list[str]:
-    decoded = _decode_jsonish_components(text)
-    if decoded is None:
-        return [text]
-    if kind == "textual":
-        components = [_textual_component(value) for value in decoded]
-    else:
-        components = []
-        for value in decoded:
-            components.extend(_visual_components(value))
-    cleaned = [component.strip() for component in components if component and component.strip()]
-    return cleaned
-
-
-def _repair_json_dict(text: str) -> dict[str, Any] | None:
-    closings = ["", '"', '"]}', ']}', '}', '"}']
-    
-    stripped = re.sub(r",\s*$", "", text.strip())
-    for closing in closings:
-        try:
-            val = json.loads(stripped + closing)
-            if isinstance(val, dict):
-                return val
-        except json.JSONDecodeError:
-            pass
-            
-    while "," in text:
-        text = text[:text.rfind(",")]
-        stripped = text.strip()
-        for closing in closings:
-            try:
-                val = json.loads(stripped + closing)
-                if isinstance(val, dict):
-                    return val
-            except json.JSONDecodeError:
-                pass
-    return None
-
-def _decode_jsonish_components(text: str) -> list[Any] | None:
-    text = text.strip()
-    first_json = min((index for index in (text.find("["), text.find("{")) if index != -1), default=-1)
-    if first_json > 0:
-        text = text[first_json:]
-    if text.startswith("["):
-        text = text[1:]
-    if text.endswith("]"):
-        text = text[:-1]
-        
-    decoder = json.JSONDecoder()
-    index = 0
-    values: list[Any] = []
-    while index < len(text):
-        while index < len(text) and (text[index].isspace() or text[index] in ","):
-            index += 1
-        if index >= len(text):
-            break
-        try:
-            value, end = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            remaining = text[index:].strip()
-            dict_start = remaining.find("{")
-            if dict_start != -1:
-                repaired = _repair_json_dict(remaining[dict_start:])
-                if repaired:
-                    values.append(repaired)
-            break
-        if isinstance(value, list):
-            values.extend(value)
-        else:
-            values.append(value)
-        index = end
-    return values or None
-
-
-def _textual_component(value: Any) -> str | None:
-    if isinstance(value, dict):
-        cue = value.get("cue")
-        if cue is None:
-            return None
-        category = value.get("category")
-        if category is None:
-            return str(cue)
-        return f"textual {category}: {cue}"
-    return str(value)
-
-
-def _visual_components(value: Any) -> list[str]:
-    if isinstance(value, dict):
-        components: list[str] = []
-        for field_name, field_value in _ordered_visual_fields(value):
-            if isinstance(field_value, list):
-                components.extend(f"{field_name}: {item}" for item in field_value)
-            elif field_value is not None:
-                components.append(f"{field_name}: {field_value}")
-        return components
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    return [str(value)]
-
-
-def _ordered_visual_fields(value: dict[str, Any]) -> list[tuple[str, Any]]:
-    preferred = [
-        "figure_type",
-        "layout",
-        "visual_elements",
-        "colors_and_styles",
-        "relationships",
-        "distinctive_visual_cues",
-    ]
-    ordered = [(field_name, value[field_name]) for field_name in preferred if field_name in value]
-    ordered.extend((field_name, field_value) for field_name, field_value in value.items() if field_name not in preferred)
-    return ordered
-
-
-def _config_from_yaml(path: Path) -> QueryGenerationConfig:
-    config_path = path.expanduser().resolve()
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"Config must be a mapping: {config_path}")
+def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGenerationConfig:
+    raw, config_path = load_managed_settings(path)
     config_dir = config_path.parent
-    run = _section(raw, "run")
-    inputs = _section(raw, "inputs")
-    prompt = _section(raw, "prompt")
-    model = _section(raw, "model")
-    selection = _section(raw, "selection")
-    output = _section(raw, "output")
-    judgement = raw.get("judgement") if isinstance(raw.get("judgement"), dict) else {}
+    if query_set not in ("train", "test"):
+        raise ValueError(f"Query generation is only managed for 'train' and 'test', got {query_set!r}.")
+
+    dataset = section(raw, "dataset")
+    visual_query = section(raw, "visual_query")
+    prompt = section(visual_query, "prompt")
+    model = section(visual_query, "model")
+    selection = section(visual_query, "selection")
+    output = section(visual_query, "output")
+    query_sets = section(visual_query, "query_sets")
+    selected_set = section(query_sets, query_set)
+    judgement = visual_query.get("judgement") if isinstance(visual_query.get("judgement"), dict) else {}
     modes = tuple(selection.get("modes", ["visual-only", "visual-and-text"]))
     return QueryGenerationConfig(
-        dataset=_resolve_path(inputs["dataset"], config_dir),
-        visual_interpretations=_resolve_optional_path(inputs.get("visual_interpretations"), config_dir),
-        textual_interpretations=_resolve_optional_path(inputs.get("textual_interpretations"), config_dir),
-        split_index=_resolve_optional_path(inputs.get("split_index"), config_dir),
-        split_name=inputs.get("split_name"),
-        clues_dir=_resolve_path(inputs.get("clues_dir", DEFAULT_CLUES_DIR), config_dir),
-        output_dir=_resolve_path(output["dir"], config_dir),
-        prompt=_resolve_path(prompt["template"], config_dir),
+        dataset=resolve_dataset_path(dataset, "preprocessed", config_dir),
+        visual_interpretations=resolve_optional_dataset_path(dataset, "visual_interpretations", config_dir),
+        textual_interpretations=resolve_optional_dataset_path(dataset, "textual_interpretations", config_dir),
+        split_index=resolve_optional_dataset_path(dataset, "split_index", config_dir),
+        split_name=selected_set.get("split_name", query_set),
+        clues_dir=resolve_dataset_path(dataset, "clues_dir", config_dir),
+        output_dir=resolve_path(output["dir"], config_dir),
+        prompt=resolve_path(prompt["template"], config_dir),
         prompt_id=prompt.get("name", "query_generation"),
         prompt_version=prompt.get("version", "v1"),
         model_provider=model.get("provider", "null"),
@@ -1062,7 +859,7 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
         attn_implementation=model.get("attn_implementation", "sdpa"),
         thinking=bool(model.get("thinking", False)),
         judge_queries=bool(judgement.get("enabled", False)),
-        judgement_prompt=_resolve_path(judgement.get("template", DEFAULT_JUDGEMENT_PROMPT), config_dir),
+        judgement_prompt=resolve_path(judgement.get("template", DEFAULT_JUDGEMENT_PROMPT), config_dir),
         judgement_prompt_id=judgement.get("name", "query_judgement"),
         judgement_prompt_version=judgement.get("version", "v1"),
         judgement_model_provider=judgement.get("provider", "transformers"),
@@ -1073,7 +870,7 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
         judgement_dtype=judgement.get("dtype", "bfloat16"),
         judgement_attn_implementation=judgement.get("attn_implementation", "sdpa"),
         modes=modes,
-        seed=int(run.get("seed", 13)),
+        seed=int(visual_query.get("seed", 13)),
         visual_component_budget=int(
             selection.get(
                 "visual_component_budget",
@@ -1086,43 +883,22 @@ def _config_from_yaml(path: Path) -> QueryGenerationConfig:
                 selection.get("max_text_components", selection.get("component_budget", DEFAULT_TEXTUAL_COMPONENT_BUDGET)),
             )
         ),
-        max_examples=selection.get("max_examples"),
+        max_examples=selected_set.get("max_examples", selection.get("max_examples")),
         allow_partial_components=bool(selection.get("allow_partial_components", False)),
-        start_index=int(selection.get("start_index", 0)),
-        end_index=selection.get("end_index"),
-        resume=bool(selection.get("resume", False)),
-        collection_id=run.get("name", DEFAULT_RUN_ID),
+        start_index=int(selected_set.get("start_index", selection.get("start_index", 0))),
+        end_index=selected_set.get("end_index", selection.get("end_index")),
+        resume=bool(selected_set.get("resume", selection.get("resume", False))),
+        collection_id=selected_set.get("collection_id", f"{visual_query.get('name', DEFAULT_VISUAL_QUERY_NAME)}_{query_set}"),
         config_path=config_path,
-        extra_metadata={"raw_config": raw},
+        extra_metadata={
+            "managed_settings": {
+                "dataset": dataset.get("name"),
+                "visual_query": visual_query.get("name"),
+                "query_set": query_set,
+                "raw_settings": raw,
+            }
+        },
     )
-
-
-def _default_config(data_dir: Path, split: str) -> QueryGenerationConfig:
-    return QueryGenerationConfig(
-        dataset=Path(data_dir) / "preprocessed",
-        visual_interpretations=None,
-        textual_interpretations=None,
-        split_index=None,
-        split_name=None,
-        clues_dir=Path(data_dir) / "clues",
-        output_dir=Path(data_dir) / "query_collections",
-    )
-
-
-def _section(raw: dict[str, Any], name: str) -> dict[str, Any]:
-    value = raw.get(name)
-    if not isinstance(value, dict):
-        raise ValueError(f"Config section {name!r} must be a mapping")
-    return value
-
-
-def _resolve_path(path: str | Path, base_dir: Path) -> Path:
-    candidate = Path(path).expanduser()
-    return candidate if candidate.is_absolute() else (base_dir / candidate).resolve()
-
-
-def _resolve_optional_path(path: str | Path | None, base_dir: Path) -> Path | None:
-    return None if path is None else _resolve_path(path, base_dir)
 
 
 def _validate_config(config: QueryGenerationConfig) -> None:

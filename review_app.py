@@ -16,8 +16,8 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from src.dataset_generation.query_generation import _split_component_text
-from src.dataset_generation.preprocessed import read_preprocessed_papers
+from dataset_generation.component_parsing import split_component_text
+from dataset_generation.preprocessed import read_preprocessed_papers
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -29,8 +29,8 @@ QUERY_COLLECTION_ROOT = PROJECT_ROOT / "data/query_collections"
 PRIORITY_COLLECTION_IDS = ("query_generation_train", "query_generation_test")
 QUERY_MODES = ("visual_only", "visual_and_text")
 GENERATE_QUERY_COMMANDS = {
-    "query_generation_train": "SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh",
-    "query_generation_test": "SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh",
+    "query_generation_train": "scripts/08_generate_queries.sh",
+    "query_generation_test": "scripts/08_generate_queries.sh --set test",
 }
 
 RATINGS = ["Unreviewed", "Good", "Questionable", "Bad"]
@@ -231,8 +231,8 @@ def render_no_queries_message(collection: Path) -> None:
         st.info(
             "Expected train/test query collections were not found. Generate them with:\n\n"
             "```bash\n"
-            "SPLIT=train COLLECTION_ID=query_generation_train scripts/08_generate_queries.sh\n"
-            "SPLIT=test COLLECTION_ID=query_generation_test scripts/08_generate_queries.sh\n"
+            "scripts/08_generate_queries.sh\n"
+            "scripts/08_generate_queries.sh --set test\n"
             "```"
         )
 
@@ -668,14 +668,6 @@ def load_clue_rows_for_kind(clues_dir: Path, kind: str) -> list[dict[str, Any]]:
     return rows
 
 
-@st.cache_data(show_spinner=False)
-def load_interpretations(path: Path) -> list[dict[str, Any]]:
-    data_path = path / "interpretations.jsonl" if path.is_dir() else path
-    if not data_path.exists() or not data_path.is_file():
-        return []
-    return [json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
 def load_annotations(path: Path) -> dict[str, dict[str, Any]]:
     annotations: dict[str, dict[str, Any]] = {}
     if not path.exists():
@@ -784,29 +776,11 @@ def visual_clues_for_record(rows: list[dict[str, Any]], figure_record: dict[str,
 
 
 def parse_clues(text: str, kind: str, record_id: str) -> list[dict[str, str]]:
-    components = _split_component_text(text, kind)
+    components = split_component_text(text, kind)
     clues = []
     for comp in components:
         clues.append({"kind": kind, "record_id": record_id, "category": kind, "text": comp})
     return clues
-
-
-def decode_jsonish(text: str) -> list[Any] | None:
-    decoder = json.JSONDecoder()
-    index = 0
-    values = []
-    while index < len(text):
-        while index < len(text) and text[index].isspace():
-            index += 1
-        if index >= len(text):
-            break
-        try:
-            value, end = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            return None
-        values.append(value)
-        index = end
-    return values or None
 
 
 def records_by_paper(records: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
