@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from dataset_generation.jsonl import append_jsonl_object, read_jsonl_objects
+
 
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_PREPROCESSED_PAPERS_DIR = DEFAULT_DATA_DIR / "preprocessed"
@@ -107,18 +109,11 @@ def visual_clue_path(root: str | Path, paper_id: str, figure_id: str) -> Path:
 
 
 def read_clue_rows(path: str | Path) -> list[dict[str, Any]]:
-    clue_path = Path(path)
-    if not clue_path.exists():
-        return []
-    return [json.loads(line) for line in clue_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return read_jsonl_objects(path, missing_ok=True)
 
 
 def append_clue_row(path: str | Path, row: dict[str, Any]) -> None:
-    clue_path = Path(path)
-    clue_path.parent.mkdir(parents=True, exist_ok=True)
-    with clue_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False))
-        handle.write("\n")
+    append_jsonl_object(path, row, sort_keys=False)
 
 
 def safe_path_name(value: str) -> str:

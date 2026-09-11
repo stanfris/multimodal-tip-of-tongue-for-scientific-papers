@@ -1,0 +1,143 @@
+dataset:
+  name: acl_visual_tip_of_the_tongue
+  root: ../data
+  preprocessed: preprocessed
+  clues_dir: clues
+  split_index: splits/document_split.json
+  visual_interpretations:
+  textual_interpretations:
+
+visual_descriptions:
+  name: qwen3_vl_figure_description
+
+  prompt:
+    name: visual_interpretation
+    version: v1
+    template: ../prompts/visual_interpretation.v1.txt
+    variables:
+      - image
+
+  model:
+    provider: "transformers"
+    name: "Qwen/Qwen3-VL-4B-Instruct"
+
+  selection:
+    all: true
+    start_index: 0
+    end_index:
+    limit:
+    resume: true
+    overwrite: false
+
+  generation:
+    max_tokens: 600
+    temperature: 0.0
+    batch_size: 1
+    device_map: "auto"
+    dtype: "bfloat16"
+    attn_implementation: "sdpa"
+    debug: false
+
+textual_descriptions:
+  name: qwen3_textual_clue_description
+
+  prompt:
+    name: textual_interpretation
+    version: v1
+    template: ../prompts/textual_interpretation.v1.txt
+    variables:
+      - paper_text
+
+  model:
+    provider: "transformers"
+    name: "Qwen/Qwen3-4B"
+
+  selection:
+    all: true
+    start_index: 0
+    end_index:
+    limit:
+    resume: true
+    overwrite: false
+
+  generation:
+    max_tokens: 600
+    max_markdown_chars: 12000
+    temperature: 0.0
+    thinking: false
+    batch_size: 8
+    device_map: "auto"
+    dtype: "bfloat16"
+    attn_implementation: "sdpa"
+
+visual_query:
+  name: query_generation
+  seed: 13
+
+  prompt:
+    name: query_generation
+    version: v1
+    template: ../prompts/query_generation.v1.txt
+    variables:
+      - selected_cues
+
+  model:
+    provider: "transformers"
+    name: "Qwen/Qwen3-4B"
+    temperature: 0.0
+    max_tokens: 220
+    device_map: "auto"
+    dtype: "bfloat16"
+    attn_implementation: "sdpa"
+    thinking: false
+
+  judgement:
+    enabled: false
+    name: query_judgement
+    version: v1
+    template: ../prompts/query_judgement.v1.txt
+    provider: "transformers"
+    model: "google/gemma-3-27b-it"
+    temperature: 0.0
+    max_tokens: 900
+    device_map: "auto"
+    dtype: "bfloat16"
+    attn_implementation: "sdpa"
+    run:
+      modes:
+        - visual-only
+        - visual-and-text
+      limit:
+      overwrite: false
+
+  selection:
+    modes:
+      - visual-only
+      - visual-and-text
+    visual_component_budget: 3
+    textual_component_budget: 3
+    allow_partial_components: false
+    start_index: 0
+    end_index:
+    max_examples:
+    resume: true
+
+  output:
+    dir: ../data/query_collections
+
+  query_sets:
+    train:
+      split_name: train
+      collection_id: query_generation_train
+      start_index: 0
+      end_index:
+      max_examples:
+      resume: true
+
+    test:
+      split_name: test
+      collection_id: query_generation_test
+      start_index: 0
+      end_index:
+      max_examples:
+      resume: true
