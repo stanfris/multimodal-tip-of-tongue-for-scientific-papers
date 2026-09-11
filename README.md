@@ -40,7 +40,7 @@ uv sync --dev
 Launch the local Streamlit reviewer for generated tip-of-the-tongue query collections:
 
 ```bash
-uv run streamlit run review_app.py --server.address 127.0.0.1
+.venv/bin/python -m streamlit run review_app.py --server.address 127.0.0.1
 ```
 
 The reviewer can inspect generated query collections and writes manual
