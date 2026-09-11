@@ -11,10 +11,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from dataset_generation.document_splits import filter_papers_by_split
-from dataset_generation.generation_utils import batched, progress
+from dataset_generation.generation_utils import batched, progress, record_generation_failure
 from dataset_generation.interpretations import (
     InterpretationRecord,
-    append_failure_record,
     interpretation_key,
     read_completed_interpretation_keys,
 )
@@ -33,6 +32,7 @@ from dataset_generation.preprocessed import (
     read_preprocessed_papers,
     textual_clue_path,
 )
+from dataset_generation.validation import validate_index_window
 
 
 DEFAULT_MODELS: dict[str, str | None] = {
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def default_dataset_dir(data_dir: Path, split: str) -> Path:
+def default_dataset_dir(data_dir: Path) -> Path:
     return Path(data_dir) / "preprocessed"
 
 
@@ -130,10 +130,7 @@ def iter_samples_from_dataset(
     split_index: Path | None = None,
     split_name: str | None = None,
 ) -> list[TextSample]:
-    if start_index < 0:
-        raise ValueError("start-index must be non-negative")
-    if end_index is not None and end_index < start_index:
-        raise ValueError("end-index must be greater than or equal to start-index")
+    validate_index_window(start_index, end_index, start_name="start-index", end_name="end-index")
     return iter_samples_from_preprocessed_dataset(
         dataset_dir,
         limit=limit,
@@ -384,7 +381,7 @@ def run(args: argparse.Namespace) -> Path:
     model_name = args.model or DEFAULT_MODELS[args.backend]
     if model_name is None:
         raise ValueError(f"No default model is configured for backend {args.backend!r}; pass --model explicitly.")
-    dataset_dir = args.dataset or default_dataset_dir(args.data_dir, args.split)
+    dataset_dir = args.dataset or default_dataset_dir(args.data_dir)
     output_dir = args.output_dir or args.clues_dir or (Path(args.data_dir) / "clues")
     prompt_path = args.prompt.expanduser().resolve()
     prompt_template = prompt_path.read_text(encoding="utf-8")
@@ -454,15 +451,12 @@ def run(args: argparse.Namespace) -> Path:
         except Exception as exc:
             failed += len(pending)
             for sample in pending:
-                append_failure_record(
-                    {
-                        "record_id": sample.record_id,
-                        "kind": "textual",
-                        "metadata": sample.metadata,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    },
+                record_generation_failure(
                     failure_file,
+                    record_id=sample.record_id,
+                    kind="textual",
+                    error=exc,
+                    metadata=sample.metadata,
                 )
             continue
         for sample, description in zip(pending, descriptions, strict=True):

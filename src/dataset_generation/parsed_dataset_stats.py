@@ -12,6 +12,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from dataset_generation.jsonl import read_jsonl_objects
+
 
 DEFAULT_METADATA_PATH = Path("data") / "acl_subset" / "papers.jsonl"
 DEFAULT_PREPROCESSED_DIR = Path("data") / "preprocessed"
@@ -89,14 +91,10 @@ def compute_stats(preprocessed_dir: str | Path, metadata_path: str | Path) -> di
 def read_metadata(path: str | Path) -> dict[str, dict[str, Any]]:
     metadata_path = Path(path)
     rows: dict[str, dict[str, Any]] = {}
-    with metadata_path.open(encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            paper_id = str(row.get("anthology_id") or row.get("paper_id") or "").strip()
-            if paper_id:
-                rows[paper_id] = row
+    for row in read_jsonl_objects(metadata_path):
+        paper_id = str(row.get("anthology_id") or row.get("paper_id") or "").strip()
+        if paper_id:
+            rows[paper_id] = row
     return rows
 
 

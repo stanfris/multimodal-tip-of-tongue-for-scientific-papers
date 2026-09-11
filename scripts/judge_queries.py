@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from dataset_generation.document_splits import filter_papers_by_split
+from dataset_generation.generation_utils import progress
+from dataset_generation.jsonl import append_jsonl_object, read_jsonl_objects
 from dataset_generation.managed_settings import DEFAULT_SETTINGS_PATH, load_managed_settings, section
 from dataset_generation.preprocessed import DEFAULT_DATA_DIR, read_preprocessed_papers
 from dataset_generation.query_generation import (
@@ -102,8 +103,15 @@ def main() -> int:
         if args.overwrite:
             judgement_path.unlink(missing_ok=True)
         completed_query_ids = read_completed_query_ids(judgement_path)
-        rows = read_jsonl(query_path)
-        for index, row in progress_rows(rows, description=f"Judging {mode} queries"):
+        rows = read_jsonl_objects(query_path)
+        indexed_rows = list(enumerate(rows))
+        for _, row in progress(
+            indexed_rows,
+            total=len(indexed_rows),
+            enabled=True,
+            description=f"Judging {mode} queries",
+            unit="query",
+        ):
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
             query_id = str(row.get("query_id") or "")
             if query_id in completed_query_ids and not args.overwrite:
@@ -173,23 +181,6 @@ def load_managed_judgement_args(args: argparse.Namespace) -> tuple[argparse.Name
     return managed, query_config
 
 
-def progress_rows(rows: list[dict[str, Any]], *, description: str):
-    try:
-        from tqdm.auto import tqdm
-    except ImportError:
-        total = len(rows)
-        next_report = 10
-        for index, row in enumerate(rows):
-            yield index, row
-            processed = index + 1
-            percent = int((processed / total) * 100) if total else 100
-            if percent >= next_report or processed == total:
-                print(f"{description}: {processed}/{total} rows ({percent}%)", flush=True)
-                next_report += 10
-        return
-    yield from tqdm(enumerate(rows), total=len(rows), desc=description, unit="query")
-
-
 def components_from_metadata(metadata: dict[str, Any]) -> list[MemoryComponent]:
     components = []
     raw_components = metadata.get("selected_components")
@@ -211,28 +202,9 @@ def components_from_metadata(metadata: dict[str, Any]) -> list[MemoryComponent]:
     return components
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise ValueError(f"Expected JSON object at {path}:{line_number}")
-        rows.append(row)
-    return rows
-
-
 def read_completed_query_ids(path: Path) -> set[str]:
     completed = set()
-    if not path.exists():
-        return completed
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise ValueError(f"Expected JSON object at {path}:{line_number}")
+    for row in read_jsonl_objects(path, missing_ok=True):
         query_id = row.get("query_id")
         if query_id:
             completed.add(str(query_id))
@@ -240,12 +212,7 @@ def read_completed_query_ids(path: Path) -> set[str]:
 
 
 def append_judgement_row(path: Path, row: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    append_jsonl_object(path, row, sort_keys=True, fsync=True)
 
 
 if __name__ == "__main__":

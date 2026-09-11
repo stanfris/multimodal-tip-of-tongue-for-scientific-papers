@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from dataset_generation.jsonl import read_jsonl_objects
 from dataset_generation.storage import read_dataset_artifact
 
 
@@ -64,7 +65,7 @@ def read_canonical_papers(path: str | Path) -> list[dict[str, Any]]:
     data_path = canonical_dataset_path(path)
     if not data_path.exists():
         raise FileNotFoundError(f"No papers.jsonl found at {data_path}")
-    papers = [json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    papers = read_jsonl_objects(data_path)
     validate_canonical_papers(papers, root=data_path.parent)
     return papers
 
@@ -100,10 +101,7 @@ def read_canonical_markdown(root: str | Path, paper: dict[str, Any]) -> str:
 
 
 def read_canonical_clues(path: str | Path, *, kind: str | None = None) -> list[dict[str, Any]]:
-    data_path = Path(path)
-    if not data_path.exists():
-        return []
-    clues = [json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    clues = read_jsonl_objects(path, missing_ok=True)
     if kind is not None:
         clues = [clue for clue in clues if clue.get("kind") == kind]
     return clues
@@ -436,7 +434,7 @@ def _read_clue_inputs(inputs: Iterable[str | Path]) -> list[dict[str, Any]]:
         data_path = path / "interpretations.jsonl" if path.is_dir() else path
         if not data_path.exists():
             continue
-        rows.extend(json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines() if line.strip())
+        rows.extend(read_jsonl_objects(data_path))
     return rows
 
 

@@ -17,6 +17,7 @@ import pandas as pd
 import streamlit as st
 
 from dataset_generation.component_parsing import split_component_text
+from dataset_generation.jsonl import append_jsonl_object, read_jsonl_objects
 from dataset_generation.preprocessed import read_preprocessed_papers
 
 
@@ -578,19 +579,16 @@ def render_annotation(
 @st.cache_data(show_spinner=False)
 def load_examples(collection: Path) -> list[dict[str, Any]]:
     examples = []
-    
+
     # Support both direct queries.jsonl and subfolders
     paths = []
     if (collection / "queries.jsonl").exists():
         paths.append(collection / "queries.jsonl")
     paths.extend(collection.glob("*/queries.jsonl"))
-    
+
     for query_path in sorted(set(paths)):
         condition = query_path.parent.name if query_path.parent != collection else "default"
-        for line in query_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
+        for row in read_jsonl_objects(query_path):
             if not row.get("query"):
                 continue
             row["_condition"] = query_metadata(row).get("mode", condition)
@@ -658,10 +656,7 @@ def load_clue_rows_for_kind(clues_dir: Path, kind: str) -> list[dict[str, Any]]:
         paths = []
     rows = []
     for path in paths:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
+        for row in read_jsonl_objects(path):
             if not row.get("kind"):
                 row["kind"] = kind
             rows.append(row)
@@ -670,12 +665,7 @@ def load_clue_rows_for_kind(clues_dir: Path, kind: str) -> list[dict[str, Any]]:
 
 def load_annotations(path: Path) -> dict[str, dict[str, Any]]:
     annotations: dict[str, dict[str, Any]] = {}
-    if not path.exists():
-        return annotations
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in read_jsonl_objects(path, missing_ok=True):
         key = row.get("key")
         if key:
             annotations[key] = row
@@ -683,7 +673,6 @@ def load_annotations(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def save_annotation(collection: Path, example: dict[str, Any], values: dict[str, Any]) -> None:
-    ANNOTATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
     row = {
         "key": annotation_key_for_example(example),
         "collection": str(collection.relative_to(PROJECT_ROOT)),
@@ -694,9 +683,7 @@ def save_annotation(collection: Path, example: dict[str, Any], values: dict[str,
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         **values,
     }
-    with ANNOTATIONS_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, sort_keys=True, ensure_ascii=False))
-        handle.write("\n")
+    append_jsonl_object(ANNOTATIONS_PATH, row, sort_keys=True)
 
 
 def dataset_dir_for_collection(collection: Path) -> Path:

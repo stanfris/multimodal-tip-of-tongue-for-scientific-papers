@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from dataset_generation.document_splits import filter_papers_by_split
-from dataset_generation.generation_utils import batched, progress
+from dataset_generation.generation_utils import batched, progress, record_generation_failure
 from dataset_generation.interpretations import (
     InterpretationRecord,
-    append_failure_record,
     interpretation_key,
     read_completed_interpretation_keys,
 )
@@ -31,6 +30,7 @@ from dataset_generation.preprocessed import (
     read_preprocessed_papers,
     visual_clue_path,
 )
+from dataset_generation.validation import validate_index_window
 
 
 DEFAULT_MODELS = {
@@ -131,10 +131,7 @@ def iter_samples_from_dataset(
     split_index: Path | None = None,
     split_name: str | None = None,
 ) -> list[FigureSample]:
-    if start_index < 0:
-        raise ValueError("start-index must be non-negative")
-    if end_index is not None and end_index < start_index:
-        raise ValueError("end-index must be greater than or equal to start-index")
+    validate_index_window(start_index, end_index, start_name="start-index", end_name="end-index")
     return iter_samples_from_preprocessed_dataset(
         dataset_dir,
         limit=limit,
@@ -416,16 +413,13 @@ def run(args: argparse.Namespace) -> Path:
                     print_debug_trace(sample, prompt, description)
             except Exception as exc:
                 failed += 1
-                append_failure_record(
-                    {
-                        "record_id": sample.record_id,
-                        "kind": "visual",
-                        "image_path": str(sample.image_path),
-                        "metadata": sample.metadata,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    },
+                record_generation_failure(
                     failure_file,
+                    record_id=sample.record_id,
+                    kind="visual",
+                    error=exc,
+                    metadata=sample.metadata,
+                    image_path=str(sample.image_path),
                 )
                 continue
             record = InterpretationRecord(

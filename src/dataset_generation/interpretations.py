@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
+from dataset_generation.jsonl import append_jsonl_object, read_jsonl_objects
+
 
 InterpretationKind = Literal["visual", "textual"]
 
@@ -79,10 +81,7 @@ def read_completed_interpretation_keys(
     output_path = Path(artifact_dir)
     keys: set[tuple[str, str, str, str, str]] = set()
     for data_path in sorted(output_path.glob("interpretations*.jsonl")):
-        for line in data_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
+        for row in read_jsonl_objects(data_path):
             if (
                 row.get("kind") == kind
                 and row.get("model") == model
@@ -95,24 +94,17 @@ def read_completed_interpretation_keys(
 
 def append_interpretation_record(record: InterpretationRecord, output_file: str | Path) -> None:
     """Append one interpretation record as JSONL."""
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(asdict(record), sort_keys=True, ensure_ascii=False))
-        handle.write("\n")
+    append_jsonl_object(output_file, asdict(record), sort_keys=True)
 
 
 def append_failure_record(row: dict[str, Any], output_file: str | Path) -> None:
     """Append one failed generation row as JSONL."""
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, sort_keys=True, ensure_ascii=False))
-        handle.write("\n")
+    append_jsonl_object(output_file, row, sort_keys=True)
 
 
 def read_interpretations(artifact_dir: str | Path) -> list[dict[str, Any]]:
     data_path = Path(artifact_dir) / "interpretations.jsonl"
-    if not data_path.exists():
-        raise FileNotFoundError(f"No interpretations.jsonl found in {artifact_dir}")
-    return [json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines() if line]
+    try:
+        return read_jsonl_objects(data_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"No interpretations.jsonl found in {artifact_dir}") from exc

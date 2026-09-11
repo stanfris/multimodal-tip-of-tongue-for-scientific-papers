@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -14,6 +13,7 @@ from typing import Any, Callable, Literal
 
 from dataset_generation.component_parsing import split_component_text
 from dataset_generation.document_splits import filter_papers_by_split
+from dataset_generation.jsonl import append_jsonl_object, read_jsonl_objects
 from dataset_generation.managed_settings import (
     DEFAULT_SETTINGS_PATH,
     ManagedSet,
@@ -23,6 +23,7 @@ from dataset_generation.managed_settings import (
     resolve_path,
     section,
 )
+from dataset_generation.model_output import parse_json_object
 from dataset_generation.preprocessed import (
     read_clue_rows,
     read_preprocessed_markdown,
@@ -37,6 +38,7 @@ from dataset_generation.textual_clue_descriptions import (
     load_mlx_model,
     load_transformers_model,
 )
+from dataset_generation.validation import validate_index_window
 
 
 QueryMode = Literal["visual-only", "visual-and-text"]
@@ -315,17 +317,7 @@ def _read_existing_query_state(path: Path, mode: QueryMode) -> ExistingQueryStat
     examples: list[TestCollectionExample] = []
     paper_ids: set[str] = set()
     query_ids: set[str] = set()
-    if not path.exists():
-        return ExistingQueryState(examples=examples, paper_ids=paper_ids, query_ids=query_ids)
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid query JSONL at {path}:{line_number}") from exc
-        if not isinstance(row, dict):
-            raise ValueError(f"Query row must be a mapping at {path}:{line_number}")
+    for row in read_jsonl_objects(path, missing_ok=True):
         metadata = row.get("metadata", {})
         row_mode = metadata.get("mode") if isinstance(metadata, dict) else None
         if row_mode is not None and row_mode != mode:
@@ -354,17 +346,8 @@ def _read_existing_query_state(path: Path, mode: QueryMode) -> ExistingQueryStat
 
 def _read_existing_query_keys(path: Path) -> set[str]:
     keys: set[str] = set()
-    if not path.exists():
-        return keys
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid query JSONL at {path}:{line_number}") from exc
-        if isinstance(row, dict):
-            keys.update(_query_identity_keys(row))
+    for row in read_jsonl_objects(path, missing_ok=True):
+        keys.update(_query_identity_keys(row))
     return keys
 
 
@@ -379,11 +362,7 @@ def _append_query(
         if keys & existing_keys:
             return
         existing_keys.update(keys)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(row) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+    append_jsonl_object(path, row, sort_keys=False, fsync=True)
 
 
 def _query_identity_keys(row: dict[str, Any]) -> set[str]:
@@ -797,22 +776,6 @@ def format_identifiers(paper: dict[str, Any]) -> str:
     return "; ".join(values)
 
 
-def parse_json_object(text: str) -> dict[str, Any] | None:
-    try:
-        value = json.loads(text)
-        return value if isinstance(value, dict) else None
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if match is None:
-        return None
-    try:
-        value = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
-
-
 def format_query_prompt(prompt_template: str, selected: list[MemoryComponent]) -> str:
     selected_cues = "\n".join(f"- {component.text}" for component in selected)
     return prompt_template.replace("{selected_cues}", selected_cues)
@@ -920,10 +883,7 @@ def _validate_config(config: QueryGenerationConfig) -> None:
         raise ValueError("judgement_max_tokens must be at least 1")
     if config.max_examples is not None and config.max_examples < 1:
         raise ValueError("max_examples must be at least 1 when set")
-    if config.start_index < 0:
-        raise ValueError("start_index must be non-negative")
-    if config.end_index is not None and config.end_index < config.start_index:
-        raise ValueError("end_index must be greater than or equal to start_index")
+    validate_index_window(config.start_index, config.end_index)
     if config.split_index is not None:
         if config.split_name is None:
             raise ValueError("split_name is required when split_index is set")
