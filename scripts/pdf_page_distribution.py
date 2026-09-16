@@ -21,6 +21,7 @@ from typing import Iterable
 
 
 DEFAULT_BINS = (1, 4, 8, 12, 16, 20, 30, 40, 60, 100)
+DEFAULT_MAX_DOCS_PER_SUBSET = 22_000
 PAGE_RE = re.compile(rb"/Type\s*/Page\b")
 NOT_PAGE_RE = re.compile(rb"/Type\s*/Pages\b")
 
@@ -31,6 +32,14 @@ class PdfRecord:
     path: Path
     pages: int | None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class PruneDecision:
+    record: PdfRecord
+    subset: str
+    action: str
+    reason: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,6 +63,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail PDFs that pdfinfo cannot read instead of using the quick byte-scan fallback.",
     )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "Delete PDFs with 1-4 pages or 30+ pages, then cap each subset by deleting "
+            "the longest remaining PDFs."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --prune, write deletion reports without deleting files.",
+    )
+    parser.add_argument(
+        "--max-docs-per-subset",
+        type=int,
+        default=DEFAULT_MAX_DOCS_PER_SUBSET,
+        help="Maximum retained PDFs for each of: PMC biology, PMC medical, arXiv physics, arXiv engineering, ACL.",
+    )
     return parser.parse_args()
 
 
@@ -64,6 +92,68 @@ def discover_sets(data_root: Path) -> dict[str, list[Path]]:
         "acl": sorted((data_root / "acl_subset" / "pdfs").glob("**/*.pdf")),
     }
     return {name: paths for name, paths in sets.items() if paths}
+
+
+def iter_jsonl(path: Path) -> Iterable[dict[str, object]]:
+    if not path.exists():
+        return
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                yield json.loads(line)
+
+
+def load_arxiv_domain_map(data_root: Path) -> dict[str, str]:
+    arxiv_root = data_root / "arxiv_open_reuse"
+    domain_by_filename: dict[str, str] = {}
+    for manifest_name in ("eligible_records.jsonl", "domain_records.jsonl", "metadata_records.jsonl"):
+        for row in iter_jsonl(arxiv_root / manifest_name):
+            filename = row.get("pdf_filename")
+            if not isinstance(filename, str):
+                arxiv_id = row.get("arxiv_id")
+                if isinstance(arxiv_id, str):
+                    filename = f"{arxiv_id.replace('/', '_')}.pdf"
+            if not filename:
+                continue
+
+            broad_domains = row.get("broad_domains")
+            domains = [str(value).lower() for value in broad_domains] if isinstance(broad_domains, list) else []
+            source_query = str(row.get("source_api_query") or "").lower()
+            primary_category = str(row.get("primary_category") or "").lower()
+            if "engineering" in domains and "physics" not in domains:
+                domain = "arxiv_engineering"
+            elif "physics" in domains and "engineering" not in domains:
+                domain = "arxiv_physics"
+            elif source_query.startswith("eess"):
+                domain = "arxiv_engineering"
+            elif source_query.startswith("physics"):
+                domain = "arxiv_physics"
+            elif primary_category.startswith("eess"):
+                domain = "arxiv_engineering"
+            else:
+                domain = "arxiv_physics"
+            domain_by_filename[filename] = domain
+    return domain_by_filename
+
+
+def subset_for_path(path: Path, data_root: Path, arxiv_domain_map: dict[str, str]) -> str:
+    try:
+        relative = path.relative_to(data_root)
+    except ValueError:
+        relative = path
+    parts = relative.parts
+    if len(parts) >= 4 and parts[0].startswith("pmc") and parts[1] == "pdfs":
+        category = parts[2].lower()
+        if category == "biology":
+            return "pmc_biology"
+        if category in {"medical_clinical_research", "medical/clinical research"}:
+            return "pmc_medical"
+    if len(parts) >= 3 and parts[0] == "arxiv_open_reuse" and parts[1] == "pdfs":
+        return arxiv_domain_map.get(path.name, "arxiv_unknown")
+    if len(parts) >= 3 and parts[0] == "acl_subset" and parts[1] == "pdfs":
+        return "acl"
+    return "unknown"
 
 
 def count_with_pdfinfo(path: Path, pdfinfo_bin: str) -> int:
@@ -169,6 +259,126 @@ def summarize(records: list[PdfRecord], bins: list[int]) -> dict[str, object]:
     }
 
 
+def plan_pruning(
+    records: list[PdfRecord],
+    data_root: Path,
+    max_docs_per_subset: int,
+) -> list[PruneDecision]:
+    arxiv_domain_map = load_arxiv_domain_map(data_root)
+    decisions: list[PruneDecision] = []
+    retained_by_subset: dict[str, list[PdfRecord]] = {}
+
+    for record in records:
+        subset = subset_for_path(record.path, data_root, arxiv_domain_map)
+        if record.pages is None:
+            decisions.append(PruneDecision(record, subset, "keep", "page-count-failed"))
+        elif record.pages <= 4:
+            decisions.append(PruneDecision(record, subset, "delete", "too-short-1-4-pages"))
+        elif record.pages >= 30:
+            decisions.append(PruneDecision(record, subset, "delete", "too-long-30-plus-pages"))
+        else:
+            retained_by_subset.setdefault(subset, []).append(record)
+
+    capped_subsets = {"pmc_biology", "pmc_medical", "arxiv_physics", "arxiv_engineering", "acl"}
+    delete_for_cap: set[Path] = set()
+    for subset, retained in retained_by_subset.items():
+        if subset not in capped_subsets or len(retained) <= max_docs_per_subset:
+            continue
+        longest_first = sorted(
+            retained,
+            key=lambda record: (record.pages or -1, str(record.path)),
+            reverse=True,
+        )
+        delete_for_cap.update(record.path for record in longest_first[: len(retained) - max_docs_per_subset])
+
+    already_decided = {decision.record.path for decision in decisions}
+    for subset, retained in retained_by_subset.items():
+        for record in retained:
+            if record.path in already_decided:
+                continue
+            if record.path in delete_for_cap:
+                decisions.append(PruneDecision(record, subset, "delete", f"cap-{max_docs_per_subset}-longest-prune"))
+            else:
+                decisions.append(PruneDecision(record, subset, "keep", "within-page-and-subset-limits"))
+
+    return sorted(decisions, key=lambda decision: (decision.subset, decision.action, str(decision.record.path)))
+
+
+def summarize_pruning(decisions: list[PruneDecision]) -> dict[str, object]:
+    summary: dict[str, object] = {}
+    for decision in decisions:
+        subset_stats = summary.setdefault(
+            decision.subset,
+            {
+                "before": 0,
+                "deleted": 0,
+                "kept": 0,
+                "deleted_by_reason": {},
+            },
+        )
+        subset_stats["before"] += 1
+        if decision.action == "delete":
+            subset_stats["deleted"] += 1
+            reason_counts = subset_stats["deleted_by_reason"]
+            reason_counts[decision.reason] = reason_counts.get(decision.reason, 0) + 1
+        else:
+            subset_stats["kept"] += 1
+
+    total = {
+        "before": sum(int(stats["before"]) for stats in summary.values()),
+        "deleted": sum(int(stats["deleted"]) for stats in summary.values()),
+        "kept": sum(int(stats["kept"]) for stats in summary.values()),
+        "deleted_by_reason": {},
+    }
+    for stats in summary.values():
+        for reason, count in stats["deleted_by_reason"].items():
+            total["deleted_by_reason"][reason] = total["deleted_by_reason"].get(reason, 0) + count
+    summary["all"] = total
+    return summary
+
+
+def apply_pruning(decisions: list[PruneDecision], dry_run: bool) -> list[dict[str, str | int | None]]:
+    deleted_rows: list[dict[str, str | int | None]] = []
+    for decision in decisions:
+        if decision.action != "delete":
+            continue
+        error = None
+        if not dry_run:
+            try:
+                decision.record.path.unlink()
+            except FileNotFoundError:
+                error = "already missing"
+            except OSError as exc:
+                error = str(exc)
+        deleted_rows.append(
+            {
+                "subset": decision.subset,
+                "pages": decision.record.pages,
+                "path": str(decision.record.path),
+                "reason": decision.reason,
+                "error": error,
+            }
+        )
+    return deleted_rows
+
+
+def print_pruning_summary(prune_summary: dict[str, object], dry_run: bool) -> None:
+    verb = "Would delete" if dry_run else "Deleted"
+    print(f"\n{verb} PDFs")
+    print("\nsubset                before  deleted     kept")
+    print("-" * 46)
+    for subset in ("pmc_biology", "pmc_medical", "arxiv_physics", "arxiv_engineering", "acl", "all"):
+        stats = prune_summary.get(subset)
+        if not stats:
+            continue
+        print(f"{subset:<22}{stats['before']:>6}{stats['deleted']:>9}{stats['kept']:>9}")
+
+    print("\nDeletion reasons")
+    total = prune_summary.get("all", {})
+    for reason, count in sorted(total.get("deleted_by_reason", {}).items()):
+        print(f"  {reason}: {count}")
+
+
 def bar(count: int, max_count: int, width: int = 32) -> str:
     if max_count <= 0 or count <= 0:
         return ""
@@ -256,6 +466,28 @@ def markdown_report(summary: dict[str, dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def pruning_markdown_report(prune_summary: dict[str, object], dry_run: bool) -> str:
+    title = "PDF Pruning Dry Run" if dry_run else "PDF Pruning Report"
+    lines = [
+        f"# {title}",
+        "",
+        "| Subset | Before | Deleted | Kept |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for subset in ("pmc_biology", "pmc_medical", "arxiv_physics", "arxiv_engineering", "acl", "all"):
+        stats = prune_summary.get(subset)
+        if not stats:
+            continue
+        lines.append(f"| {subset} | {stats['before']} | {stats['deleted']} | {stats['kept']} |")
+
+    lines.extend(["", "## Deletion Reasons", "", "| Reason | PDFs |", "| --- | ---: |"])
+    total = prune_summary.get("all", {})
+    for reason, count in sorted(total.get("deleted_by_reason", {}).items()):
+        lines.append(f"| {reason} | {count} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def write_outputs(records: list[PdfRecord], summary: dict[str, dict[str, object]], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "pdf_page_counts.csv"
@@ -279,6 +511,53 @@ def write_outputs(records: list[PdfRecord], summary: dict[str, dict[str, object]
     md_path.write_text(markdown_report(summary), encoding="utf-8")
     print(f"\nWrote {csv_path}")
     print(f"Wrote {json_path}")
+    print(f"Wrote {md_path}")
+
+
+def write_pruning_outputs(
+    decisions: list[PruneDecision],
+    deleted_rows: list[dict[str, str | int | None]],
+    prune_summary: dict[str, object],
+    output_dir: Path,
+    dry_run: bool,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = ".dry_run" if dry_run else ""
+    plan_path = output_dir / f"pdf_prune_plan{suffix}.csv"
+    deleted_path = output_dir / f"pdf_pruned_files{suffix}.csv"
+    summary_path = output_dir / f"pdf_prune_summary{suffix}.json"
+    md_path = output_dir / f"pdf_prune_summary{suffix}.md"
+
+    with plan_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=("subset", "action", "reason", "pages", "path", "error"))
+        writer.writeheader()
+        for decision in decisions:
+            writer.writerow(
+                {
+                    "subset": decision.subset,
+                    "action": decision.action,
+                    "reason": decision.reason,
+                    "pages": decision.record.pages if decision.record.pages is not None else "",
+                    "path": str(decision.record.path),
+                    "error": decision.record.error or "",
+                }
+            )
+
+    with deleted_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=("subset", "pages", "path", "reason", "error"))
+        writer.writeheader()
+        writer.writerows(deleted_rows)
+
+    payload = {
+        "dry_run": dry_run,
+        "summary": prune_summary,
+    }
+    summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    md_path.write_text(pruning_markdown_report(prune_summary, dry_run), encoding="utf-8")
+
+    print(f"\nWrote {plan_path}")
+    print(f"Wrote {deleted_path}")
+    print(f"Wrote {summary_path}")
     print(f"Wrote {md_path}")
 
 
@@ -320,6 +599,12 @@ def main() -> int:
 
     print_summary(summary, elapsed)
     write_outputs(records, summary, args.output_dir)
+    if args.prune:
+        decisions = plan_pruning(records, data_root, args.max_docs_per_subset)
+        deleted_rows = apply_pruning(decisions, args.dry_run)
+        prune_summary = summarize_pruning(decisions)
+        print_pruning_summary(prune_summary, args.dry_run)
+        write_pruning_outputs(decisions, deleted_rows, prune_summary, args.output_dir, args.dry_run)
     return 0
 
 
