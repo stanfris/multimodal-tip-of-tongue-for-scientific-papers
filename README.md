@@ -344,6 +344,19 @@ pdfs/kaggle_unavailable_ids.jsonl
 arxiv-metadata-oai-snapshot.json
 ```
 
+To materialize separate Physics and Engineering PDF folders from the combined
+manifest, run:
+
+```bash
+uv run python scripts/split_arxiv_pdfs_by_domain.py
+```
+
+This copies valid source PDFs from `data/arxiv_open_reuse/pdfs/` into
+`data/arxiv_open_reuse/pdfs_by_domain/physics/` and
+`data/arxiv_open_reuse/pdfs_by_domain/engineering/` using the manifest's
+`selection_domain`. Add `--move` only if you want to move files out of the flat
+PDF directory instead of copying them.
+
 The selector/downloader uses `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
 identifiers. Interrupted runs retain partial manifests and skip selected
