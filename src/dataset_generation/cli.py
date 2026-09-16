@@ -12,8 +12,14 @@ from dataset_generation.mineru_extraction import build_extract_parser as build_m
 from dataset_generation.mineru_extraction import probe_environment as probe_mineru_environment
 from dataset_generation.mineru_extraction import run_benchmark as run_mineru_benchmark
 from dataset_generation.mineru_extraction import run_extract as run_mineru_extract
+from dataset_generation.document_downloads.arxiv_open_reuse import build_parser as build_arxiv_open_reuse_parser
+from dataset_generation.document_downloads.arxiv_open_reuse import run as run_arxiv_open_reuse
+from dataset_generation.document_downloads.cli import build_parser as build_document_downloads_parser
+from dataset_generation.document_downloads.cli import run as run_document_downloads
 from dataset_generation.parsed_dataset_stats import build_parser as build_parsed_stats_parser
 from dataset_generation.parsed_dataset_stats import run as run_parsed_stats
+from dataset_generation.document_downloads.pmc_oa_subset import build_parser as build_pmc_oa_subset_parser
+from dataset_generation.document_downloads.pmc_oa_subset import run as run_pmc_oa_subset
 from dataset_generation.storage import read_stats
 from dataset_generation.query_generation import build_parser as build_generate_queries_parser
 from dataset_generation.query_generation import run as run_generate_queries
@@ -39,6 +45,24 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[build_mineru_benchmark_parser()],
         add_help=False,
         help="Benchmark MinerU backends/efforts on a PDF sample.",
+    )
+    subparsers.add_parser(
+        "build-arxiv-open-reuse",
+        parents=[build_arxiv_open_reuse_parser()],
+        add_help=False,
+        help="Harvest arXiv OAI-PMH metadata, filter to CC BY/CC0 Physics and Engineering papers, then download PDFs.",
+    )
+    subparsers.add_parser(
+        "build-pmc-oa-subset",
+        parents=[build_pmc_oa_subset_parser()],
+        add_help=False,
+        help="Build a strict CC BY/CC0 Biology and Medical/Clinical PMC OA PDF dataset.",
+    )
+    subparsers.add_parser(
+        "download-documents",
+        parents=[build_document_downloads_parser()],
+        add_help=False,
+        help="Download source-document PDFs from prepared corpus manifests.",
     )
 
     describe = subparsers.add_parser(
@@ -102,6 +126,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "benchmark-mineru-pdfs":
         run_mineru_benchmark(args)
+        return 0
+
+    if args.command == "build-arxiv-open-reuse":
+        print(json.dumps(run_arxiv_open_reuse(args), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "build-pmc-oa-subset":
+        print(json.dumps(run_pmc_oa_subset(args), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "download-documents":
+        print(json.dumps(run_document_downloads(args), indent=2, sort_keys=True))
         return 0
 
     if args.command == "stats":
