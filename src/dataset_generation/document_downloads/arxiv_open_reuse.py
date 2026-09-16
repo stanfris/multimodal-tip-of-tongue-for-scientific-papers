@@ -1896,6 +1896,7 @@ def build_report(
         "rejection_counts": scan_stats["rejection_counts"],
         "license_counts": scan_stats["license_counts"],
         "selected_domain_counts": scan_stats.get("selected_domain_counts", {}),
+        "selected_primary_domain_counts": dict(sorted(count_by_primary_domain(selected_records).items())),
         "skipped_oai_windows": scan_stats.get("skipped_oai_windows", []),
         "selected_license_counts": dict(sorted(Counter(record["license"] for record in selected_records).items())),
         "selected_category_counts": dict(sorted(count_by_category(selected_records).items())),
@@ -1921,6 +1922,19 @@ def count_by_category(records: Iterable[dict[str, Any]]) -> Counter[str]:
     counts: Counter[str] = Counter()
     for record in records:
         counts.update(record.get("categories", []))
+    return counts
+
+
+def count_by_primary_domain(records: Iterable[dict[str, Any]]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for record in records:
+        primary_category = str(record.get("primary_category") or "")
+        if primary_category.startswith("eess."):
+            counts["eess."] += 1
+        elif primary_category.startswith("physics."):
+            counts["physics."] += 1
+        else:
+            counts["other"] += 1
     return counts
 
 

@@ -117,24 +117,41 @@ def load_arxiv_domain_map(data_root: Path) -> dict[str, str]:
             if not filename:
                 continue
 
-            broad_domains = row.get("broad_domains")
-            domains = [str(value).lower() for value in broad_domains] if isinstance(broad_domains, list) else []
-            source_query = str(row.get("source_api_query") or "").lower()
-            primary_category = str(row.get("primary_category") or "").lower()
-            if "engineering" in domains and "physics" not in domains:
-                domain = "arxiv_engineering"
-            elif "physics" in domains and "engineering" not in domains:
-                domain = "arxiv_physics"
-            elif source_query.startswith("eess"):
-                domain = "arxiv_engineering"
-            elif source_query.startswith("physics"):
-                domain = "arxiv_physics"
-            elif primary_category.startswith("eess"):
-                domain = "arxiv_engineering"
-            else:
-                domain = "arxiv_physics"
-            domain_by_filename[filename] = domain
+            domain_by_filename[filename] = arxiv_subset_from_manifest_row(row)
     return domain_by_filename
+
+
+def arxiv_subset_from_manifest_row(row: dict[str, object]) -> str:
+    selection_domain = str(row.get("selection_domain") or "").lower()
+    if selection_domain.startswith("eess."):
+        return "arxiv_engineering"
+    if selection_domain.startswith("physics."):
+        return "arxiv_physics"
+
+    broad_domains = row.get("broad_domains")
+    domains = [str(value).lower() for value in broad_domains] if isinstance(broad_domains, list) else []
+    source_query = str(row.get("source_api_query") or "").lower()
+    primary_category = str(row.get("primary_category") or "").lower()
+    categories = row.get("categories") or row.get("subject_categories") or row.get("category_matches")
+    category_values = [str(value).lower() for value in categories] if isinstance(categories, list) else []
+    has_eess = any(category.startswith("eess.") for category in category_values)
+    has_physics = any(category.startswith("physics.") for category in category_values)
+
+    if "engineering" in domains and "physics" not in domains:
+        return "arxiv_engineering"
+    if "physics" in domains and "engineering" not in domains:
+        return "arxiv_physics"
+    if source_query.startswith("eess"):
+        return "arxiv_engineering"
+    if source_query.startswith("physics"):
+        return "arxiv_physics"
+    if has_eess and not has_physics:
+        return "arxiv_engineering"
+    if has_physics and not has_eess:
+        return "arxiv_physics"
+    if primary_category.startswith("eess"):
+        return "arxiv_engineering"
+    return "arxiv_physics"
 
 
 def subset_for_path(path: Path, data_root: Path, arxiv_domain_map: dict[str, str]) -> str:
