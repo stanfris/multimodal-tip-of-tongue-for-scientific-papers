@@ -266,7 +266,9 @@ requests that include broad physics/eess set filters, while still applying the
 local physics/eess category filter before any PDF retrieval. OAI harvest state
 is written to `oai_harvest_state.json` and harvested records are cached in
 `oai_metadata.jsonl`, so interrupted runs can resume without restarting the
-metadata pass.
+metadata pass. If arXiv returns `406 Not Acceptable` for a specific datestamp
+window, that window is recorded in `skipped_oai_windows` and the harvester
+continues instead of aborting the run.
 
 PDF downloads are separate from selection and intentionally conservative. Tune
 tar extraction concurrency with `--max-workers`, network retry delay with
@@ -304,7 +306,9 @@ bulk_s3/                    # S3 PDF manifest and downloaded tar chunk cache
 The harvester/downloader uses a clear User-Agent, exponential backoff for
 transient OAI/network failures, `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
-identifiers.
+identifiers. When running inside tmux, OAI, scan, S3, and PDF phases also post
+short `tmux display-message` status updates so pane status bars keep moving
+during long runs.
 
 ## MinerU PDF Extraction
 

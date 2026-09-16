@@ -29,6 +29,7 @@ from typing import Any, Iterable, Iterator
 
 
 LOGGER = logging.getLogger(__name__)
+_LAST_TMUX_STATUS_AT = 0.0
 
 DEFAULT_OUTPUT_DIR = Path("data") / "arxiv_open_reuse"
 DEFAULT_PDF_DIR = DEFAULT_OUTPUT_DIR / "pdfs"
@@ -98,6 +99,16 @@ class BulkPdfChunk:
     yymm: str
     md5sum: str | None
     size: int | None
+
+
+@dataclass(frozen=True)
+class OAIHarvestItem:
+    record: dict[str, Any] | None
+    next_token: str | None
+    window_start: date
+    window_end: date
+    status: str
+    error: str | None = None
 
 
 class HTTPFetchError(RuntimeError):
@@ -354,6 +365,25 @@ def resumed_scan_stats(selected_records: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def publish_status(message: str) -> None:
+    print(message, flush=True)
+    display_tmux_status(message, force=True)
+
+
+def display_tmux_status(message: str, *, force: bool = False, min_interval_seconds: float = 10.0) -> None:
+    global _LAST_TMUX_STATUS_AT
+    now = time.monotonic()
+    if not force and now - _LAST_TMUX_STATUS_AT < min_interval_seconds:
+        return
+    _LAST_TMUX_STATUS_AT = now
+    if not os.environ.get("TMUX") or shutil.which("tmux") is None:
+        return
+    try:
+        subprocess.run(["tmux", "display-message", "-d", "5000", message[:300]], check=False, timeout=2)
+    except Exception:  # noqa: BLE001 - tmux status updates are best-effort only.
+        return
+
+
 def iter_arxiv_metadata(path: Path) -> Iterable[tuple[int, dict[str, Any] | None, str | None]]:
     with path.open("r", encoding="utf-8") as file:
         for line_number, line in enumerate(file, start=1):
@@ -451,6 +481,7 @@ def select_documents_from_oai(
                 return processor.selected, processor.stats(resumed=True)
 
     state = load_json(state_path) if resume else {}
+    skipped_oai_windows: list[dict[str, str]] = []
     harvest_streams = tuple(oai_sets) if oai_sets else (None,)
     completed_streams = set(state.get("completed_sets") or [])
     for set_spec in harvest_streams:
@@ -463,7 +494,8 @@ def select_documents_from_oai(
         earliest_date = parse_iso_date(oai_earliest_date)
         if earliest_date is None:
             raise ValueError(f"Invalid --oai-earliest-date: {oai_earliest_date}")
-        for record, next_token, window_start, window_end in iter_oai_records(
+        last_status_window: tuple[date, date] | None = None
+        for item in iter_oai_records(
             base_url=oai_base_url,
             set_spec=set_spec,
             start_resumption_token=token,
@@ -474,20 +506,55 @@ def select_documents_from_oai(
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
         ):
+            record = item.record
+            next_token = item.next_token
+            window_start = item.window_start
+            window_end = item.window_end
+            if last_status_window != (window_start, window_end):
+                publish_status(
+                    "[arxiv:oai] "
+                    f"window={window_start.isoformat()}..{window_end.isoformat()} "
+                    f"selected={len(processor.selected):,}/{target_count:,} "
+                    f"scanned={processor.scanned:,}"
+                )
+                last_status_window = (window_start, window_end)
+            stream_state["window_start"] = window_start.isoformat()
+            stream_state["window_end"] = window_end.isoformat()
+            if next_token is None:
+                stream_state["until_date"] = (window_start - timedelta(days=1)).isoformat()
+            if item.status != "record":
+                if item.status == "skipped_http_406":
+                    skipped = {
+                        "stream": stream_key,
+                        "window_start": window_start.isoformat(),
+                        "window_end": window_end.isoformat(),
+                        "status": item.status,
+                        "error": item.error or "",
+                    }
+                    skipped_oai_windows.append(skipped)
+                    state.setdefault("skipped_oai_windows", []).append(skipped)
+                    publish_status(
+                        "[arxiv:oai] "
+                        f"skipped {window_start.isoformat()}..{window_end.isoformat()} "
+                        f"because arXiv returned HTTP 406"
+                    )
+                state.setdefault("resumption_tokens", {})[stream_key] = next_token
+                state["updated_at"] = datetime.now(UTC).isoformat()
+                write_json(state_path, state)
+                continue
+            assert record is not None
             arxiv_id = normalize_text(record.get("id"))
             if arxiv_id and arxiv_id not in cached_ids:
                 append_jsonl(cache_path, record)
                 cached_ids.add(arxiv_id)
             state.setdefault("resumption_tokens", {})[stream_key] = next_token
-            stream_state["window_start"] = window_start.isoformat()
-            stream_state["window_end"] = window_end.isoformat()
-            if next_token is None:
-                stream_state["until_date"] = (window_start - timedelta(days=1)).isoformat()
             state["updated_at"] = datetime.now(UTC).isoformat()
             write_json(state_path, state)
             if not processor.process(record, None):
                 processor.print_progress()
-                return processor.selected, processor.stats(resumed=resume)
+                stats = processor.stats(resumed=resume)
+                stats["skipped_oai_windows"] = skipped_oai_windows
+                return processor.selected, stats
         completed_streams.add(stream_key)
         state["completed_sets"] = sorted(completed_streams)
         state.setdefault("resumption_tokens", {}).pop(stream_key, None)
@@ -495,7 +562,9 @@ def select_documents_from_oai(
         write_json(state_path, state)
 
     processor.print_progress()
-    return processor.selected, processor.stats(resumed=resume)
+    stats = processor.stats(resumed=resume)
+    stats["skipped_oai_windows"] = skipped_oai_windows
+    return processor.selected, stats
 
 
 class SelectionProcessor:
@@ -601,7 +670,7 @@ def iter_oai_records(
     request_delay_seconds: float,
     timeout_seconds: float,
     max_retries: int,
-) -> Iterator[tuple[dict[str, Any], str | None, date, date]]:
+) -> Iterator[OAIHarvestItem]:
     token = start_resumption_token
     current_until = start_until_date
     window_size = max(1, window_days)
@@ -620,19 +689,41 @@ def iter_oai_records(
                 if set_spec:
                     query["set"] = set_spec
             url = base_url + "?" + urllib.parse.urlencode(query)
-            payload = fetch_bytes(
-                url,
-                request_delay_seconds=request_delay_seconds,
-                timeout_seconds=timeout_seconds,
-                max_retries=max_retries,
-                headers={"User-Agent": USER_AGENT},
-            )
+            try:
+                payload = fetch_bytes(
+                    url,
+                    request_delay_seconds=request_delay_seconds,
+                    timeout_seconds=timeout_seconds,
+                    max_retries=max_retries,
+                    headers={"User-Agent": USER_AGENT},
+                )
+            except HTTPFetchError as exc:
+                if exc.status_code == 406 and not token:
+                    error = f"HTTP 406 for OAI window {window_start.isoformat()}..{current_until.isoformat()}"
+                    LOGGER.warning("%s; skipping this datestamp window", error)
+                    yield OAIHarvestItem(
+                        record=None,
+                        next_token=None,
+                        window_start=window_start,
+                        window_end=current_until,
+                        status="skipped_http_406",
+                        error=error,
+                    )
+                    break
+                raise
             root = ET.fromstring(payload)
             error = first_child(root, "error")
             if error is not None:
                 code = error.attrib.get("code", "unknown")
                 message = normalize_text(error.text)
                 if code == "noRecordsMatch":
+                    yield OAIHarvestItem(
+                        record=None,
+                        next_token=None,
+                        window_start=window_start,
+                        window_end=current_until,
+                        status="no_records",
+                    )
                     break
                 raise RuntimeError(
                     f"OAI-PMH error for set {set_spec or 'all'} "
@@ -651,7 +742,13 @@ def iter_oai_records(
                 if arxiv_element is None:
                     continue
                 try:
-                    yield parse_oai_arxiv_record(arxiv_element), next_token, window_start, current_until
+                    yield OAIHarvestItem(
+                        record=parse_oai_arxiv_record(arxiv_element),
+                        next_token=next_token,
+                        window_start=window_start,
+                        window_end=current_until,
+                        status="record",
+                    )
                 except Exception as exc:  # noqa: BLE001 - keep harvest moving.
                     LOGGER.warning("Skipping malformed OAI record: %s", exc)
             if not next_token:
@@ -916,9 +1013,11 @@ def download_eligible_pdfs(
         records_by_chunk[chunk.filename].append(record)
 
     completed = skipped + failed
+    publish_status(f"[arxiv:s3] extracting PDFs from {len(records_by_chunk):,} required bulk chunk(s)")
     print_download_progress(completed, total, downloaded, skipped, failed, started_at)
     for chunk_filename, chunk_records in records_by_chunk.items():
         chunk_path = cache_dir / Path(chunk_filename).name
+        publish_status(f"[arxiv:s3] chunk={chunk_filename} selected_pdfs={len(chunk_records):,}")
         try:
             ensure_s3_object(
                 chunk_filename,
@@ -981,6 +1080,7 @@ def ensure_s3_object(
     max_retries: int,
 ) -> None:
     if destination.exists() and destination.stat().st_size > 0:
+        display_tmux_status(f"[arxiv:s3] reuse {destination.name}", force=True)
         return
     if shutil.which(aws_cli) is None:
         raise RuntimeError(
@@ -990,6 +1090,7 @@ def ensure_s3_object(
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = destination.with_suffix(destination.suffix + ".part")
     uri = f"s3://{S3_BUCKET}/{key}"
+    publish_status(f"[arxiv:s3] downloading {uri}")
     cmd = [aws_cli, "s3", "cp", uri, str(tmp_path), "--request-payer", "requester", "--only-show-errors"]
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
@@ -1200,13 +1301,15 @@ def print_scan_progress(
     target_count: int,
     rejection_counts: Counter[str],
 ) -> None:
-    print(
+    message = (
         f"Scanned: {scanned:,} | "
         f"Category matches: {category_matches:,} | "
         f"Allowed-license matches: {allowed_matches:,} | "
         f"Selected: {selected:,} / {target_count:,} | "
         f"Rejections: {dict(sorted(rejection_counts.items()))}"
     )
+    print(message)
+    display_tmux_status(f"[arxiv:scan] selected={selected:,}/{target_count:,} scanned={scanned:,}")
 
 
 def print_download_progress(completed: int, total: int, downloaded: int, skipped: int, failed: int, started_at: float) -> None:
@@ -1215,13 +1318,17 @@ def print_download_progress(completed: int, total: int, downloaded: int, skipped
     remaining = max(total - completed, 0)
     eta_seconds = remaining / rate if rate > 0 else 0.0
     percent = (completed / total * 100.0) if total else 100.0
-    print(
-        f"\r{completed}/{total} ({percent:5.1f}%) "
+    message = (
+        f"{completed}/{total} ({percent:5.1f}%) "
         f"downloaded={downloaded} skipped={skipped} failed={failed} "
-        f"rate={rate:0.2f}/s eta={format_duration(eta_seconds)}",
+        f"rate={rate:0.2f}/s eta={format_duration(eta_seconds)}"
+    )
+    print(
+        f"\r{message}",
         end="",
         flush=True,
     )
+    display_tmux_status(f"[arxiv:pdf] {message}")
 
 
 def format_duration(seconds: float) -> str:
@@ -1288,6 +1395,7 @@ def build_report(
         "already_present_pdfs": int(download_stats.get("skipped", 0)),
         "rejection_counts": scan_stats["rejection_counts"],
         "license_counts": scan_stats["license_counts"],
+        "skipped_oai_windows": scan_stats.get("skipped_oai_windows", []),
         "selected_license_counts": dict(sorted(Counter(record["license"] for record in selected_records).items())),
         "selected_category_counts": dict(sorted(count_by_category(selected_records).items())),
     }

@@ -4,6 +4,7 @@ import json
 import tarfile
 import urllib.error
 import xml.etree.ElementTree as ET
+from datetime import date
 
 import pytest
 
@@ -15,6 +16,7 @@ from dataset_generation.document_downloads.arxiv_open_reuse import extract_selec
 from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
 from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
 from dataset_generation.document_downloads.arxiv_open_reuse import find_pdf_chunk
+from dataset_generation.document_downloads.arxiv_open_reuse import iter_oai_records
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_arxiv_record
@@ -295,3 +297,28 @@ def test_fetch_bytes_stops_on_permanent_http_errors(monkeypatch) -> None:
             timeout_seconds=10,
             max_retries=5,
         )
+
+
+def test_oai_harvest_skips_http_406_windows(monkeypatch) -> None:
+    def fake_fetch_bytes(url, **kwargs):  # type: ignore[no-untyped-def]
+        raise HTTPFetchError(url, urllib.error.HTTPError(url, 406, "Not Acceptable", hdrs=None, fp=None), status_code=406)
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.fetch_bytes", fake_fetch_bytes)
+
+    items = list(
+        iter_oai_records(
+            base_url="https://oaipmh.arxiv.org/oai",
+            set_spec=None,
+            start_resumption_token=None,
+            start_until_date=date(2026, 9, 6),
+            earliest_date=date(2026, 9, 6),
+            window_days=1,
+            request_delay_seconds=0,
+            timeout_seconds=10,
+            max_retries=1,
+        )
+    )
+
+    assert len(items) == 1
+    assert items[0].record is None
+    assert items[0].status == "skipped_http_406"
