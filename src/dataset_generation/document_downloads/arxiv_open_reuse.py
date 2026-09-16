@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -50,9 +51,9 @@ DEFAULT_OAI_WINDOW_DAYS = 1
 DEFAULT_OAI_HARVEST_MODE = "auto"
 DEFAULT_MAX_CONSECUTIVE_OAI_406 = 30
 DEFAULT_ALLOWED_LICENSE_LABELS = ("CC BY 4.0",)
-DEFAULT_REQUEST_DELAY_SECONDS = 1.0
+DEFAULT_REQUEST_DELAY_SECONDS = 0.0
 DEFAULT_MAX_RETRIES = 5
-DEFAULT_MAX_WORKERS = min(8, os.cpu_count() or 4)
+DEFAULT_MAX_WORKERS = min(32, max(4, (os.cpu_count() or 4) * 4))
 DEFAULT_PROGRESS_INTERVAL = 25_000
 USER_AGENT = "visual-tot-arxiv-open-reuse/3.0 (mailto:stanfris2.0@gmail.com)"
 OAI_BASE_URL = "https://oaipmh.arxiv.org/oai"
@@ -1349,7 +1350,6 @@ def download_eligible_pdfs(
     max_retries: int,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> dict[str, Any]:
-    del max_workers  # Direct object downloads are sequential to keep Kaggle/GCS load modest and resumable.
     output_dir.mkdir(parents=True, exist_ok=True)
     failures_path = output_dir / "download_failures.jsonl"
     latest_failures_path = output_dir / "download_failures.latest.jsonl"
@@ -1363,42 +1363,75 @@ def download_eligible_pdfs(
     unavailable_records = []
     total = len(records)
     started_at = time.monotonic()
-    publish_status(f"[arxiv:kaggle] downloading selected PDFs from {KAGGLE_ARXIV_GCS_BUCKET}")
+    worker_count = max(1, int(max_workers or 1))
+    publish_status(
+        f"[arxiv:kaggle] downloading selected PDFs from {KAGGLE_ARXIV_GCS_BUCKET} "
+        f"with {worker_count} worker(s)"
+    )
 
+    pending: list[tuple[dict[str, Any], Path]] = []
     for record in records:
         destination = output_dir / record["pdf_filename"]
         if destination.exists() and not overwrite and has_pdf_header(destination):
             skipped += 1
             append_download_manifest(manifest_path, record, destination, "skipped", None)
-            print_download_progress(downloaded + skipped + failed + unavailable, total, downloaded, skipped, failed, started_at)
+            print_download_progress(
+                downloaded + skipped + failed + unavailable,
+                total,
+                downloaded,
+                skipped,
+                failed,
+                unavailable,
+                started_at,
+            )
             continue
-        status, error = download_kaggle_pdf(
-            record,
-            destination,
-            overwrite=overwrite,
-            request_delay_seconds=request_delay_seconds,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
-        )
-        if status == "downloaded":
-            downloaded += 1
-        elif status == "skipped":
-            skipped += 1
-        elif status == "unavailable":
-            unavailable += 1
-            row = unavailable_report_row(record, error or "not found in Kaggle arXiv PDF bucket")
-            unavailable_records.append(row)
-            append_jsonl(unavailable_path, row)
-            append_jsonl(latest_unavailable_path, row)
-        else:
-            failed += 1
-            failure = {"arxiv_id": record["arxiv_id"], "pdf_url": record["pdf_url"], "error": error}
-            failures.append(failure)
-            append_jsonl(failures_path, failure)
-            append_jsonl(latest_failures_path, failure)
-            LOGGER.warning("Failed to download %s: %s", record["arxiv_id"], error)
-        append_download_manifest(manifest_path, record, destination, status, error)
-        print_download_progress(downloaded + skipped + failed + unavailable, total, downloaded, skipped, failed, started_at)
+        pending.append((record, destination))
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(
+                download_kaggle_pdf,
+                record,
+                destination,
+                overwrite=overwrite,
+                request_delay_seconds=request_delay_seconds,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+            ): (record, destination)
+            for record, destination in pending
+        }
+        for future in as_completed(futures):
+            record, destination = futures[future]
+            try:
+                status, error = future.result()
+            except Exception as exc:  # noqa: BLE001 - keep the batch moving.
+                status, error = "failed", str(exc)
+            downloaded, skipped, failed, unavailable = record_download_result(
+                record=record,
+                destination=destination,
+                status=status,
+                error=error,
+                manifest_path=manifest_path,
+                failures_path=failures_path,
+                latest_failures_path=latest_failures_path,
+                unavailable_path=unavailable_path,
+                latest_unavailable_path=latest_unavailable_path,
+                failures=failures,
+                unavailable_records=unavailable_records,
+                downloaded=downloaded,
+                skipped=skipped,
+                failed=failed,
+                unavailable=unavailable,
+            )
+            print_download_progress(
+                downloaded + skipped + failed + unavailable,
+                total,
+                downloaded,
+                skipped,
+                failed,
+                unavailable,
+                started_at,
+            )
     if total:
         print()
     return {
@@ -1410,6 +1443,45 @@ def download_eligible_pdfs(
         "unavailable_records": unavailable_records,
         "unavailable_report": str(unavailable_path),
     }
+
+
+def record_download_result(
+    *,
+    record: dict[str, Any],
+    destination: Path,
+    status: str,
+    error: str | None,
+    manifest_path: Path,
+    failures_path: Path,
+    latest_failures_path: Path,
+    unavailable_path: Path,
+    latest_unavailable_path: Path,
+    failures: list[dict[str, Any]],
+    unavailable_records: list[dict[str, Any]],
+    downloaded: int,
+    skipped: int,
+    failed: int,
+    unavailable: int,
+) -> tuple[int, int, int, int]:
+    if status == "downloaded":
+        downloaded += 1
+    elif status == "skipped":
+        skipped += 1
+    elif status == "unavailable":
+        unavailable += 1
+        row = unavailable_report_row(record, error or "not found in Kaggle arXiv PDF bucket")
+        unavailable_records.append(row)
+        append_jsonl(unavailable_path, row)
+        append_jsonl(latest_unavailable_path, row)
+    else:
+        failed += 1
+        failure = {"arxiv_id": record["arxiv_id"], "pdf_url": record["pdf_url"], "error": error}
+        failures.append(failure)
+        append_jsonl(failures_path, failure)
+        append_jsonl(latest_failures_path, failure)
+        LOGGER.warning("Failed to download %s: %s", record["arxiv_id"], error)
+    append_download_manifest(manifest_path, record, destination, status, error)
+    return downloaded, skipped, failed, unavailable
 
 
 def download_kaggle_pdf(
@@ -1637,7 +1709,15 @@ def print_scan_progress(
     display_tmux_status(f"[arxiv:scan] selected={selected:,}/{target_count:,} scanned={scanned:,}")
 
 
-def print_download_progress(completed: int, total: int, downloaded: int, skipped: int, failed: int, started_at: float) -> None:
+def print_download_progress(
+    completed: int,
+    total: int,
+    downloaded: int,
+    skipped: int,
+    failed: int,
+    unavailable: int,
+    started_at: float,
+) -> None:
     elapsed = max(time.monotonic() - started_at, 0.001)
     rate = completed / elapsed
     remaining = max(total - completed, 0)
@@ -1645,7 +1725,7 @@ def print_download_progress(completed: int, total: int, downloaded: int, skipped
     percent = (completed / total * 100.0) if total else 100.0
     message = (
         f"{completed}/{total} ({percent:5.1f}%) "
-        f"downloaded={downloaded} skipped={skipped} failed={failed} "
+        f"downloaded={downloaded} skipped={skipped} unavailable={unavailable} failed={failed} "
         f"rate={rate:0.2f}/s eta={format_duration(eta_seconds)}"
     )
     print(

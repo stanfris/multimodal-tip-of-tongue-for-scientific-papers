@@ -273,10 +273,10 @@ uv run dataset-generation build-arxiv-open-reuse \
   --target-per-domain 30000 \
   --category-prefix physics. \
   --category-prefix eess. \
-  --max-workers 8
+  --max-workers 32
 # or
 scripts/document_downloads/build_arxiv_open_reuse.sh \
-  --max-workers 8
+  --max-workers 32
 ```
 
 This targets 30,000 Physics records and 30,000 Engineering records in one
@@ -287,9 +287,9 @@ manifests and PDF manifests do not collide:
 
 ```bash
 scripts/document_downloads/build_arxiv_open_reuse_physics.sh \
-  --max-workers 8
+  --max-workers 32
 scripts/document_downloads/build_arxiv_open_reuse_engineering.sh \
-  --max-workers 8
+  --max-workers 32
 ```
 
 Use `--metadata-only` when you want to audit eligibility before downloading.
@@ -310,11 +310,12 @@ The old OAI-PMH helpers remain available for legacy incremental use via
 collection path.
 
 PDF downloads are separate from selection and intentionally conservative. Tune
-network retry delay with `--request-delay-seconds`, timeouts with
-`--timeout-seconds`, and retry count with `--max-retries`. Downloads are
-resumable: valid existing PDFs are skipped, partial downloads use `.part`
-files, and every completed download is validated for a PDF header before being
-accepted.
+parallel PDF downloads with `--max-workers`, network retry delay with
+`--request-delay-seconds`, timeouts with `--timeout-seconds`, and retry count
+with `--max-retries`. The default downloader uses up to 32 workers and no
+per-request delay. Downloads are resumable: valid existing PDFs are skipped,
+partial downloads use `.part` files, and every completed download is validated
+for a PDF header before being accepted.
 
 You can also download only eligible PDFs later, resuming existing metadata and
 skipping valid PDFs already present:

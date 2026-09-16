@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import urllib.error
 import xml.etree.ElementTree as ET
 from datetime import date
@@ -436,6 +438,52 @@ def test_download_eligible_pdfs_downloads_exact_kaggle_object(monkeypatch, tmp_p
         "https://storage.googleapis.com/download/storage/v1/b/arxiv-dataset/o/arxiv%2Farxiv%2Fpdf%2F2401%2F2401.00001v1.pdf?alt=media"
     ]
     assert (tmp_path / "2401.00001v1.pdf").read_bytes().startswith(b"%PDF")
+
+
+def test_download_eligible_pdfs_uses_multiple_workers(monkeypatch, tmp_path) -> None:
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def fake_download(url, destination, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)
+        destination.write_bytes(b"%PDF\nbody")
+        with lock:
+            active -= 1
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
+
+    records = [
+        {
+            "arxiv_id": f"2401.0000{index}",
+            "pdf_arxiv_id": f"2401.0000{index}v1",
+            "pdf_url": f"https://example.test/{index}.pdf",
+            "kaggle_gcs_object": f"arxiv/arxiv/pdf/2401/2401.0000{index}v1.pdf",
+            "pdf_filename": f"2401.0000{index}v1.pdf",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "normalized_license_url": "https://creativecommons.org/licenses/by/4.0",
+            "license": "CC BY 4.0",
+            "license_family": "cc-by",
+        }
+        for index in range(4)
+    ]
+
+    stats = download_eligible_pdfs(
+        records,
+        output_dir=tmp_path,
+        overwrite=False,
+        request_delay_seconds=0,
+        timeout_seconds=10,
+        max_retries=1,
+        max_workers=4,
+    )
+
+    assert stats["downloaded"] == 4
+    assert max_active > 1
 
 
 def test_download_eligible_pdfs_reports_kaggle_unavailable_ids(monkeypatch, tmp_path) -> None:
