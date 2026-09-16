@@ -34,6 +34,11 @@ REQUEST_HEADERS = {
     "Accept": "application/xml,text/xml,*/*",
     "Accept-Encoding": "identity",
 }
+FALLBACK_REQUEST_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "*/*",
+    "Accept-Encoding": "identity",
+}
 HTML_REQUEST_HEADERS = {
     "User-Agent": USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,*/*",
@@ -867,16 +872,17 @@ def fetch_bytes(
     headers: dict[str, str] | None = None,
 ) -> bytes:
     last_error: Exception | None = None
+    header_variants = request_header_variants(headers or REQUEST_HEADERS)
     for attempt in range(max_retries + 1):
         if request_delay_seconds > 0:
             time.sleep(request_delay_seconds)
         try:
-            request = urllib.request.Request(url, headers=headers or REQUEST_HEADERS)
+            request = urllib.request.Request(url, headers=header_variants[min(attempt, len(header_variants) - 1)])
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
             last_error = exc
-            if exc.code in {400, 401, 403, 404, 406, 410}:
+            if exc.code in {400, 401, 403, 404, 410}:
                 break
             if attempt < max_retries:
                 wait_seconds = min(300.0, request_delay_seconds + 2**attempt)
@@ -889,6 +895,14 @@ def fetch_bytes(
                 LOGGER.warning("Request failed (%s); retrying in %.1fs", exc, wait_seconds)
                 time.sleep(wait_seconds)
     raise RuntimeError(f"Failed to fetch {url}: {last_error}") from last_error
+
+
+def request_header_variants(headers: dict[str, str]) -> list[dict[str, str]]:
+    if headers.get("Accept") == FALLBACK_REQUEST_HEADERS["Accept"]:
+        return [headers]
+    fallback_headers = dict(headers)
+    fallback_headers["Accept"] = FALLBACK_REQUEST_HEADERS["Accept"]
+    return [headers, fallback_headers]
 
 
 def download_pdf(

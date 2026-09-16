@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import urllib.error
 from xml.etree import ElementTree
 
 from dataset_generation.document_downloads.arxiv_open_reuse import classify_broad_domains
+from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
 from dataset_generation.document_downloads.arxiv_open_reuse import classify_license
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_record
@@ -102,3 +104,36 @@ def test_url_with_params_does_not_double_encode_resumption_tokens() -> None:
 
     assert "resumptionToken=verb%3DListRecords%26metadataPrefix%3DarXiv%26set%3Dphysics%26skip%3D1300" in url
     assert "%253D" not in url
+
+
+def test_fetch_bytes_retries_406_with_fallback_accept_header(monkeypatch) -> None:
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"<OAI-PMH />"
+
+    def fake_urlopen(request, *, timeout):  # type: ignore[no-untyped-def]
+        requests.append(request)
+        if len(requests) == 1:
+            raise urllib.error.HTTPError(request.full_url, 406, "Not Acceptable", hdrs=None, fp=None)
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    payload = fetch_bytes(
+        "https://oaipmh.arxiv.org/oai?verb=ListRecords&metadataPrefix=arXiv&set=physics",
+        request_delay_seconds=0,
+        timeout_seconds=10,
+        max_retries=1,
+    )
+
+    assert payload == b"<OAI-PMH />"
+    assert requests[0].headers["Accept"] == "application/xml,text/xml,*/*"
+    assert requests[1].headers["Accept"] == "*/*"
