@@ -226,15 +226,36 @@ at least 20,000 Biology papers and 20,000 Medical/Clinical Research papers.
 
 ## arXiv Open-Reuse Physics and Engineering Corpus
 
-Build a scientific-document corpus from arXiv OAI-PMH metadata while filtering
-licenses before any PDF retrieval. The pipeline harvests the `arXiv` OAI
-metadata format from `https://oaipmh.arxiv.org/oai`, filters by arXiv category
+Build a scientific-document corpus from the Cornell arXiv metadata snapshot on
+Kaggle while filtering licenses before any PDF retrieval. The pipeline streams
+`arxiv-metadata-oai-snapshot.json` line by line, filters by arXiv category
 prefixes and optional year bounds, and only selects records whose paper-level
-`license` field normalizes to the configured open-license whitelist. It does
-not use the standard paginated arXiv API for large-scale discovery.
-The obsolete `export.arxiv.org/oai2` endpoint is not used; if it is passed via
-`--oai-base-url`, the command rewrites it to the current official endpoint and
-prints the active OAI base URL at startup.
+`license` field normalizes to the configured allowlist. It does not use the
+standard paginated arXiv API or the live OAI-PMH endpoint for initial bulk
+collection.
+
+Install and authenticate the Kaggle CLI before the first run:
+
+```bash
+pip install kaggle
+# Create an API token at https://www.kaggle.com/settings/account, then either:
+mkdir -p ~/.kaggle
+mv ~/Downloads/kaggle.json ~/.kaggle/kaggle.json
+chmod 600 ~/.kaggle/kaggle.json
+# or set KAGGLE_USERNAME and KAGGLE_KEY in your environment.
+```
+
+The command reuses an existing snapshot when `--snapshot-path` points to one or
+when `data/arxiv_open_reuse/arxiv-metadata-oai-snapshot.json` already exists.
+If the snapshot is missing, `--download-snapshot` is enabled by default and runs:
+
+```bash
+kaggle datasets download \
+  -d Cornell-University/arxiv \
+  -f arxiv-metadata-oai-snapshot.json \
+  -p data/arxiv_open_reuse \
+  --unzip
+```
 
 PDFs are retrieved from arXiv's bulk requester-pays S3 bucket. The downloader
 fetches the official PDF manifest (`s3://arxiv/pdf/arXiv_pdf_manifest.xml`),
@@ -246,6 +267,10 @@ Run the combined discovery and PDF download pass:
 
 ```bash
 uv run dataset-generation build-arxiv-open-reuse \
+  --snapshot-path data/arxiv_open_reuse/arxiv-metadata-oai-snapshot.json \
+  --target-count 20000 \
+  --category-prefix physics. \
+  --category-prefix eess. \
   --max-workers 8
 # or
 scripts/document_downloads/build_arxiv_open_reuse.sh \
@@ -266,20 +291,17 @@ scripts/document_downloads/build_arxiv_open_reuse_engineering.sh \
 Use `--metadata-only` when you want to audit eligibility before downloading.
 Tune selection with repeated `--category-prefix`, `--start-year`,
 `--end-year`, `--target-count`, and repeated `--allowed-license`. By default
-the OAI request omits `set` and walks bounded `from`/`until` datestamp windows;
-this avoids current arXiv `406 Not Acceptable` responses for `ListRecords`
-requests that include broad physics/eess set filters, while still applying the
-local physics/eess category filter before any PDF retrieval. OAI harvest state
-is written to `oai_harvest_state.json` and harvested records are cached in
-`oai_metadata.jsonl`, so interrupted runs can resume without restarting the
-metadata pass. In `auto` mode the harvester first tries arXiv's documented full
-OAI harvest (`ListRecords` without a datestamp range); if arXiv rejects that
-with `406`, it falls back to bounded windows. If arXiv returns `406 Not
-Acceptable` for a specific datestamp window, that window is recorded in
-`skipped_oai_windows` and the harvester continues. If too many consecutive
-windows return `406`, the command stops with a clear historical-harvest-
-unavailable message instead of walking backward to 2005 one skipped day at a
-time. Tune this with `--oai-harvest-mode` and `--max-consecutive-oai-406`.
+the category prefixes are `physics.` and `eess.`, the target is 20,000 selected
+records, and the license allowlist is strictly `CC BY 4.0`. Equivalent license
+URLs are normalized across HTTP/HTTPS and trailing slashes; missing licenses,
+unknown licenses, non-CC licenses, arXiv's default non-exclusive distribution
+license, and Creative Commons licenses outside the allowlist are rejected before
+any PDF is queued. Selection is deterministic in snapshot order; `--selection-seed`
+is recorded for reproducibility but no sampling is used.
+
+The old OAI-PMH helpers remain available for legacy incremental use via
+`--metadata-source oai`, but OAI is no longer required for this initial bulk
+collection path.
 
 PDF downloads are separate from selection and intentionally conservative. Tune
 tar extraction concurrency with `--max-workers`, network retry delay with
@@ -296,10 +318,8 @@ scripts/document_downloads/download_arxiv_open_reuse_pdfs.sh --max-workers 32
 ```
 
 The default target is 20,000 selected records. The default category prefixes
-are `physics.` and `eess.`. The default license whitelist is `CC BY 4.0`,
-`CC BY 3.0`, `CC BY-SA 4.0`, `CC BY-SA 3.0`, and `CC0 1.0`; missing licenses,
-unknown licenses, and arXiv's default non-exclusive distribution license are
-rejected. Outputs are written
+are `physics.` and `eess.`. The default license whitelist is `CC BY 4.0` only.
+Outputs are written
 under `data/arxiv_open_reuse/`:
 
 ```text
@@ -309,17 +329,16 @@ report.json                 # counts by domain, category, year, and license
 pdfs/*.pdf                  # downloaded only after eligibility is known
 pdfs/download_manifest.jsonl
 pdfs/download_failures.jsonl
-oai_metadata.jsonl          # resumable harvested OAI metadata cache
-oai_harvest_state.json      # resumable OAI set/resumption-token state
+arxiv-metadata-oai-snapshot.json
 bulk_s3/                    # S3 PDF manifest and downloaded tar chunk cache
 ```
 
-The harvester/downloader uses a clear User-Agent, exponential backoff for
-transient OAI/network failures, `.part` files for atomic PDF writes, PDF header
+The selector/downloader uses `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
-identifiers. When running inside tmux, OAI, scan, S3, and PDF phases also post
-short `tmux display-message` status updates so pane status bars keep moving
-during long runs.
+identifiers. Interrupted runs retain partial manifests and skip selected
+metadata and valid PDFs already present. When running inside tmux, snapshot
+scan, S3, and PDF phases also post short `tmux display-message` status updates
+so pane status bars keep moving during long runs.
 
 ## MinerU PDF Extraction
 

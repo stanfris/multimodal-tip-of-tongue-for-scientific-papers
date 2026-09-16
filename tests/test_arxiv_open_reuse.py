@@ -11,11 +11,13 @@ import pytest
 from dataset_generation.document_downloads.arxiv_open_reuse import HTTPFetchError
 from dataset_generation.document_downloads.arxiv_open_reuse import bulk_item_key_for_arxiv_id
 from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
+from dataset_generation.document_downloads.arxiv_open_reuse import build_parser
 from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
 from dataset_generation.document_downloads.arxiv_open_reuse import extract_selected_pdfs_from_tar
 from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
 from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
 from dataset_generation.document_downloads.arxiv_open_reuse import find_pdf_chunk
+from dataset_generation.document_downloads.arxiv_open_reuse import ensure_kaggle_auth
 from dataset_generation.document_downloads.arxiv_open_reuse import iter_oai_records
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
@@ -23,6 +25,7 @@ from dataset_generation.document_downloads.arxiv_open_reuse import normalize_oai
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_arxiv_record
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_pdf_manifest
 from dataset_generation.document_downloads.arxiv_open_reuse import pdf_filename_for_arxiv_id
+from dataset_generation.document_downloads.arxiv_open_reuse import resolve_kaggle_snapshot
 
 
 def kaggle_record(
@@ -59,6 +62,9 @@ def test_license_normalization_maps_urls_to_allowed_labels() -> None:
     assert normalize_license_url("http://creativecommons.org/licenses/by/4.0/") == (
         "https://creativecommons.org/licenses/by/4.0"
     )
+    assert normalize_license_url("https://creativecommons.org/licenses/by/4.0") == (
+        "https://creativecommons.org/licenses/by/4.0"
+    )
     assert normalize_license("https://creativecommons.org/licenses/by-sa/4.0/").label == "CC BY-SA 4.0"
     assert normalize_license("https://creativecommons.org/publicdomain/zero/1.0/").label == "CC0 1.0"
     assert normalize_license("http://arxiv.org/licenses/nonexclusive-distrib/1.0/").family == "arxiv-default"
@@ -89,6 +95,14 @@ def test_filter_candidate_uses_snapshot_license_before_pdf_download() -> None:
     assert candidate["bulk_item_key"] == "2401.01234"
 
 
+def test_parser_defaults_to_snapshot_and_strict_cc_by_4() -> None:
+    args = build_parser().parse_args([])
+
+    assert args.metadata_source == "snapshot"
+    assert args.download_snapshot is True
+    assert args.allowed_licenses is None
+
+
 @pytest.mark.parametrize(
     ("record", "reason"),
     [
@@ -96,6 +110,10 @@ def test_filter_candidate_uses_snapshot_license_before_pdf_download() -> None:
         (kaggle_record("2401.2", license_url=None), "missing_license"),
         (
             kaggle_record("2401.3", license_url="http://arxiv.org/licenses/nonexclusive-distrib/1.0/"),
+            "disallowed_license",
+        ),
+        (
+            kaggle_record("2401.5", license_url="https://creativecommons.org/licenses/by-sa/4.0/"),
             "disallowed_license",
         ),
         (kaggle_record("2401.4", created="Mon, 1 Jan 2010 00:00:00 GMT"), "outside_date_range"),
@@ -112,6 +130,28 @@ def test_filter_candidate_rejects_unsuitable_records(record, reason) -> None:  #
 
     assert candidate is None
     assert rejection == reason
+
+
+def test_category_matching_accepts_existing_physics_and_engineering_prefixes() -> None:
+    physics, physics_rejection = filter_candidate(
+        kaggle_record("2401.01000v1", categories="physics.optics"),
+        category_prefixes=("physics.", "eess."),
+        start_year=None,
+        end_year=None,
+        allowed_licenses={"CC BY 4.0"},
+    )
+    engineering, engineering_rejection = filter_candidate(
+        kaggle_record("2401.01001v1", categories="eess.SY"),
+        category_prefixes=("physics.", "eess."),
+        start_year=None,
+        end_year=None,
+        allowed_licenses={"CC BY 4.0"},
+    )
+
+    assert physics_rejection is None
+    assert engineering_rejection is None
+    assert physics is not None
+    assert engineering is not None
 
 
 def test_build_corpus_streams_snapshot_and_writes_selected_manifest(tmp_path) -> None:
@@ -148,6 +188,131 @@ def test_build_corpus_streams_snapshot_and_writes_selected_manifest(tmp_path) ->
     assert report["rejection_counts"]["disallowed_license"] == 1
     assert report["rejection_counts"]["malformed_metadata"] == 1
     assert report["selected_license_counts"] == {"CC BY 4.0": 1, "CC BY-SA 4.0": 1}
+
+
+def test_build_corpus_default_license_allowlist_rejects_non_cc_by_4(tmp_path) -> None:
+    metadata = tmp_path / "arxiv-metadata-oai-snapshot.json"
+    write_snapshot(
+        metadata,
+        [
+            kaggle_record("2401.00003v1", categories="physics.ins-det"),
+            kaggle_record("2401.00004v1", categories="eess.SP", license_url="https://creativecommons.org/licenses/by-sa/4.0/"),
+        ],
+    )
+
+    result = build_arxiv_open_reuse_corpus(
+        snapshot_path=metadata,
+        output_dir=tmp_path / "out",
+        metadata_only=True,
+        target_count=20_000,
+        category_prefixes=("physics.", "eess."),
+        progress_interval=0,
+    )
+    selected = [json.loads(line) for line in (tmp_path / "out" / "selected_arxiv_documents.jsonl").read_text().splitlines()]
+
+    assert result.eligible_records == 1
+    assert [record["arxiv_id"] for record in selected] == ["2401.00003v1"]
+
+
+def test_selection_is_deterministic_snapshot_order(tmp_path) -> None:
+    metadata = tmp_path / "arxiv-metadata-oai-snapshot.json"
+    write_snapshot(
+        metadata,
+        [
+            kaggle_record("2401.00001v1"),
+            kaggle_record("2401.00002v1"),
+            kaggle_record("2401.00003v1"),
+        ],
+    )
+
+    ids_by_run = []
+    for name in ("out-a", "out-b"):
+        build_arxiv_open_reuse_corpus(
+            snapshot_path=metadata,
+            output_dir=tmp_path / name,
+            metadata_only=True,
+            target_count=2,
+            category_prefixes=("physics.", "eess."),
+            progress_interval=0,
+            selection_seed=123,
+        )
+        rows = [json.loads(line) for line in (tmp_path / name / "selected_arxiv_documents.jsonl").read_text().splitlines()]
+        ids_by_run.append([row["arxiv_id"] for row in rows])
+
+    assert ids_by_run == [["2401.00001v1", "2401.00002v1"], ["2401.00001v1", "2401.00002v1"]]
+
+
+def test_reuses_existing_snapshot_without_kaggle_download(monkeypatch, tmp_path) -> None:
+    snapshot = tmp_path / "arxiv-metadata-oai-snapshot.json"
+    snapshot.write_text("", encoding="utf-8")
+
+    def fail_download(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("existing snapshot should be reused")
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_kaggle_snapshot", fail_download)
+
+    assert resolve_kaggle_snapshot(
+        snapshot_path=snapshot,
+        output_dir=tmp_path,
+        download_snapshot=True,
+        kaggle_cli="kaggle",
+    ) == snapshot
+
+
+def test_missing_snapshot_without_download_raises_clear_error(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError, match="Kaggle snapshot not found"):
+        resolve_kaggle_snapshot(
+            snapshot_path=tmp_path / "arxiv-metadata-oai-snapshot.json",
+            output_dir=tmp_path,
+            download_snapshot=False,
+            kaggle_cli="kaggle",
+        )
+
+
+def test_missing_kaggle_credentials_explain_configuration(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/kaggle")
+    monkeypatch.delenv("KAGGLE_USERNAME", raising=False)
+    monkeypatch.delenv("KAGGLE_KEY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="Kaggle credentials are missing"):
+        ensure_kaggle_auth("kaggle")
+
+
+def test_resume_skips_existing_selected_metadata_and_pdf(monkeypatch, tmp_path) -> None:
+    metadata = tmp_path / "arxiv-metadata-oai-snapshot.json"
+    write_snapshot(metadata, [kaggle_record("2401.00001v1")])
+    output = tmp_path / "out"
+    pdf_dir = output / "pdfs"
+    pdf_dir.mkdir(parents=True)
+    (pdf_dir / "2401.00001v1.pdf").write_bytes(b"%PDF\n")
+    selected = filter_candidate(
+        kaggle_record("2401.00001v1"),
+        category_prefixes=("physics.", "eess."),
+        start_year=None,
+        end_year=None,
+        allowed_licenses={"CC BY 4.0"},
+    )[0]
+    assert selected is not None
+    write_snapshot(output / "selected_arxiv_documents.jsonl", [selected])
+
+    def fail_s3_fetch(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("valid existing PDF should be skipped on resume")
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.ensure_s3_object", fail_s3_fetch)
+
+    result = build_arxiv_open_reuse_corpus(
+        snapshot_path=metadata,
+        output_dir=output,
+        metadata_only=False,
+        target_count=1,
+        category_prefixes=("physics.", "eess."),
+        progress_interval=0,
+    )
+
+    assert result.downloaded == 1
+    report = json.loads((output / "report.json").read_text())
+    assert report["already_present_pdfs"] == 1
 
 
 def test_pdf_filename_handles_old_style_arxiv_ids() -> None:

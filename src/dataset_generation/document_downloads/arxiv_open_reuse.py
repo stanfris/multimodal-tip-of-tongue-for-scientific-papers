@@ -1,9 +1,10 @@
-"""Build an arXiv PDF corpus from OAI-PMH metadata and bulk S3 PDFs.
+"""Build an arXiv PDF corpus from Kaggle snapshot metadata and bulk S3 PDFs.
 
-arXiv's OAI-PMH feed provides paper-level category and license metadata. We
-harvest that feed, apply the existing strict reusable-license filter before any
-PDF work, then retrieve selected PDFs from arXiv's requester-pays S3 bulk PDF
-tar files.
+The Cornell arXiv Kaggle snapshot mirrors arXiv OAI metadata in JSONL form. We
+stream that snapshot, apply the strict reusable-license filter before any PDF
+work, then retrieve selected PDFs from arXiv's requester-pays S3 bulk PDF tar
+files. OAI helpers remain for legacy incremental use, but bulk collection does
+not depend on the live OAI endpoint.
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ DEFAULT_OUTPUT_DIR = Path("data") / "arxiv_open_reuse"
 DEFAULT_PDF_DIR = DEFAULT_OUTPUT_DIR / "pdfs"
 DEFAULT_SELECTED_MANIFEST = "selected_arxiv_documents.jsonl"
 DEFAULT_ELIGIBLE_MANIFEST = "eligible_records.jsonl"
+DEFAULT_KAGGLE_SNAPSHOT_FILENAME = "arxiv-metadata-oai-snapshot.json"
+KAGGLE_ARXIV_DATASET = "Cornell-University/arxiv"
 DEFAULT_OAI_CACHE = "oai_metadata.jsonl"
 DEFAULT_OAI_STATE = "oai_harvest_state.json"
 DEFAULT_BULK_CACHE_DIR = "bulk_s3"
@@ -46,13 +49,7 @@ DEFAULT_OAI_EARLIEST_DATE = "2005-09-16"
 DEFAULT_OAI_WINDOW_DAYS = 1
 DEFAULT_OAI_HARVEST_MODE = "auto"
 DEFAULT_MAX_CONSECUTIVE_OAI_406 = 30
-DEFAULT_ALLOWED_LICENSE_LABELS = (
-    "CC BY 4.0",
-    "CC BY 3.0",
-    "CC BY-SA 4.0",
-    "CC BY-SA 3.0",
-    "CC0 1.0",
-)
+DEFAULT_ALLOWED_LICENSE_LABELS = ("CC BY 4.0",)
 DEFAULT_REQUEST_DELAY_SECONDS = 1.0
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_MAX_WORKERS = min(8, os.cpu_count() or 4)
@@ -134,7 +131,7 @@ class OAIHistoricalHarvestUnavailable(RuntimeError):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Harvest arXiv OAI-PMH metadata, select strict open-license physics/eess papers, "
+            "Stream the Cornell arXiv Kaggle snapshot, select strict open-license physics/eess papers, "
             "and retrieve PDFs from arXiv's bulk S3 tar archives."
         )
     )
@@ -142,10 +139,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--metadata",
         type=Path,
         help=(
-            "Optional local arXiv JSONL metadata file for compatibility/testing. "
-            "When omitted, metadata is harvested from OAI-PMH."
+            "Compatibility alias for --snapshot-path. Points to a local arXiv JSONL snapshot."
         ),
     )
+    parser.add_argument(
+        "--snapshot-path",
+        type=Path,
+        help=(
+            f"Path to {DEFAULT_KAGGLE_SNAPSHOT_FILENAME}. Defaults to the copy under --output-dir; "
+            "when missing, the Kaggle CLI can download it."
+        ),
+    )
+    parser.add_argument(
+        "--download-snapshot",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Download the Cornell arXiv Kaggle snapshot with the Kaggle CLI if --snapshot-path is missing.",
+    )
+    parser.add_argument("--kaggle-cli", default="kaggle", help="Kaggle CLI executable used for snapshot download.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--pdf-dir", type=Path)
     parser.add_argument("--metadata-only", action="store_true", help="Write selected manifest and skip PDF retrieval.")
@@ -182,7 +193,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-consecutive-oai-406", type=int, default=DEFAULT_MAX_CONSECUTIVE_OAI_406)
     parser.add_argument("--start-year", type=int)
     parser.add_argument("--end-year", type=int)
-    parser.add_argument("--allowed-license", action="append", dest="allowed_licenses")
+    parser.add_argument(
+        "--allowed-license",
+        action="append",
+        dest="allowed_licenses",
+        help="Allowed paper-level license label or URL. Repeat for more. Default: CC BY 4.0 only.",
+    )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        help="Recorded for reproducibility. Selection is deterministic snapshot order; no sampling is used.",
+    )
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
     parser.add_argument("--overwrite-pdfs", action="store_true", help="Replace existing valid PDF files.")
     parser.add_argument("--request-delay-seconds", type=float, default=DEFAULT_REQUEST_DELAY_SECONDS)
@@ -196,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aws-cli", default="aws", help="AWS CLI executable used for requester-pays S3 downloads.")
 
     # Kept for old scripts/commands.
-    parser.add_argument("--metadata-source", choices=("oai", "snapshot"), default="oai", help=argparse.SUPPRESS)
+    parser.add_argument("--metadata-source", choices=("oai", "snapshot"), default="snapshot", help=argparse.SUPPRESS)
     parser.add_argument("--download-all-eligible", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--stop-after-eligible-per-domain", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--api-page-size", type=int, help=argparse.SUPPRESS)
@@ -212,6 +233,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     allowed_licenses = normalize_allowed_license_labels(args.allowed_licenses or DEFAULT_ALLOWED_LICENSE_LABELS)
     result = build_arxiv_open_reuse_corpus(
         metadata_path=args.metadata,
+        snapshot_path=args.snapshot_path,
+        download_snapshot=args.download_snapshot,
+        kaggle_cli=args.kaggle_cli,
         output_dir=args.output_dir,
         pdf_dir=args.pdf_dir,
         metadata_only=args.metadata_only,
@@ -237,6 +261,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         keep_bulk_archives=args.keep_bulk_archives,
         s3_manifest_path=args.s3_manifest,
         aws_cli=args.aws_cli,
+        metadata_source=args.metadata_source,
+        selection_seed=args.selection_seed,
     )
     return {
         "output_dir": str(result.output_dir),
@@ -252,6 +278,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_arxiv_open_reuse_corpus(
     *,
     metadata_path: str | Path | None = None,
+    snapshot_path: str | Path | None = None,
+    download_snapshot: bool = True,
+    kaggle_cli: str = "kaggle",
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     pdf_dir: str | Path | None = None,
     metadata_only: bool = False,
@@ -277,6 +306,8 @@ def build_arxiv_open_reuse_corpus(
     keep_bulk_archives: bool = True,
     s3_manifest_path: str | Path | None = None,
     aws_cli: str = "aws",
+    metadata_source: str = "snapshot",
+    selection_seed: int | None = None,
 ) -> ArxivBuildResult:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -288,16 +319,21 @@ def build_arxiv_open_reuse_corpus(
     bulk_cache_path = Path(bulk_cache_dir) if bulk_cache_dir is not None else output_path / DEFAULT_BULK_CACHE_DIR
     allowed = allowed_licenses or set(DEFAULT_ALLOWED_LICENSE_LABELS)
     oai_base_url = normalize_oai_base_url(oai_base_url)
-    publish_status(f"[arxiv:oai] base_url={oai_base_url}")
+    if metadata_source == "oai":
+        publish_status(f"[arxiv:oai] base_url={oai_base_url}")
 
     existing_selected = load_jsonl(selected_path) if resume and selected_path.exists() else []
     if len(existing_selected) >= target_count:
         selected_records = existing_selected[:target_count]
         scan_stats = resumed_scan_stats(selected_records)
-    elif metadata_path is not None:
-        metadata_file = Path(metadata_path)
-        if not metadata_file.exists():
-            raise FileNotFoundError(f"arXiv metadata file not found: {metadata_file}")
+        metadata_file = Path(metadata_path or snapshot_path or output_path / DEFAULT_KAGGLE_SNAPSHOT_FILENAME)
+    elif metadata_source == "snapshot" or metadata_path is not None or snapshot_path is not None:
+        metadata_file = resolve_kaggle_snapshot(
+            snapshot_path=Path(metadata_path or snapshot_path) if (metadata_path or snapshot_path) else None,
+            output_dir=output_path,
+            download_snapshot=download_snapshot,
+            kaggle_cli=kaggle_cli,
+        )
         selected_records, scan_stats = select_documents(
             metadata_file,
             selected_path=selected_path,
@@ -368,6 +404,8 @@ def build_arxiv_open_reuse_corpus(
         oai_earliest_date=oai_earliest_date,
         max_consecutive_oai_406=max_consecutive_oai_406,
         bulk_cache_dir=bulk_cache_path,
+        metadata_source=metadata_source,
+        selection_seed=selection_seed,
     )
     report_path = output_path / "report.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
@@ -395,6 +433,71 @@ def resumed_scan_stats(selected_records: list[dict[str, Any]]) -> dict[str, Any]
         "license_counts": {},
         "resumed_from_manifest": True,
     }
+
+
+def resolve_kaggle_snapshot(
+    *,
+    snapshot_path: Path | None,
+    output_dir: Path,
+    download_snapshot: bool,
+    kaggle_cli: str,
+) -> Path:
+    path = snapshot_path or output_dir / DEFAULT_KAGGLE_SNAPSHOT_FILENAME
+    if path.exists():
+        publish_status(f"[arxiv:snapshot] reusing {path}")
+        return path
+    if not download_snapshot:
+        raise FileNotFoundError(
+            f"arXiv Kaggle snapshot not found: {path}. Download {DEFAULT_KAGGLE_SNAPSHOT_FILENAME} "
+            f"from https://www.kaggle.com/datasets/{KAGGLE_ARXIV_DATASET} or rerun with --download-snapshot."
+        )
+    ensure_kaggle_auth(kaggle_cli)
+    download_kaggle_snapshot(path, kaggle_cli=kaggle_cli)
+    if not path.exists():
+        raise RuntimeError(f"Kaggle download completed but {DEFAULT_KAGGLE_SNAPSHOT_FILENAME} was not found at {path}")
+    return path
+
+
+def ensure_kaggle_auth(kaggle_cli: str) -> None:
+    if shutil.which(kaggle_cli) is None:
+        raise RuntimeError(
+            f"Kaggle CLI executable '{kaggle_cli}' was not found. Install it with `pip install kaggle`, then "
+            "configure authentication with a Kaggle API token."
+        )
+    has_env_credentials = bool(os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"))
+    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
+    if not has_env_credentials and not kaggle_json.exists():
+        raise RuntimeError(
+            "Kaggle credentials are missing. Create a Kaggle API token at "
+            "https://www.kaggle.com/settings/account, then either place it at "
+            "~/.kaggle/kaggle.json with file mode 600 or set KAGGLE_USERNAME and KAGGLE_KEY. "
+            f"After that, rerun the command so the Kaggle CLI can download {KAGGLE_ARXIV_DATASET}."
+        )
+
+
+def download_kaggle_snapshot(destination: Path, *, kaggle_cli: str) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    publish_status(f"[arxiv:snapshot] downloading {DEFAULT_KAGGLE_SNAPSHOT_FILENAME} from Kaggle")
+    cmd = [
+        kaggle_cli,
+        "datasets",
+        "download",
+        "-d",
+        KAGGLE_ARXIV_DATASET,
+        "-f",
+        DEFAULT_KAGGLE_SNAPSHOT_FILENAME,
+        "-p",
+        str(destination.parent),
+        "--unzip",
+    ]
+    try:
+        subprocess.run(cmd, check=True)  # noqa: S603
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "Kaggle snapshot download failed. Confirm your Kaggle API token is configured "
+            "at ~/.kaggle/kaggle.json or via KAGGLE_USERNAME/KAGGLE_KEY, and that you can access "
+            f"https://www.kaggle.com/datasets/{KAGGLE_ARXIV_DATASET}."
+        ) from exc
 
 
 def normalize_oai_base_url(base_url: str) -> str:
@@ -1574,12 +1677,21 @@ def build_report(
     oai_earliest_date: str,
     max_consecutive_oai_406: int,
     bulk_cache_dir: Path,
+    metadata_source: str,
+    selection_seed: int | None,
 ) -> dict[str, Any]:
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "source": {
-            "name": "arXiv OAI-PMH metadata and arXiv bulk S3 PDFs",
+            "name": (
+                "Cornell arXiv Kaggle metadata snapshot and arXiv bulk S3 PDFs"
+                if metadata_source == "snapshot"
+                else "arXiv OAI-PMH metadata and arXiv bulk S3 PDFs"
+            ),
+            "metadata_source": metadata_source,
             "metadata_path": str(metadata_path),
+            "kaggle_dataset": KAGGLE_ARXIV_DATASET if metadata_source == "snapshot" else None,
+            "snapshot_filename": DEFAULT_KAGGLE_SNAPSHOT_FILENAME if metadata_source == "snapshot" else None,
             "oai_base_url": oai_base_url,
             "oai_sets": list(oai_sets),
             "oai_harvest_mode": oai_harvest_mode,
@@ -1599,12 +1711,20 @@ def build_report(
         "category_prefixes": list(category_prefixes),
         "date_filter": {"start_year": start_year, "end_year": end_year},
         "allowed_licenses": sorted(allowed_licenses),
+        "selection": {
+            "method": "snapshot_order_first_n",
+            "seed": selection_seed,
+            "note": "No sampling is used; the first eligible records in JSONL order are selected deterministically.",
+        },
         "target_count": target_count,
         "metadata_only": metadata_only,
         "total_scanned": scan_stats["total_scanned"],
         "category_matches": scan_stats["category_matches"],
         "in_requested_date_range": scan_stats["date_matches"],
         "open_license_verified": scan_stats["allowed_license_matches"],
+        "accepted_licenses": scan_stats["allowed_license_matches"],
+        "rejected_licenses": int(scan_stats["rejection_counts"].get("missing_license", 0))
+        + int(scan_stats["rejection_counts"].get("disallowed_license", 0)),
         "selected": len(selected_records),
         "pdf_downloads_successful": int(download_stats.get("downloaded", 0)) + int(download_stats.get("skipped", 0)),
         "pdf_downloads_failed": int(download_stats.get("failed", 0)),
