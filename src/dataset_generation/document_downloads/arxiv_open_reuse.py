@@ -24,7 +24,7 @@ DEFAULT_OUTPUT_DIR = Path("data") / "arxiv_open_reuse"
 DEFAULT_PDF_DIR = DEFAULT_OUTPUT_DIR / "pdfs"
 DEFAULT_OAI_BASE_URL = "https://oaipmh.arxiv.org/oai"
 DEFAULT_OAI_SETS = ("physics", "eess", "cs:cs:RO", "math:math:OC")
-DEFAULT_METADATA_SOURCE = "auto"
+DEFAULT_METADATA_SOURCE = "api-abs"
 DEFAULT_TARGET_PER_DOMAIN = 20_000
 DEFAULT_REQUEST_DELAY_SECONDS = 3.0
 DEFAULT_MAX_RETRIES = 5
@@ -150,8 +150,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("auto", "oai", "api-abs"),
         default=DEFAULT_METADATA_SOURCE,
         help=(
-            "Use arXiv OAI-PMH, automatically fall back to the official Atom API plus arXiv abstract-page "
-            "license link when OAI ListRecords is unavailable, or force the fallback source."
+            "Use the official Atom API plus arXiv abstract-page license link by default. "
+            "Use 'auto' to try OAI-PMH first with API fallback, or 'oai' to force OAI-PMH."
         ),
     )
     parser.add_argument(

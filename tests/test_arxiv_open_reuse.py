@@ -161,9 +161,32 @@ def test_auto_metadata_source_falls_back_when_oai_returns_406(monkeypatch, tmp_p
         fake_api_abs_harvest,
     )
 
-    result = build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True)
+    result = build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True, metadata_source="auto")
 
     assert calls == ["oai", "api-abs"]
+    assert result.metadata_records == 0
+    assert '"metadata_source": "api-abs"' in (tmp_path / "report.json").read_text(encoding="utf-8")
+
+
+def test_default_metadata_source_skips_oai(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def fail_oai_harvest(**kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("default metadata source should skip OAI")
+
+    def fake_api_abs_harvest(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append("api-abs")
+        return 0
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.harvest_oai_metadata", fail_oai_harvest)
+    monkeypatch.setattr(
+        "dataset_generation.document_downloads.arxiv_open_reuse.harvest_api_abs_metadata",
+        fake_api_abs_harvest,
+    )
+
+    result = build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True)
+
+    assert calls == ["api-abs"]
     assert result.metadata_records == 0
     assert '"metadata_source": "api-abs"' in (tmp_path / "report.json").read_text(encoding="utf-8")
 
