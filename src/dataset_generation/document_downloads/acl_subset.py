@@ -26,16 +26,44 @@ DEFAULT_PDF_DIR = DEFAULT_OUTPUT_DIR / "pdfs"
 DEFAULT_MAX_WORKERS = 16
 
 TARGET_VOLUMES: dict[str, str] = {
+    # ACL main
     "acl_2023": "2023.acl-long",
     "acl_2024": "2024.acl-long",
     "acl_2025": "2025.acl-long",
     "acl_2026": "2026.acl-long",
+
+    # ACL Findings
+    "acl_findings_2023": "2023.findings-acl",
+    "acl_findings_2024": "2024.findings-acl",
+    "acl_findings_2025": "2025.findings-acl",
+    "acl_findings_2026": "2026.findings-acl",
+
+    # EMNLP main
     "emnlp_2023": "2023.emnlp-main",
     "emnlp_2024": "2024.emnlp-main",
     "emnlp_2025": "2025.emnlp-main",
-    "naacl_2025": "2025.naacl-long",
-}
 
+    # EMNLP Findings
+    "emnlp_findings_2023": "2023.findings-emnlp",
+    "emnlp_findings_2024": "2024.findings-emnlp",
+    "emnlp_findings_2025": "2025.findings-emnlp",
+
+    # NAACL
+    "naacl_2024": "2024.naacl-long",
+    "naacl_2025": "2025.naacl-long",
+
+    # NAACL Findings
+    "naacl_findings_2024": "2024.findings-naacl",
+    "naacl_findings_2025": "2025.findings-naacl",
+
+    # EACL
+    "eacl_2023": "2023.eacl-main",
+    "eacl_2024": "2024.eacl-long",
+
+    # COLING
+    "coling_2022": "2022.coling-1",
+    "coling_2025": "2025.coling-main",
+}
 
 @dataclass(frozen=True)
 class BuildResult:

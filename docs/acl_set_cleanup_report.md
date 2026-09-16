@@ -43,8 +43,8 @@ preprocessed extraction output directly:
 The cleaned order should be:
 
 - `00_sync_env.sh`
-- `01_build_acl_subset.sh`
-- `02_download_acl_pdfs.sh`
+- `document_downloads/build_acl_subset.sh`
+- `document_downloads/download_acl_pdfs.sh`
 - `03_start_mineru_router.sh`
 - `04_run_mineru_full_extraction.sh`
 - `05_reduce_and_compact_preprocessed.sh`

@@ -11,7 +11,7 @@ paper directories.
 ```text
 src/dataset_generation/
   schema.py      # Output schema validation
-  acl_subset.py  # ACL Anthology subset metadata and PDF downloads
+  document_downloads/ # Source-document metadata builders and PDF download commands
   preprocessed.py # Direct reader for extracted paper directories and clues
   storage.py     # Artifact writing and reading
   synthetic.py   # Stable interfaces for later test collection generation
@@ -22,6 +22,7 @@ Generated data is intentionally ignored by Git:
 
 ```text
 data/acl_subset/                          # curated ACL metadata and PDFs
+data/arxiv_open_reuse/                    # arXiv CC BY/CC0 metadata, report, PDFs
 data/processed/mineru_pdf_extraction/     # extracted PDF markdown and figures
 data/clues/                               # per-paper textual and visual clues
 data/query_collections/<id>/              # generated query/eval collections
@@ -52,8 +53,8 @@ Run the dataset generation stages individually:
 
 ```bash
 scripts/00_sync_env.sh
-scripts/01_build_acl_subset.sh
-scripts/02_download_acl_pdfs.sh
+scripts/document_downloads/build_acl_subset.sh
+scripts/document_downloads/download_acl_pdfs.sh
 scripts/03_start_mineru_router.sh
 scripts/04_run_mineru_full_extraction.sh
 scripts/05_reduce_and_compact_preprocessed.sh
@@ -69,6 +70,16 @@ from `data/preprocessed` or `data/preprocessed/papers`.
 
 The bash scripts are intentionally thin wrappers for the standard workflow.
 Use the Python CLIs directly for ad hoc runs.
+
+All source-document PDF downloads are centralized under
+`src/dataset_generation/document_downloads/` and exposed through:
+
+```bash
+uv run dataset-generation download-documents --help
+```
+
+Thin shell wrappers for each document corpus live under
+`scripts/document_downloads/`.
 
 Build a fixed-seed stratified document split before clue/query generation.
 The default split is 1,000 train documents and 200 test documents:
@@ -119,21 +130,141 @@ Build the curated recent full-paper ACL Anthology subset from official
 Anthology XML metadata:
 
 ```bash
-python scripts/build_acl_subset.py --metadata-only
+scripts/document_downloads/build_acl_subset.sh
 ```
 
 This writes `data/acl_subset/papers.jsonl` plus build metadata. The target
-volumes are explicitly configured in `dataset_generation.acl_subset.TARGET_VOLUMES`
+volumes are explicitly configured in
+`dataset_generation.document_downloads.acl_subset.TARGET_VOLUMES`
 and are not selected by fuzzy venue/title matching.
 
 Download the corresponding PDFs after writing metadata:
 
 ```bash
-python scripts/build_acl_subset.py --download-pdfs
+uv run dataset-generation download-documents acl
+# or
+scripts/document_downloads/download_acl_pdfs.sh
 ```
 
 PDF downloads run concurrently and show completed/total, skipped, failed, rate,
 and ETA. Tune concurrency with `--max-workers`; the default is `16`.
+
+## PMC OA Strict Biology/Medical Subset
+
+Build a PubMed Central Open Access Subset dataset with strict article-version
+license gating. By default this scans publication years 2024, 2025, and 2026:
+
+```bash
+uv run dataset-generation build-pmc-oa-subset \
+  --metadata-only \
+  --email you@example.org
+# or
+scripts/document_downloads/build_pmc_oa_subset.sh --email you@example.org
+```
+
+The discovery query defaults to:
+
+```text
+("cc by license"[filter] OR "cc0 license"[filter]) AND open_access[filter] AND has_pdf[filter] NOT pmc embargo[filter]
+```
+
+The builder uses only official NCBI/PMC infrastructure: NCBI E-Utilities for
+PMC discovery and PubMed metadata, and the PMC Article Datasets AWS Open Data
+bucket for article-version JSON metadata and PDF acquisition. It does not scrape
+article pages. Each candidate must pass the AWS JSON `license_code` check as
+exactly `cc by` or `cc0` before its PDF URL is ever queued for download.
+Long runs print progress for E-Utilities date-range discovery, AWS
+article-version license checks, PubMed enrichment batches, accepted domain
+counts, and PDF downloads. AWS article-version checks are parallelized
+independently from PDF downloads; tune them with `--aws-metadata-workers`
+(default `64`) and tune PDF downloads with `--max-workers` (default `16`).
+
+After auditing `data/pmc_oa_strict/report.json` or `report.md`, download the
+eligible PDFs:
+
+```bash
+uv run dataset-generation download-documents pmc-oa --max-workers 32
+# or
+scripts/document_downloads/download_pmc_oa_pdfs.sh --max-workers 32
+```
+
+Useful smoke test:
+
+```bash
+uv run dataset-generation build-pmc-oa-subset \
+  --metadata-only \
+  --start-year 2024 \
+  --end-year 2024 \
+  --max-records 100 \
+  --email you@example.org
+```
+
+Outputs are written under `data/pmc_oa_strict/`:
+
+```text
+papers.jsonl     # full metadata manifest with PMCID, PMID, DOI, subjects, license, PDF source/path
+discovered_pmcids.jsonl # incrementally saved E-Utilities discovery results
+discovery_ranges.jsonl  # completed/partial date-range checkpoints
+aws_metadata.jsonl      # cached PMC AWS license/PDF eligibility decisions
+pubmed_metadata.jsonl   # cached PubMed XML-derived subject metadata
+manifest.csv     # compact tabular manifest
+report.json      # counts by license, domain, year, and subject
+report.md        # human-readable summary
+pdfs/            # optional Biology and Medical_Clinical_Research PDF folders
+```
+
+Rerunning the same command resumes from these sidecars: completed discovery
+ranges are skipped, confirmed AWS metadata decisions are reused, failed AWS
+metadata checks are retried, cached PubMed metadata is reused, and existing
+valid PDFs are skipped.
+
+The final report explicitly states whether the strict CC BY/CC0 policy produced
+at least 20,000 Biology papers and 20,000 Medical/Clinical Research papers.
+
+## arXiv Open-Reuse Physics and Engineering Corpus
+
+Build a scientific-document corpus from official arXiv OAI-PMH metadata while
+filtering licenses before any PDF download. The pipeline harvests `arXiv`
+metadata, classifies Physics and Engineering records from original arXiv
+categories, keeps only normalized CC BY or CC0 license URLs, and excludes the
+default arXiv distribution license plus restrictive Creative Commons variants.
+
+Run a metadata-only discovery pass first:
+
+```bash
+uv run dataset-generation build-arxiv-open-reuse --metadata-only
+# or
+scripts/document_downloads/build_arxiv_open_reuse.sh
+```
+
+Then download only eligible PDFs, resuming existing metadata and skipping valid
+PDFs already present:
+
+```bash
+uv run dataset-generation download-documents arxiv-open-reuse
+# or
+scripts/document_downloads/download_arxiv_open_reuse_pdfs.sh
+```
+
+The default target is 20,000 eligible PDFs per broad domain when enough CC BY
+or CC0 papers exist. The default OAI sets are `physics`, `eess`, `cs:cs:RO`,
+and `math:math:OC`; override them by repeating `--oai-set`. Outputs are written
+under `data/arxiv_open_reuse/`:
+
+```text
+metadata_records.jsonl      # harvested metadata from selected OAI sets
+domain_records.jsonl        # records matching Physics and/or Engineering
+eligible_records.jsonl      # strict CC BY/CC0 subset with exact license URL
+checkpoint.json             # resumable OAI-PMH state
+report.json                 # counts by domain, category, year, and license
+pdfs/*.pdf                  # downloaded only after eligibility is known
+pdfs/download_manifest.jsonl
+pdfs/download_failures.jsonl
+```
+
+The downloader is intentionally conservative: one request stream, exponential
+backoff, a default 3 second delay before requests, `.part` files for atomic PDF
+writes, and stable filenames derived from arXiv identifiers.
 
 ## MinerU PDF Extraction
 
