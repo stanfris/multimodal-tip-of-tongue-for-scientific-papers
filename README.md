@@ -258,11 +258,15 @@ scripts/document_downloads/build_arxiv_open_reuse_engineering.sh \
 ```
 
 Use `--metadata-only` when you want to audit eligibility before downloading.
-Tune selection with repeated `--category-prefix`, repeated `--oai-set`,
-`--start-year`, `--end-year`, `--target-count`, and repeated
-`--allowed-license`. OAI harvest state is written to `oai_harvest_state.json`
-and harvested records are cached in `oai_metadata.jsonl`, so interrupted runs
-can resume without restarting the metadata pass.
+Tune selection with repeated `--category-prefix`, `--start-year`,
+`--end-year`, `--target-count`, and repeated `--allowed-license`. By default
+the OAI request omits `set` and walks bounded `from`/`until` datestamp windows;
+this avoids current arXiv `406 Not Acceptable` responses for `ListRecords`
+requests that include broad physics/eess set filters, while still applying the
+local physics/eess category filter before any PDF retrieval. OAI harvest state
+is written to `oai_harvest_state.json` and harvested records are cached in
+`oai_metadata.jsonl`, so interrupted runs can resume without restarting the
+metadata pass.
 
 PDF downloads are separate from selection and intentionally conservative. Tune
 tar extraction concurrency with `--max-workers`, network retry delay with

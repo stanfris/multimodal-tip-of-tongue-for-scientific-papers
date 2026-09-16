@@ -23,7 +23,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -40,7 +40,9 @@ DEFAULT_BULK_CACHE_DIR = "bulk_s3"
 DEFAULT_TARGET_COUNT = 20_000
 DEFAULT_TARGET_PER_DOMAIN = DEFAULT_TARGET_COUNT
 DEFAULT_CATEGORY_PREFIXES = ("physics.", "eess.")
-DEFAULT_OAI_SETS = ("physics", "eess")
+DEFAULT_OAI_SETS: tuple[str, ...] = ()
+DEFAULT_OAI_EARLIEST_DATE = "2005-09-16"
+DEFAULT_OAI_WINDOW_DAYS = 1
 DEFAULT_ALLOWED_LICENSE_LABELS = (
     "CC BY 4.0",
     "CC BY 3.0",
@@ -136,9 +138,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--oai-set",
         action="append",
         dest="oai_sets",
-        help="OAI-PMH setSpec to harvest. Defaults: physics and eess. Repeat for more sets.",
+        help=(
+            "OAI-PMH setSpec to harvest. Repeat for more sets. By default no set is sent, because "
+            "arXiv currently returns HTTP 406 for ListRecords requests with set filters; local "
+            "category filtering still selects physics/eess records before downloads."
+        ),
     )
     parser.add_argument("--oai-base-url", default=OAI_BASE_URL, help="OAI-PMH base URL.")
+    parser.add_argument("--oai-window-days", type=int, default=DEFAULT_OAI_WINDOW_DAYS)
+    parser.add_argument("--oai-earliest-date", default=DEFAULT_OAI_EARLIEST_DATE)
     parser.add_argument("--start-year", type=int)
     parser.add_argument("--end-year", type=int)
     parser.add_argument("--allowed-license", action="append", dest="allowed_licenses")
@@ -178,6 +186,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         category_prefixes=category_prefixes,
         oai_sets=tuple(args.oai_sets or DEFAULT_OAI_SETS),
         oai_base_url=args.oai_base_url,
+        oai_window_days=args.oai_window_days,
+        oai_earliest_date=args.oai_earliest_date,
         start_year=args.start_year,
         end_year=args.end_year,
         allowed_licenses=allowed_licenses,
@@ -214,6 +224,8 @@ def build_arxiv_open_reuse_corpus(
     category_prefixes: tuple[str, ...] = DEFAULT_CATEGORY_PREFIXES,
     oai_sets: tuple[str, ...] = DEFAULT_OAI_SETS,
     oai_base_url: str = OAI_BASE_URL,
+    oai_window_days: int = DEFAULT_OAI_WINDOW_DAYS,
+    oai_earliest_date: str = DEFAULT_OAI_EARLIEST_DATE,
     start_year: int | None = None,
     end_year: int | None = None,
     allowed_licenses: set[str] | None = None,
@@ -272,6 +284,8 @@ def build_arxiv_open_reuse_corpus(
             resume=resume,
             oai_sets=oai_sets,
             oai_base_url=oai_base_url,
+            oai_window_days=oai_window_days,
+            oai_earliest_date=oai_earliest_date,
             request_delay_seconds=request_delay_seconds,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
@@ -308,6 +322,8 @@ def build_arxiv_open_reuse_corpus(
         metadata_only=metadata_only,
         oai_sets=oai_sets,
         oai_base_url=oai_base_url,
+        oai_window_days=oai_window_days,
+        oai_earliest_date=oai_earliest_date,
         bulk_cache_dir=bulk_cache_path,
     )
     report_path = output_path / "report.json"
@@ -401,6 +417,8 @@ def select_documents_from_oai(
     resume: bool,
     oai_sets: tuple[str, ...],
     oai_base_url: str,
+    oai_window_days: int,
+    oai_earliest_date: str,
     request_delay_seconds: float,
     timeout_seconds: float,
     max_retries: int,
@@ -433,15 +451,25 @@ def select_documents_from_oai(
                 return processor.selected, processor.stats(resumed=True)
 
     state = load_json(state_path) if resume else {}
-    completed_sets = set(state.get("completed_sets") or [])
-    for set_spec in oai_sets:
-        if set_spec in completed_sets:
+    harvest_streams = tuple(oai_sets) if oai_sets else (None,)
+    completed_streams = set(state.get("completed_sets") or [])
+    for set_spec in harvest_streams:
+        stream_key = set_spec or "__all__"
+        if stream_key in completed_streams:
             continue
-        token = state.get("resumption_tokens", {}).get(set_spec)
-        for record, next_token in iter_oai_records(
+        stream_state = state.setdefault("streams", {}).setdefault(stream_key, {})
+        token = state.get("resumption_tokens", {}).get(stream_key)
+        until_date = parse_iso_date(stream_state.get("until_date")) or datetime.now(UTC).date()
+        earliest_date = parse_iso_date(oai_earliest_date)
+        if earliest_date is None:
+            raise ValueError(f"Invalid --oai-earliest-date: {oai_earliest_date}")
+        for record, next_token, window_start, window_end in iter_oai_records(
             base_url=oai_base_url,
             set_spec=set_spec,
             start_resumption_token=token,
+            start_until_date=until_date,
+            earliest_date=earliest_date,
+            window_days=oai_window_days,
             request_delay_seconds=request_delay_seconds,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
@@ -450,15 +478,19 @@ def select_documents_from_oai(
             if arxiv_id and arxiv_id not in cached_ids:
                 append_jsonl(cache_path, record)
                 cached_ids.add(arxiv_id)
-            state.setdefault("resumption_tokens", {})[set_spec] = next_token
+            state.setdefault("resumption_tokens", {})[stream_key] = next_token
+            stream_state["window_start"] = window_start.isoformat()
+            stream_state["window_end"] = window_end.isoformat()
+            if next_token is None:
+                stream_state["until_date"] = (window_start - timedelta(days=1)).isoformat()
             state["updated_at"] = datetime.now(UTC).isoformat()
             write_json(state_path, state)
             if not processor.process(record, None):
                 processor.print_progress()
                 return processor.selected, processor.stats(resumed=resume)
-        completed_sets.add(set_spec)
-        state["completed_sets"] = sorted(completed_sets)
-        state.setdefault("resumption_tokens", {}).pop(set_spec, None)
+        completed_streams.add(stream_key)
+        state["completed_sets"] = sorted(completed_streams)
+        state.setdefault("resumption_tokens", {}).pop(stream_key, None)
         state["updated_at"] = datetime.now(UTC).isoformat()
         write_json(state_path, state)
 
@@ -561,51 +593,84 @@ class SelectionProcessor:
 def iter_oai_records(
     *,
     base_url: str,
-    set_spec: str,
+    set_spec: str | None,
     start_resumption_token: str | None,
+    start_until_date: date,
+    earliest_date: date,
+    window_days: int,
     request_delay_seconds: float,
     timeout_seconds: float,
     max_retries: int,
-) -> Iterator[tuple[dict[str, Any], str | None]]:
+) -> Iterator[tuple[dict[str, Any], str | None, date, date]]:
     token = start_resumption_token
-    while True:
-        if token:
-            query = {"verb": "ListRecords", "resumptionToken": token}
-        else:
-            query = {"verb": "ListRecords", "metadataPrefix": OAI_METADATA_PREFIX, "set": set_spec}
-        url = base_url + "?" + urllib.parse.urlencode(query)
-        payload = fetch_bytes(
-            url,
-            request_delay_seconds=request_delay_seconds,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/xml"},
-        )
-        root = ET.fromstring(payload)
-        error = first_child(root, "error")
-        if error is not None:
-            code = error.attrib.get("code", "unknown")
-            message = normalize_text(error.text)
-            raise RuntimeError(f"OAI-PMH error for set {set_spec}: {code} {message}")
-        list_records = first_child(root, "ListRecords")
-        if list_records is None:
+    current_until = start_until_date
+    window_size = max(1, window_days)
+    while current_until >= earliest_date:
+        window_start = max(earliest_date, current_until - timedelta(days=window_size - 1))
+        while True:
+            if token:
+                query = {"verb": "ListRecords", "resumptionToken": token}
+            else:
+                query = {
+                    "verb": "ListRecords",
+                    "metadataPrefix": OAI_METADATA_PREFIX,
+                    "from": window_start.isoformat(),
+                    "until": current_until.isoformat(),
+                }
+                if set_spec:
+                    query["set"] = set_spec
+            url = base_url + "?" + urllib.parse.urlencode(query)
+            payload = fetch_bytes(
+                url,
+                request_delay_seconds=request_delay_seconds,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                headers={"User-Agent": USER_AGENT},
+            )
+            root = ET.fromstring(payload)
+            error = first_child(root, "error")
+            if error is not None:
+                code = error.attrib.get("code", "unknown")
+                message = normalize_text(error.text)
+                if code == "noRecordsMatch":
+                    break
+                raise RuntimeError(
+                    f"OAI-PMH error for set {set_spec or 'all'} "
+                    f"{window_start.isoformat()}..{current_until.isoformat()}: {code} {message}"
+                )
+            list_records = first_child(root, "ListRecords")
+            if list_records is None:
+                break
+            token_element = first_child(list_records, "resumptionToken")
+            next_token = normalize_text(token_element.text if token_element is not None else None) or None
+            for record_element in children(list_records, "record"):
+                metadata = first_child(record_element, "metadata")
+                if metadata is None:
+                    continue
+                arxiv_element = next(iter(list(metadata)), None)
+                if arxiv_element is None:
+                    continue
+                try:
+                    yield parse_oai_arxiv_record(arxiv_element), next_token, window_start, current_until
+                except Exception as exc:  # noqa: BLE001 - keep harvest moving.
+                    LOGGER.warning("Skipping malformed OAI record: %s", exc)
+            if not next_token:
+                token = None
+                break
+            token = next_token
+        if window_start == earliest_date:
             break
-        token_element = first_child(list_records, "resumptionToken")
-        next_token = normalize_text(token_element.text if token_element is not None else None) or None
-        for record_element in children(list_records, "record"):
-            metadata = first_child(record_element, "metadata")
-            if metadata is None:
-                continue
-            arxiv_element = next(iter(list(metadata)), None)
-            if arxiv_element is None:
-                continue
-            try:
-                yield parse_oai_arxiv_record(arxiv_element), next_token
-            except Exception as exc:  # noqa: BLE001 - keep harvest moving.
-                LOGGER.warning("Skipping malformed OAI record: %s", exc)
-        if not next_token:
-            break
-        token = next_token
+        current_until = window_start - timedelta(days=1)
+
+
+def parse_iso_date(value: Any) -> date | None:
+    text = normalize_text(value)
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
 
 
 def parse_oai_arxiv_record(element: ET.Element) -> dict[str, Any]:
@@ -1184,6 +1249,8 @@ def build_report(
     metadata_only: bool,
     oai_sets: tuple[str, ...],
     oai_base_url: str,
+    oai_window_days: int,
+    oai_earliest_date: str,
     bulk_cache_dir: Path,
 ) -> dict[str, Any]:
     return {
@@ -1193,6 +1260,8 @@ def build_report(
             "metadata_path": str(metadata_path),
             "oai_base_url": oai_base_url,
             "oai_sets": list(oai_sets),
+            "oai_window_days": oai_window_days,
+            "oai_earliest_date": oai_earliest_date,
             "metadata_prefix": OAI_METADATA_PREFIX,
             "license_field": "license",
             "s3_bucket": S3_BUCKET,
