@@ -3,9 +3,13 @@ from __future__ import annotations
 import urllib.error
 from xml.etree import ElementTree
 
+import pytest
+
+from dataset_generation.document_downloads.arxiv_open_reuse import HTTPFetchError
+from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
 from dataset_generation.document_downloads.arxiv_open_reuse import classify_broad_domains
-from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
 from dataset_generation.document_downloads.arxiv_open_reuse import classify_license
+from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_record
 from dataset_generation.document_downloads.arxiv_open_reuse import select_records_for_domain_targets
@@ -137,3 +141,46 @@ def test_fetch_bytes_retries_406_with_fallback_accept_header(monkeypatch) -> Non
     assert payload == b"<OAI-PMH />"
     assert requests[0].headers["Accept"] == "application/xml,text/xml,*/*"
     assert requests[1].headers["Accept"] == "*/*"
+
+
+def test_auto_metadata_source_falls_back_when_oai_returns_406(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def fake_oai_harvest(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append("oai")
+        error = urllib.error.HTTPError("https://oaipmh.arxiv.org/oai", 406, "Not Acceptable", hdrs=None, fp=None)
+        raise HTTPFetchError("https://oaipmh.arxiv.org/oai", error, status_code=406)
+
+    def fake_api_abs_harvest(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append("api-abs")
+        return 0
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.harvest_oai_metadata", fake_oai_harvest)
+    monkeypatch.setattr(
+        "dataset_generation.document_downloads.arxiv_open_reuse.harvest_api_abs_metadata",
+        fake_api_abs_harvest,
+    )
+
+    result = build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True)
+
+    assert calls == ["oai", "api-abs"]
+    assert result.metadata_records == 0
+    assert '"metadata_source": "api-abs"' in (tmp_path / "report.json").read_text(encoding="utf-8")
+
+
+def test_forced_oai_metadata_source_does_not_fall_back(monkeypatch, tmp_path) -> None:
+    def fake_oai_harvest(**kwargs):  # type: ignore[no-untyped-def]
+        error = urllib.error.HTTPError("https://oaipmh.arxiv.org/oai", 406, "Not Acceptable", hdrs=None, fp=None)
+        raise HTTPFetchError("https://oaipmh.arxiv.org/oai", error, status_code=406)
+
+    def fail_api_abs_harvest(**kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("api-abs fallback should not run when metadata_source='oai'")
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.harvest_oai_metadata", fake_oai_harvest)
+    monkeypatch.setattr(
+        "dataset_generation.document_downloads.arxiv_open_reuse.harvest_api_abs_metadata",
+        fail_api_abs_harvest,
+    )
+
+    with pytest.raises(HTTPFetchError):
+        build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True, metadata_source="oai")

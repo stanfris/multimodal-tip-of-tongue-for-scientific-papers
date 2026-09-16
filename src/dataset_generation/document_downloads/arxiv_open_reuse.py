@@ -24,10 +24,11 @@ DEFAULT_OUTPUT_DIR = Path("data") / "arxiv_open_reuse"
 DEFAULT_PDF_DIR = DEFAULT_OUTPUT_DIR / "pdfs"
 DEFAULT_OAI_BASE_URL = "https://oaipmh.arxiv.org/oai"
 DEFAULT_OAI_SETS = ("physics", "eess", "cs:cs:RO", "math:math:OC")
-DEFAULT_METADATA_SOURCE = "oai"
+DEFAULT_METADATA_SOURCE = "auto"
 DEFAULT_TARGET_PER_DOMAIN = 20_000
 DEFAULT_REQUEST_DELAY_SECONDS = 3.0
 DEFAULT_MAX_RETRIES = 5
+OAI_AUTO_FALLBACK_STATUS_CODES = {406, 502, 503, 504}
 USER_AGENT = "visual-tot-arxiv-open-reuse/1.0 (mailto:stanfris2.0@gmail.com)"
 REQUEST_HEADERS = {
     "User-Agent": USER_AGENT,
@@ -129,6 +130,14 @@ class ArxivBuildResult:
     failed: int
 
 
+class HTTPFetchError(RuntimeError):
+    def __init__(self, url: str, original_error: Exception, *, status_code: int | None = None) -> None:
+        super().__init__(f"Failed to fetch {url}: {original_error}")
+        self.url = url
+        self.original_error = original_error
+        self.status_code = status_code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Harvest arXiv metadata through OAI-PMH, keep only CC BY/CC0 Physics and Engineering papers, then optionally download PDFs.",
@@ -138,11 +147,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--oai-base-url", default=DEFAULT_OAI_BASE_URL)
     parser.add_argument(
         "--metadata-source",
-        choices=("oai", "api-abs"),
+        choices=("auto", "oai", "api-abs"),
         default=DEFAULT_METADATA_SOURCE,
         help=(
-            "Use arXiv OAI-PMH, or the official Atom API plus arXiv abstract-page license link "
-            "as a fallback when OAI ListRecords is unavailable."
+            "Use arXiv OAI-PMH, automatically fall back to the official Atom API plus arXiv abstract-page "
+            "license link when OAI ListRecords is unavailable, or force the fallback source."
         ),
     )
     parser.add_argument(
@@ -245,20 +254,42 @@ def build_arxiv_open_reuse_corpus(
 
     existing_records = load_jsonl(metadata_path) if resume else []
     seen_ids = {str(row["arxiv_id"]) for row in existing_records if "arxiv_id" in row}
-    if metadata_source == "oai":
-        harvested_records = harvest_oai_metadata(
-            oai_base_url=oai_base_url,
-            oai_sets=oai_sets,
-            output_path=metadata_path,
-            checkpoint_path=checkpoint_path,
-            seen_ids=seen_ids,
-            existing_records=existing_records,
-            stop_after_eligible_per_domain=stop_after_eligible_per_domain,
-            request_delay_seconds=request_delay_seconds,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
-            resume=resume,
-        )
+    resolved_metadata_source = metadata_source
+    if metadata_source in {"auto", "oai"}:
+        try:
+            harvested_records = harvest_oai_metadata(
+                oai_base_url=oai_base_url,
+                oai_sets=oai_sets,
+                output_path=metadata_path,
+                checkpoint_path=checkpoint_path,
+                seen_ids=seen_ids,
+                existing_records=existing_records,
+                stop_after_eligible_per_domain=stop_after_eligible_per_domain,
+                request_delay_seconds=request_delay_seconds,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                resume=resume,
+            )
+            resolved_metadata_source = "oai"
+        except HTTPFetchError as exc:
+            if metadata_source != "auto" or exc.status_code not in OAI_AUTO_FALLBACK_STATUS_CODES:
+                raise
+            LOGGER.warning(
+                "OAI harvest failed with HTTP %s; falling back to arXiv API plus abs-page license checks",
+                exc.status_code,
+            )
+            harvested_records = harvest_api_abs_metadata(
+                output_path=metadata_path,
+                checkpoint_path=checkpoint_path,
+                seen_ids=seen_ids,
+                existing_records=existing_records,
+                stop_after_eligible_per_domain=stop_after_eligible_per_domain,
+                request_delay_seconds=request_delay_seconds,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                resume=resume,
+            )
+            resolved_metadata_source = "api-abs"
     elif metadata_source == "api-abs":
         harvested_records = harvest_api_abs_metadata(
             output_path=metadata_path,
@@ -271,6 +302,7 @@ def build_arxiv_open_reuse_corpus(
             max_retries=max_retries,
             resume=resume,
         )
+        resolved_metadata_source = "api-abs"
     else:
         raise ValueError(f"Unsupported metadata source: {metadata_source}")
 
@@ -309,7 +341,7 @@ def build_arxiv_open_reuse_corpus(
         stop_after_eligible_per_domain=stop_after_eligible_per_domain,
         oai_sets=oai_sets,
         oai_base_url=oai_base_url,
-        metadata_source=metadata_source,
+        metadata_source=resolved_metadata_source,
     )
     report_path = output_path / "report.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
@@ -894,7 +926,8 @@ def fetch_bytes(
                 wait_seconds = min(300.0, request_delay_seconds + 2**attempt)
                 LOGGER.warning("Request failed (%s); retrying in %.1fs", exc, wait_seconds)
                 time.sleep(wait_seconds)
-    raise RuntimeError(f"Failed to fetch {url}: {last_error}") from last_error
+    status_code = last_error.code if isinstance(last_error, urllib.error.HTTPError) else None
+    raise HTTPFetchError(url, last_error or RuntimeError("unknown fetch error"), status_code=status_code) from last_error
 
 
 def request_header_variants(headers: dict[str, str]) -> list[dict[str, str]]:
