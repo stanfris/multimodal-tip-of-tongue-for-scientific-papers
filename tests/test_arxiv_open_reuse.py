@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tarfile
 import urllib.error
 import xml.etree.ElementTree as ET
@@ -13,6 +14,7 @@ from dataset_generation.document_downloads.arxiv_open_reuse import bulk_item_key
 from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
 from dataset_generation.document_downloads.arxiv_open_reuse import build_parser
 from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
+from dataset_generation.document_downloads.arxiv_open_reuse import ensure_s3_object
 from dataset_generation.document_downloads.arxiv_open_reuse import extract_selected_pdfs_from_tar
 from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
 from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
@@ -190,6 +192,46 @@ def test_build_corpus_streams_snapshot_and_writes_selected_manifest(tmp_path) ->
     assert report["selected_license_counts"] == {"CC BY 4.0": 1, "CC BY-SA 4.0": 1}
 
 
+def test_target_per_domain_balances_physics_and_engineering(tmp_path) -> None:
+    metadata = tmp_path / "arxiv-metadata-oai-snapshot.json"
+    write_snapshot(
+        metadata,
+        [
+            kaggle_record("2401.00001v1", categories="physics.ins-det"),
+            kaggle_record("2401.00002v1", categories="physics.optics"),
+            kaggle_record("2401.00003v1", categories="physics.acc-ph"),
+            kaggle_record("2401.00004v1", categories="eess.SP"),
+            kaggle_record("2401.00005v1", categories="eess.SY"),
+            kaggle_record("2401.00006v1", categories="eess.AS"),
+        ],
+    )
+
+    result = build_arxiv_open_reuse_corpus(
+        snapshot_path=metadata,
+        output_dir=tmp_path / "out",
+        metadata_only=True,
+        target_count=4,
+        target_per_domain=2,
+        category_prefixes=("physics.", "eess."),
+        progress_interval=0,
+    )
+    selected = [
+        json.loads(line)
+        for line in (tmp_path / "out" / "selected_arxiv_documents.jsonl").read_text().splitlines()
+    ]
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+
+    assert result.eligible_records == 4
+    assert [record["arxiv_id"] for record in selected] == [
+        "2401.00001v1",
+        "2401.00002v1",
+        "2401.00004v1",
+        "2401.00005v1",
+    ]
+    assert report["target_per_domain"] == 2
+    assert report["selected_domain_counts"] == {"eess.": 2, "physics.": 2}
+
+
 def test_build_corpus_default_license_allowlist_rejects_non_cc_by_4(tmp_path) -> None:
     metadata = tmp_path / "arxiv-metadata-oai-snapshot.json"
     write_snapshot(
@@ -352,6 +394,34 @@ def test_download_eligible_pdfs_resumes_existing_valid_pdf(monkeypatch, tmp_path
     assert stats["downloaded"] == 0
     assert stats["skipped"] == 1
     assert stats["failed"] == 0
+
+
+def test_s3_missing_credentials_error_is_actionable(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/aws")
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+        raise subprocess.CalledProcessError(
+            1,
+            cmd,
+            stderr="fatal error: Unable to locate credentials",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with pytest.raises(RuntimeError, match="AWS credentials are missing"):
+        ensure_s3_object(
+            "pdf/arXiv_pdf_manifest.xml",
+            tmp_path / "arXiv_pdf_manifest.xml",
+            aws_cli="aws",
+            request_delay_seconds=0,
+            timeout_seconds=10,
+            max_retries=5,
+        )
+
+    assert len(calls) == 1
 
 
 def test_oai_record_parses_to_existing_metadata_shape() -> None:

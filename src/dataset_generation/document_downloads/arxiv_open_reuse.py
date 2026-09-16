@@ -161,7 +161,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pdf-dir", type=Path)
     parser.add_argument("--metadata-only", action="store_true", help="Write selected manifest and skip PDF retrieval.")
     parser.add_argument("--target-count", type=int, default=DEFAULT_TARGET_COUNT)
-    parser.add_argument("--target-per-domain", type=int, help="Compatibility alias for --target-count.")
+    parser.add_argument(
+        "--target-per-domain",
+        type=int,
+        help=(
+            "Select this many records for each requested category prefix. For the default physics./eess. "
+            "prefixes, --target-per-domain 30000 selects up to 60,000 records total."
+        ),
+    )
     parser.add_argument(
         "--category-prefix",
         action="append",
@@ -226,10 +233,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    target_count = args.target_per_domain if args.target_per_domain is not None else args.target_count
-    if args.stop_after_eligible_per_domain is not None:
-        target_count = args.stop_after_eligible_per_domain
     category_prefixes = tuple(args.category_prefixes or DEFAULT_CATEGORY_PREFIXES)
+    target_per_domain = args.target_per_domain
+    if args.stop_after_eligible_per_domain is not None:
+        target_per_domain = args.stop_after_eligible_per_domain
+    target_count = (
+        target_per_domain * len(category_prefixes)
+        if target_per_domain is not None
+        else args.target_count
+    )
     allowed_licenses = normalize_allowed_license_labels(args.allowed_licenses or DEFAULT_ALLOWED_LICENSE_LABELS)
     result = build_arxiv_open_reuse_corpus(
         metadata_path=args.metadata,
@@ -240,6 +252,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         pdf_dir=args.pdf_dir,
         metadata_only=args.metadata_only,
         target_count=target_count,
+        target_per_domain=target_per_domain,
         category_prefixes=category_prefixes,
         oai_sets=tuple(args.oai_sets or DEFAULT_OAI_SETS),
         oai_base_url=normalize_oai_base_url(args.oai_base_url),
@@ -285,6 +298,7 @@ def build_arxiv_open_reuse_corpus(
     pdf_dir: str | Path | None = None,
     metadata_only: bool = False,
     target_count: int = DEFAULT_TARGET_COUNT,
+    target_per_domain: int | None = None,
     category_prefixes: tuple[str, ...] = DEFAULT_CATEGORY_PREFIXES,
     oai_sets: tuple[str, ...] = DEFAULT_OAI_SETS,
     oai_base_url: str = OAI_BASE_URL,
@@ -323,7 +337,7 @@ def build_arxiv_open_reuse_corpus(
         publish_status(f"[arxiv:oai] base_url={oai_base_url}")
 
     existing_selected = load_jsonl(selected_path) if resume and selected_path.exists() else []
-    if len(existing_selected) >= target_count:
+    if selection_targets_met(existing_selected, target_count, category_prefixes, target_per_domain):
         selected_records = existing_selected[:target_count]
         scan_stats = resumed_scan_stats(selected_records)
         metadata_file = Path(metadata_path or snapshot_path or output_path / DEFAULT_KAGGLE_SNAPSHOT_FILENAME)
@@ -338,6 +352,7 @@ def build_arxiv_open_reuse_corpus(
             metadata_file,
             selected_path=selected_path,
             target_count=target_count,
+            target_per_domain=target_per_domain,
             category_prefixes=category_prefixes,
             start_year=start_year,
             end_year=end_year,
@@ -351,6 +366,7 @@ def build_arxiv_open_reuse_corpus(
             state_path=state_path,
             selected_path=selected_path,
             target_count=target_count,
+            target_per_domain=target_per_domain,
             category_prefixes=category_prefixes,
             start_year=start_year,
             end_year=end_year,
@@ -392,6 +408,7 @@ def build_arxiv_open_reuse_corpus(
         scan_stats=scan_stats,
         download_stats=download_stats,
         target_count=target_count,
+        target_per_domain=target_per_domain,
         category_prefixes=category_prefixes,
         start_year=start_year,
         end_year=end_year,
@@ -422,6 +439,34 @@ def build_arxiv_open_reuse_corpus(
     )
 
 
+def selection_targets_met(
+    selected_records: list[dict[str, Any]],
+    target_count: int,
+    category_prefixes: tuple[str, ...],
+    target_per_domain: int | None,
+) -> bool:
+    if target_per_domain is None:
+        return len(selected_records) >= target_count
+    counts = selected_domain_counts(selected_records, category_prefixes)
+    return all(counts[prefix] >= target_per_domain for prefix in category_prefixes)
+
+
+def selected_domain_counts(records: Iterable[dict[str, Any]], category_prefixes: tuple[str, ...]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for record in records:
+        domain = normalize_text(record.get("selection_domain"))
+        if domain in category_prefixes:
+            counts[domain] += 1
+            continue
+        categories = record.get("categories", [])
+        if isinstance(categories, list):
+            for prefix in category_prefixes:
+                if any(normalize_text(category).startswith(prefix) for category in categories):
+                    counts[prefix] += 1
+                    break
+    return counts
+
+
 def resumed_scan_stats(selected_records: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total_scanned": 0,
@@ -431,6 +476,7 @@ def resumed_scan_stats(selected_records: list[dict[str, Any]]) -> dict[str, Any]
         "selected": len(selected_records),
         "rejection_counts": {},
         "license_counts": {},
+        "selected_domain_counts": {},
         "resumed_from_manifest": True,
     }
 
@@ -552,6 +598,7 @@ def select_documents(
     *,
     selected_path: Path,
     target_count: int,
+    target_per_domain: int | None,
     category_prefixes: tuple[str, ...],
     start_year: int | None,
     end_year: int | None,
@@ -567,6 +614,7 @@ def select_documents(
         selected=existing,
         selected_path=selected_path,
         target_count=target_count,
+        target_per_domain=target_per_domain,
         category_prefixes=category_prefixes,
         start_year=start_year,
         end_year=end_year,
@@ -586,6 +634,7 @@ def select_documents_from_oai(
     state_path: Path,
     selected_path: Path,
     target_count: int,
+    target_per_domain: int | None,
     category_prefixes: tuple[str, ...],
     start_year: int | None,
     end_year: int | None,
@@ -612,6 +661,7 @@ def select_documents_from_oai(
         selected=selected,
         selected_path=selected_path,
         target_count=target_count,
+        target_per_domain=target_per_domain,
         category_prefixes=category_prefixes,
         start_year=start_year,
         end_year=end_year,
@@ -890,16 +940,18 @@ class SelectionProcessor:
         selected: list[dict[str, Any]],
         selected_path: Path,
         target_count: int,
+        target_per_domain: int | None,
         category_prefixes: tuple[str, ...],
         start_year: int | None,
         end_year: int | None,
         allowed_licenses: set[str],
         progress_interval: int,
     ) -> None:
-        self.selected = selected[:target_count]
+        self.selected = selected[:target_count] if target_per_domain is None else list(selected)
         self.selected_ids = {record["arxiv_id"] for record in self.selected if "arxiv_id" in record}
         self.selected_path = selected_path
         self.target_count = target_count
+        self.target_per_domain = target_per_domain
         self.category_prefixes = category_prefixes
         self.start_year = start_year
         self.end_year = end_year
@@ -911,9 +963,10 @@ class SelectionProcessor:
         self.category_matches = 0
         self.date_matches = 0
         self.allowed_matches = len(self.selected)
+        self.domain_counts = selected_domain_counts(self.selected, self.category_prefixes)
 
     def process(self, raw_record: dict[str, Any] | None, parse_error: str | None) -> bool:
-        if len(self.selected) >= self.target_count:
+        if self.targets_met():
             return False
         self.scanned += 1
         if parse_error or raw_record is None:
@@ -944,13 +997,36 @@ class SelectionProcessor:
             self.date_matches += 1
             self.license_counts[candidate["license"]] += 1
             if candidate["arxiv_id"] not in self.selected_ids:
+                selection_domain = self.next_selection_domain(candidate)
+                if selection_domain is None:
+                    return True
+                candidate["selection_domain"] = selection_domain
                 append_jsonl(self.selected_path, candidate)
                 self.selected.append(candidate)
                 self.selected_ids.add(candidate["arxiv_id"])
                 self.allowed_matches += 1
+                self.domain_counts[selection_domain] += 1
         if self.progress_interval > 0 and self.scanned % self.progress_interval == 0:
             self.print_progress()
-        return len(self.selected) < self.target_count
+        return not self.targets_met()
+
+    def targets_met(self) -> bool:
+        if self.target_per_domain is None:
+            return len(self.selected) >= self.target_count
+        return all(
+            self.domain_counts[prefix] >= self.target_per_domain
+            for prefix in self.category_prefixes
+        )
+
+    def next_selection_domain(self, candidate: dict[str, Any]) -> str | None:
+        if self.target_per_domain is None:
+            return "combined"
+        matches = tuple(candidate.get("category_matches") or ())
+        for prefix in self.category_prefixes:
+            needs_prefix = self.domain_counts[prefix] < self.target_per_domain
+            if needs_prefix and any(str(category).startswith(prefix) for category in matches):
+                return prefix
+        return None
 
     def print_progress(self) -> None:
         print_scan_progress(
@@ -960,6 +1036,7 @@ class SelectionProcessor:
             len(self.selected),
             self.target_count,
             self.rejection_counts,
+            self.domain_counts if self.target_per_domain is not None else None,
         )
 
     def stats(self, *, resumed: bool) -> dict[str, Any]:
@@ -971,6 +1048,7 @@ class SelectionProcessor:
             "selected": len(self.selected),
             "rejection_counts": dict(self.rejection_counts),
             "license_counts": dict(self.license_counts),
+            "selected_domain_counts": dict(self.domain_counts),
             "resumed_from_manifest": resumed,
         }
 
@@ -1413,11 +1491,19 @@ def ensure_s3_object(
         if request_delay_seconds > 0:
             time.sleep(request_delay_seconds)
         try:
-            subprocess.run(cmd, check=True, timeout=timeout_seconds)  # noqa: S603
+            subprocess.run(  # noqa: S603
+                cmd,
+                check=True,
+                timeout=timeout_seconds,
+                capture_output=True,
+                text=True,
+            )
             tmp_path.replace(destination)
             return
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             last_error = exc
+            if is_missing_aws_credentials_error(exc):
+                break
             if attempt < max_retries:
                 wait_seconds = min(300.0, request_delay_seconds + 2**attempt)
                 LOGGER.warning("S3 download failed for %s; retrying in %.1fs", key, wait_seconds)
@@ -1425,7 +1511,30 @@ def ensure_s3_object(
                 continue
             break
     tmp_path.unlink(missing_ok=True)
-    raise RuntimeError(f"Failed to download {uri}: {last_error}") from last_error
+    raise RuntimeError(format_s3_download_error(uri, aws_cli, last_error)) from last_error
+
+
+def is_missing_aws_credentials_error(error: Exception) -> bool:
+    stderr = normalize_text(getattr(error, "stderr", ""))
+    stdout = normalize_text(getattr(error, "stdout", ""))
+    message = f"{stdout} {stderr}"
+    return "Unable to locate credentials" in message or "NoCredentialsError" in message
+
+
+def format_s3_download_error(uri: str, aws_cli: str, error: Exception | None) -> str:
+    if isinstance(error, subprocess.TimeoutExpired):
+        return f"Timed out downloading {uri} with '{aws_cli}'. Increase --timeout-seconds or retry later."
+    stderr = normalize_text(getattr(error, "stderr", ""))
+    stdout = normalize_text(getattr(error, "stdout", ""))
+    detail = stderr or stdout or str(error)
+    if is_missing_aws_credentials_error(error or RuntimeError("")):
+        return (
+            f"Failed to download {uri}: AWS credentials are missing. arXiv bulk PDFs are requester-pays S3 "
+            "objects, so the AWS CLI must be configured with credentials for an AWS account that can accept "
+            "requester-pays charges. Run `aws configure` or set AWS_PROFILE/AWS_ACCESS_KEY_ID credentials, "
+            "then rerun the build. The command already passes `--request-payer requester`."
+        )
+    return f"Failed to download {uri}: {detail}"
 
 
 def parse_pdf_manifest(path: Path) -> list[BulkPdfChunk]:
@@ -1616,13 +1725,20 @@ def print_scan_progress(
     selected: int,
     target_count: int,
     rejection_counts: Counter[str],
+    domain_counts: Counter[str] | None = None,
 ) -> None:
+    domain_message = ""
+    if domain_counts:
+        domain_message = " | Domains: " + ", ".join(
+            f"{domain}={count:,}" for domain, count in sorted(domain_counts.items())
+        )
     message = (
         f"Scanned: {scanned:,} | "
         f"Category matches: {category_matches:,} | "
         f"Allowed-license matches: {allowed_matches:,} | "
         f"Selected: {selected:,} / {target_count:,} | "
         f"Rejections: {dict(sorted(rejection_counts.items()))}"
+        f"{domain_message}"
     )
     print(message)
     display_tmux_status(f"[arxiv:scan] selected={selected:,}/{target_count:,} scanned={scanned:,}")
@@ -1665,6 +1781,7 @@ def build_report(
     scan_stats: dict[str, Any],
     download_stats: dict[str, Any],
     target_count: int,
+    target_per_domain: int | None,
     category_prefixes: tuple[str, ...],
     start_year: int | None,
     end_year: int | None,
@@ -1717,6 +1834,7 @@ def build_report(
             "note": "No sampling is used; the first eligible records in JSONL order are selected deterministically.",
         },
         "target_count": target_count,
+        "target_per_domain": target_per_domain,
         "metadata_only": metadata_only,
         "total_scanned": scan_stats["total_scanned"],
         "category_matches": scan_stats["category_matches"],
@@ -1732,6 +1850,7 @@ def build_report(
         "already_present_pdfs": int(download_stats.get("skipped", 0)),
         "rejection_counts": scan_stats["rejection_counts"],
         "license_counts": scan_stats["license_counts"],
+        "selected_domain_counts": scan_stats.get("selected_domain_counts", {}),
         "skipped_oai_windows": scan_stats.get("skipped_oai_windows", []),
         "selected_license_counts": dict(sorted(Counter(record["license"] for record in selected_records).items())),
         "selected_category_counts": dict(sorted(count_by_category(selected_records).items())),
