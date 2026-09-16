@@ -357,6 +357,19 @@ This copies valid source PDFs from `data/arxiv_open_reuse/pdfs/` into
 `selection_domain`. Add `--move` only if you want to move files out of the flat
 PDF directory instead of copying them.
 
+To build one consolidated five-folder PDF dataset, first make sure arXiv has
+already been split into `pdfs_by_domain/`, then run:
+
+```bash
+uv run python scripts/build_pdf_datasets_folder.py --dry-run
+uv run python scripts/build_pdf_datasets_folder.py
+```
+
+This creates `data/pdf_datasets/ACL`, `data/pdf_datasets/Physics`,
+`data/pdf_datasets/Engineering`, `data/pdf_datasets/Biology`, and
+`data/pdf_datasets/Medicine`. Use `--clean` to rebuild the destination from
+scratch, or `--move` if you want to move files instead of copying them.
+
 The selector/downloader uses `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
 identifiers. Interrupted runs retain partial manifests and skip selected
