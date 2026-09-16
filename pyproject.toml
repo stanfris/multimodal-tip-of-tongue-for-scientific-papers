@@ -19,6 +19,8 @@ dependencies = [
     "torch",
     "accelerate",
     "torchvision",
+    "requests>=2.34.2",
+    "beautifulsoup4>=4.15.0",
 ]
 
 [project.scripts]
