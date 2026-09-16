@@ -77,6 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
     arxiv.add_argument("--timeout-seconds", type=float, default=120.0)
     arxiv.add_argument("--max-retries", type=int, default=ARXIV_DEFAULT_MAX_RETRIES)
     arxiv.add_argument("--max-workers", type=int, default=ARXIV_DEFAULT_MAX_WORKERS)
+    arxiv.add_argument("--bulk-cache-dir", type=Path)
+    arxiv.add_argument("--keep-bulk-archives", action=argparse.BooleanOptionalAction, default=True)
+    arxiv.add_argument("--s3-manifest", type=Path)
+    arxiv.add_argument("--aws-cli", default="aws")
 
     pmc = subparsers.add_parser("pmc-oa", help="Download strict PMC OA subset PDFs.")
     pmc.add_argument("--manifest", type=Path, default=PMC_DEFAULT_OUTPUT_DIR / "papers.jsonl")
@@ -128,6 +132,10 @@ def download_arxiv_open_reuse_documents(args: argparse.Namespace) -> DownloadRes
         timeout_seconds=args.timeout_seconds,
         max_retries=args.max_retries,
         max_workers=args.max_workers,
+        bulk_cache_dir=args.bulk_cache_dir,
+        keep_bulk_archives=args.keep_bulk_archives,
+        s3_manifest_path=args.s3_manifest,
+        aws_cli=args.aws_cli,
     )
     stats = {"total": len(records), **stats}
     return DownloadResult("arxiv-open-reuse", manifest_path, Path(args.output_dir), stats)

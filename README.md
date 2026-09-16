@@ -223,22 +223,26 @@ at least 20,000 Biology papers and 20,000 Medical/Clinical Research papers.
 
 ## arXiv Open-Reuse Physics and Engineering Corpus
 
-Build a scientific-document corpus from the Cornell arXiv Kaggle metadata
-snapshot (`arxiv-metadata-oai-snapshot.json`) while filtering licenses before
-any PDF download. The pipeline streams the JSONL snapshot line by line, filters
-by arXiv category prefixes and optional year bounds, and only selects records
-whose paper-level `license` field normalizes to the configured open-license
-whitelist. It does not use the arXiv Atom API for bulk discovery.
+Build a scientific-document corpus from arXiv OAI-PMH metadata while filtering
+licenses before any PDF retrieval. The pipeline harvests the `arXiv` OAI
+metadata format from `https://oaipmh.arxiv.org/oai`, filters by arXiv category
+prefixes and optional year bounds, and only selects records whose paper-level
+`license` field normalizes to the configured open-license whitelist. It does
+not use the standard paginated arXiv API for large-scale discovery.
+
+PDFs are retrieved from arXiv's bulk requester-pays S3 bucket. The downloader
+fetches the official PDF manifest (`s3://arxiv/pdf/arXiv_pdf_manifest.xml`),
+maps selected papers to the manifest's monthly tar chunks, downloads only those
+chunks, and extracts only the selected PDFs. Configure AWS credentials and an
+AWS CLI capable of requester-pays downloads before running a PDF download pass.
 
 Run the combined discovery and PDF download pass:
 
 ```bash
 uv run dataset-generation build-arxiv-open-reuse \
-  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
   --max-workers 8
 # or
 scripts/document_downloads/build_arxiv_open_reuse.sh \
-  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
   --max-workers 8
 ```
 
@@ -248,18 +252,22 @@ manifests and PDF manifests do not collide:
 
 ```bash
 scripts/document_downloads/build_arxiv_open_reuse_physics.sh \
-  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
   --max-workers 8
 scripts/document_downloads/build_arxiv_open_reuse_engineering.sh \
-  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
   --max-workers 8
 ```
 
 Use `--metadata-only` when you want to audit eligibility before downloading.
-Tune local selection with repeated `--category-prefix`, `--start-year`,
-`--end-year`, `--target-count`, and repeated `--allowed-license`. PDF downloads
-are separate from selection and intentionally conservative; tune concurrency
-with `--max-workers` and per-worker delay with `--request-delay-seconds`.
+Tune selection with repeated `--category-prefix`, repeated `--oai-set`,
+`--start-year`, `--end-year`, `--target-count`, and repeated
+`--allowed-license`. OAI harvest state is written to `oai_harvest_state.json`
+and harvested records are cached in `oai_metadata.jsonl`, so interrupted runs
+can resume without restarting the metadata pass.
+
+PDF downloads are separate from selection and intentionally conservative. Tune
+tar extraction concurrency with `--max-workers`, network retry delay with
+`--request-delay-seconds`, S3 cache location with `--bulk-cache-dir`, and
+archive retention with `--no-keep-bulk-archives`.
 
 You can also download only eligible PDFs later, resuming existing metadata and
 skipping valid PDFs already present:
@@ -284,12 +292,15 @@ report.json                 # counts by domain, category, year, and license
 pdfs/*.pdf                  # downloaded only after eligibility is known
 pdfs/download_manifest.jsonl
 pdfs/download_failures.jsonl
+oai_metadata.jsonl          # resumable harvested OAI metadata cache
+oai_harvest_state.json      # resumable OAI set/resumption-token state
+bulk_s3/                    # S3 PDF manifest and downloaded tar chunk cache
 ```
 
-The downloader uses a clear User-Agent, exponential backoff for transient
-errors including HTTP 429 and 5xx responses, `.part` files for atomic PDF
-writes, PDF header validation before marking success, and stable filenames
-derived from arXiv identifiers.
+The harvester/downloader uses a clear User-Agent, exponential backoff for
+transient OAI/network failures, `.part` files for atomic PDF writes, PDF header
+validation before marking success, and stable filenames derived from arXiv
+identifiers.
 
 ## MinerU PDF Extraction
 

@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import json
+import tarfile
 import urllib.error
+import xml.etree.ElementTree as ET
 
 import pytest
 
 from dataset_generation.document_downloads.arxiv_open_reuse import HTTPFetchError
+from dataset_generation.document_downloads.arxiv_open_reuse import bulk_item_key_for_arxiv_id
 from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
 from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
+from dataset_generation.document_downloads.arxiv_open_reuse import extract_selected_pdfs_from_tar
 from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
 from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
+from dataset_generation.document_downloads.arxiv_open_reuse import find_pdf_chunk
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
+from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_arxiv_record
+from dataset_generation.document_downloads.arxiv_open_reuse import parse_pdf_manifest
 from dataset_generation.document_downloads.arxiv_open_reuse import pdf_filename_for_arxiv_id
 
 
@@ -70,7 +77,8 @@ def test_filter_candidate_uses_snapshot_license_before_pdf_download() -> None:
     assert candidate["categories"] == ["physics.ins-det", "eess.SP"]
     assert candidate["primary_category"] == "physics.ins-det"
     assert candidate["latest_version_date"] == "Mon, 1 Jan 2024 00:00:00 GMT"
-    assert candidate["pdf_url"] == "https://arxiv.org/pdf/2401.01234v2"
+    assert candidate["pdf_url"].startswith("s3://arxiv/pdf bulk archive")
+    assert candidate["bulk_item_key"] == "2401.01234"
 
 
 @pytest.mark.parametrize(
@@ -136,16 +144,17 @@ def test_build_corpus_streams_snapshot_and_writes_selected_manifest(tmp_path) ->
 
 def test_pdf_filename_handles_old_style_arxiv_ids() -> None:
     assert pdf_filename_for_arxiv_id("hep-th/9901001v1") == "hep-th_9901001v1.pdf"
+    assert bulk_item_key_for_arxiv_id("hep-th/9901001v1") == "hep-th9901001"
 
 
 def test_download_eligible_pdfs_resumes_existing_valid_pdf(monkeypatch, tmp_path) -> None:
     existing = tmp_path / "2401.00001v1.pdf"
     existing.write_bytes(b"%PDF\n")
 
-    def fail_download_pdf(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise AssertionError("valid existing PDFs should be skipped")
+    def fail_s3_fetch(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("valid existing PDFs should be skipped before S3 access")
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_pdf", fail_download_pdf)
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.ensure_s3_object", fail_s3_fetch)
 
     stats = download_eligible_pdfs(
         [
@@ -170,6 +179,75 @@ def test_download_eligible_pdfs_resumes_existing_valid_pdf(monkeypatch, tmp_path
     assert stats["downloaded"] == 0
     assert stats["skipped"] == 1
     assert stats["failed"] == 0
+
+
+def test_oai_record_parses_to_existing_metadata_shape() -> None:
+    xml = """
+    <arXiv xmlns="http://arxiv.org/OAI/arXiv/">
+      <id>2401.00001</id>
+      <created>2024-01-01</created>
+      <updated>2024-01-02</updated>
+      <authors>
+        <author><keyname>Curie</keyname><forenames>Marie</forenames></author>
+      </authors>
+      <title>A robust instrument</title>
+      <categories>physics.ins-det eess.SP</categories>
+      <license>http://creativecommons.org/licenses/by/4.0/</license>
+      <abstract>Measurement details.</abstract>
+      <doi>10.1234/example</doi>
+    </arXiv>
+    """
+
+    record = parse_oai_arxiv_record(ET.fromstring(xml))
+
+    assert record["id"] == "2401.00001"
+    assert record["authors"] == "Marie Curie"
+    assert record["categories"] == "physics.ins-det eess.SP"
+    assert record["license"] == "http://creativecommons.org/licenses/by/4.0/"
+
+
+def test_pdf_manifest_maps_selected_papers_to_required_tar_chunks(tmp_path) -> None:
+    manifest = tmp_path / "arXiv_pdf_manifest.xml"
+    manifest.write_text(
+        """
+        <manifest>
+          <file>
+            <filename>pdf/arXiv_pdf_2401_001.tar</filename>
+            <first_item>2401.00001</first_item>
+            <last_item>2401.99999</last_item>
+            <yymm>2401</yymm>
+          </file>
+        </manifest>
+        """,
+        encoding="utf-8",
+    )
+
+    chunks = parse_pdf_manifest(manifest)
+    chunk = find_pdf_chunk({"arxiv_id": "2401.01234v2", "bulk_item_key": "2401.01234"}, chunks)
+
+    assert chunk is not None
+    assert chunk.filename == "pdf/arXiv_pdf_2401_001.tar"
+
+
+def test_extract_selected_pdfs_from_bulk_tar(tmp_path) -> None:
+    tar_path = tmp_path / "arXiv_pdf_2401_001.tar"
+    source_pdf = tmp_path / "2401.00001.pdf"
+    source_pdf.write_bytes(b"%PDF\nbody")
+    with tarfile.open(tar_path, "w") as tar:
+        tar.add(source_pdf, arcname="2401.00001.pdf")
+
+    output_dir = tmp_path / "pdfs"
+    output_dir.mkdir()
+    record = {
+        "arxiv_id": "2401.00001v1",
+        "pdf_filename": "2401.00001v1.pdf",
+        "bulk_item_key": "2401.00001",
+    }
+
+    results = extract_selected_pdfs_from_tar(tar_path, [record], output_dir=output_dir, overwrite=False, max_workers=1)
+
+    assert results[0]["status"] == "downloaded"
+    assert (output_dir / "2401.00001v1.pdf").read_bytes().startswith(b"%PDF")
 
 
 def test_fetch_bytes_retries_transient_http_errors(monkeypatch) -> None:
