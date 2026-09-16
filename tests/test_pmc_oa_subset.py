@@ -96,6 +96,20 @@ def test_resume_cache_readers_skip_retryable_failures(tmp_path: Path) -> None:
     assert normalize_pmcid_number("PMC123") == "123"
 
 
+def test_resume_cache_readers_skip_truncated_rows(tmp_path: Path) -> None:
+    aws_path = tmp_path / "aws.jsonl"
+    aws_path.write_text(
+        '{"pmcid": "PMC1", "status": "eligible", "metadata": {"pmcid": "PMC1"}}\n'
+        '{"pmcid": "PMC2", "status": "eligible", "metadata": {"pmcid": "PMC2"}\n',
+        encoding="utf-8",
+    )
+    pubmed_path = tmp_path / "pubmed.jsonl"
+    pubmed_path.write_text('{"pmid": "10", "title": "A"}\n{"pmid": "11", "title": ', encoding="utf-8")
+
+    assert set(read_aws_metadata_cache(aws_path)) == {"1"}
+    assert set(read_pubmed_metadata_cache(pubmed_path)) == {"10"}
+
+
 def test_article_type_filter_excludes_non_research_material() -> None:
     assert should_exclude_article_type(["Editorial"])
     assert should_exclude_article_type(["Letter", "Journal Article"])

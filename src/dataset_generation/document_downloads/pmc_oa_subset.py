@@ -684,7 +684,7 @@ def parse_esearch_result(xml_text: str) -> tuple[int, list[str]]:
 
 def read_aws_metadata_cache(path: str | Path) -> dict[str, dict[str, Any]]:
     cache: dict[str, dict[str, Any]] = {}
-    for row in read_jsonl_objects(path, missing_ok=True):
+    for row in read_jsonl_objects(path, missing_ok=True, skip_invalid=True):
         pmcid = normalize_pmcid_number(row.get("pmcid"))
         if row.get("status") == "failed":
             continue
@@ -694,7 +694,7 @@ def read_aws_metadata_cache(path: str | Path) -> dict[str, dict[str, Any]]:
 
 def read_pubmed_metadata_cache(path: str | Path) -> dict[str, dict[str, Any]]:
     cache: dict[str, dict[str, Any]] = {}
-    for row in read_jsonl_objects(path, missing_ok=True):
+    for row in read_jsonl_objects(path, missing_ok=True, skip_invalid=True):
         pmid = clean_id(row.get("pmid"))
         if pmid:
             cache[pmid] = row

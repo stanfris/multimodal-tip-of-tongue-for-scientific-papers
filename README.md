@@ -223,48 +223,73 @@ at least 20,000 Biology papers and 20,000 Medical/Clinical Research papers.
 
 ## arXiv Open-Reuse Physics and Engineering Corpus
 
-Build a scientific-document corpus from official arXiv OAI-PMH metadata while
-filtering licenses before any PDF download. The pipeline harvests `arXiv`
-metadata, classifies Physics and Engineering records from original arXiv
-categories, keeps only normalized CC BY or CC0 license URLs, and excludes the
-default arXiv distribution license plus restrictive Creative Commons variants.
+Build a scientific-document corpus from the Cornell arXiv Kaggle metadata
+snapshot (`arxiv-metadata-oai-snapshot.json`) while filtering licenses before
+any PDF download. The pipeline streams the JSONL snapshot line by line, filters
+by arXiv category prefixes and optional year bounds, and only selects records
+whose paper-level `license` field normalizes to the configured open-license
+whitelist. It does not use the arXiv Atom API for bulk discovery.
 
-Run a metadata-only discovery pass first:
-
-```bash
-uv run dataset-generation build-arxiv-open-reuse --metadata-only
-# or
-scripts/document_downloads/build_arxiv_open_reuse.sh
-```
-
-Then download only eligible PDFs, resuming existing metadata and skipping valid
-PDFs already present:
+Run the combined discovery and PDF download pass:
 
 ```bash
-uv run dataset-generation download-documents arxiv-open-reuse
+uv run dataset-generation build-arxiv-open-reuse \
+  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
+  --max-workers 8
 # or
-scripts/document_downloads/download_arxiv_open_reuse_pdfs.sh
+scripts/document_downloads/build_arxiv_open_reuse.sh \
+  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
+  --max-workers 8
 ```
 
-The default target is 20,000 eligible PDFs per broad domain when enough CC BY
-or CC0 papers exist. The default OAI sets are `physics`, `eess`, `cs:cs:RO`,
-and `math:math:OC`; override them by repeating `--oai-set`. Outputs are written
+To run Physics and Engineering in parallel, use the split scripts in separate
+terminals. They write to separate output directories, so their selected
+manifests and PDF manifests do not collide:
+
+```bash
+scripts/document_downloads/build_arxiv_open_reuse_physics.sh \
+  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
+  --max-workers 8
+scripts/document_downloads/build_arxiv_open_reuse_engineering.sh \
+  --metadata /path/to/arxiv-metadata-oai-snapshot.json \
+  --max-workers 8
+```
+
+Use `--metadata-only` when you want to audit eligibility before downloading.
+Tune local selection with repeated `--category-prefix`, `--start-year`,
+`--end-year`, `--target-count`, and repeated `--allowed-license`. PDF downloads
+are separate from selection and intentionally conservative; tune concurrency
+with `--max-workers` and per-worker delay with `--request-delay-seconds`.
+
+You can also download only eligible PDFs later, resuming existing metadata and
+skipping valid PDFs already present:
+
+```bash
+uv run dataset-generation download-documents arxiv-open-reuse --max-workers 32
+# or
+scripts/document_downloads/download_arxiv_open_reuse_pdfs.sh --max-workers 32
+```
+
+The default target is 20,000 selected records. The default category prefixes
+are `physics.` and `eess.`. The default license whitelist is `CC BY 4.0`,
+`CC BY 3.0`, `CC BY-SA 4.0`, `CC BY-SA 3.0`, and `CC0 1.0`; missing licenses,
+unknown licenses, and arXiv's default non-exclusive distribution license are
+rejected. Outputs are written
 under `data/arxiv_open_reuse/`:
 
 ```text
-metadata_records.jsonl      # harvested metadata from selected OAI sets
-domain_records.jsonl        # records matching Physics and/or Engineering
-eligible_records.jsonl      # strict CC BY/CC0 subset with exact license URL
-checkpoint.json             # resumable OAI-PMH state
+selected_arxiv_documents.jsonl
+eligible_records.jsonl      # compatibility copy of selected records
 report.json                 # counts by domain, category, year, and license
 pdfs/*.pdf                  # downloaded only after eligibility is known
 pdfs/download_manifest.jsonl
 pdfs/download_failures.jsonl
 ```
 
-The downloader is intentionally conservative: one request stream, exponential
-backoff, a default 3 second delay before requests, `.part` files for atomic PDF
-writes, and stable filenames derived from arXiv identifiers.
+The downloader uses a clear User-Agent, exponential backoff for transient
+errors including HTTP 429 and 5xx responses, `.part` files for atomic PDF
+writes, PDF header validation before marking success, and stable filenames
+derived from arXiv identifiers.
 
 ## MinerU PDF Extraction
 

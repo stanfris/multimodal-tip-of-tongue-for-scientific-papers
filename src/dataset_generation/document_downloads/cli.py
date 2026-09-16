@@ -15,16 +15,13 @@ from dataset_generation.document_downloads.acl_subset import DEFAULT_PDF_DIR as 
 from dataset_generation.document_downloads.acl_subset import build_acl_subset
 from dataset_generation.document_downloads.acl_subset import download_acl_pdfs
 from dataset_generation.document_downloads.arxiv_open_reuse import DEFAULT_MAX_RETRIES as ARXIV_DEFAULT_MAX_RETRIES
+from dataset_generation.document_downloads.arxiv_open_reuse import DEFAULT_MAX_WORKERS as ARXIV_DEFAULT_MAX_WORKERS
 from dataset_generation.document_downloads.arxiv_open_reuse import DEFAULT_OUTPUT_DIR as ARXIV_DEFAULT_OUTPUT_DIR
 from dataset_generation.document_downloads.arxiv_open_reuse import DEFAULT_PDF_DIR as ARXIV_DEFAULT_PDF_DIR
 from dataset_generation.document_downloads.arxiv_open_reuse import (
     DEFAULT_REQUEST_DELAY_SECONDS as ARXIV_DEFAULT_REQUEST_DELAY_SECONDS,
 )
-from dataset_generation.document_downloads.arxiv_open_reuse import (
-    DEFAULT_TARGET_PER_DOMAIN as ARXIV_DEFAULT_TARGET_PER_DOMAIN,
-)
 from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
-from dataset_generation.document_downloads.arxiv_open_reuse import select_records_for_domain_targets
 from dataset_generation.jsonl import read_jsonl_objects
 from dataset_generation.document_downloads.pmc_oa_subset import DEFAULT_MAX_WORKERS as PMC_DEFAULT_MAX_WORKERS
 from dataset_generation.document_downloads.pmc_oa_subset import DEFAULT_OUTPUT_DIR as PMC_DEFAULT_OUTPUT_DIR
@@ -76,15 +73,10 @@ def build_parser() -> argparse.ArgumentParser:
     arxiv.add_argument("--manifest", type=Path, default=ARXIV_DEFAULT_OUTPUT_DIR / "eligible_records.jsonl")
     arxiv.add_argument("--output-dir", type=Path, default=ARXIV_DEFAULT_PDF_DIR)
     arxiv.add_argument("--overwrite-pdfs", action="store_true", help="Replace existing valid PDF files.")
-    arxiv.add_argument(
-        "--download-all-eligible",
-        action="store_true",
-        help="Download every record in the manifest instead of the per-domain target selection.",
-    )
-    arxiv.add_argument("--target-per-domain", type=int, default=ARXIV_DEFAULT_TARGET_PER_DOMAIN)
     arxiv.add_argument("--request-delay-seconds", type=float, default=ARXIV_DEFAULT_REQUEST_DELAY_SECONDS)
     arxiv.add_argument("--timeout-seconds", type=float, default=120.0)
     arxiv.add_argument("--max-retries", type=int, default=ARXIV_DEFAULT_MAX_RETRIES)
+    arxiv.add_argument("--max-workers", type=int, default=ARXIV_DEFAULT_MAX_WORKERS)
 
     pmc = subparsers.add_parser("pmc-oa", help="Download strict PMC OA subset PDFs.")
     pmc.add_argument("--manifest", type=Path, default=PMC_DEFAULT_OUTPUT_DIR / "papers.jsonl")
@@ -127,12 +119,7 @@ def download_acl_documents(args: argparse.Namespace) -> DownloadResult:
 
 def download_arxiv_open_reuse_documents(args: argparse.Namespace) -> DownloadResult:
     manifest_path = Path(args.manifest)
-    eligible_records = read_jsonl_objects(manifest_path)
-    records = (
-        eligible_records
-        if args.download_all_eligible
-        else select_records_for_domain_targets(eligible_records, target_per_domain=args.target_per_domain)
-    )
+    records = read_jsonl_objects(manifest_path)
     stats = download_eligible_pdfs(
         records,
         output_dir=args.output_dir,
@@ -140,6 +127,7 @@ def download_arxiv_open_reuse_documents(args: argparse.Namespace) -> DownloadRes
         request_delay_seconds=args.request_delay_seconds,
         timeout_seconds=args.timeout_seconds,
         max_retries=args.max_retries,
+        max_workers=args.max_workers,
     )
     stats = {"total": len(records), **stats}
     return DownloadResult("arxiv-open-reuse", manifest_path, Path(args.output_dir), stats)
