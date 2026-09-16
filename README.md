@@ -270,7 +270,8 @@ Run the combined discovery and PDF download pass:
 ```bash
 uv run dataset-generation build-arxiv-open-reuse \
   --snapshot-path data/arxiv_open_reuse/arxiv-metadata-oai-snapshot.json \
-  --target-per-domain 30000 \
+  --target-for-prefix physics.=30000 \
+  --target-for-prefix eess.=60000 \
   --category-prefix physics. \
   --category-prefix eess. \
   --max-workers 32
@@ -279,7 +280,7 @@ scripts/document_downloads/build_arxiv_open_reuse.sh \
   --max-workers 32
 ```
 
-This targets 30,000 Physics records and 30,000 Engineering records in one
+This targets 30,000 Physics records and 60,000 Engineering records in one
 combined manifest under `data/arxiv_open_reuse/`. To run Physics and
 Engineering in parallel instead, use the split scripts in separate
 terminals. They write to separate output directories, so their selected
@@ -294,10 +295,11 @@ scripts/document_downloads/build_arxiv_open_reuse_engineering.sh \
 
 Use `--metadata-only` when you want to audit eligibility before downloading.
 Tune selection with repeated `--category-prefix`, `--start-year`,
-`--end-year`, `--target-count` or `--target-per-domain`, and repeated
+`--end-year`, `--target-count`, `--target-per-domain`, or repeated
+`--target-for-prefix PREFIX=COUNT`, and repeated
 `--allowed-license`. By default the category prefixes are `physics.` and
 `eess.`, the CLI target is 20,000 selected records, and the bundled shell
-scripts pass `--target-per-domain 30000`. The license allowlist is strictly
+scripts target `physics.=30000` and `eess.=60000`. The license allowlist is strictly
 `CC BY 4.0`. Equivalent license
 URLs are normalized across HTTP/HTTPS and trailing slashes; missing licenses,
 unknown licenses, non-CC licenses, arXiv's default non-exclusive distribution

@@ -159,6 +159,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--target-for-prefix",
+        action="append",
+        dest="target_for_prefix",
+        metavar="PREFIX=COUNT",
+        help=(
+            "Override the selection target for one category prefix, e.g. "
+            "--target-for-prefix eess.=60000. Repeat for multiple prefixes."
+        ),
+    )
+    parser.add_argument(
         "--category-prefix",
         action="append",
         dest="category_prefixes",
@@ -222,11 +232,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     target_per_domain = args.target_per_domain
     if args.stop_after_eligible_per_domain is not None:
         target_per_domain = args.stop_after_eligible_per_domain
-    target_count = (
-        target_per_domain * len(category_prefixes)
-        if target_per_domain is not None
-        else args.target_count
+    target_counts = build_target_counts(
+        category_prefixes=category_prefixes,
+        target_count=args.target_count,
+        target_per_domain=target_per_domain,
+        target_for_prefix=args.target_for_prefix or (),
     )
+    target_count = sum(target_counts.values()) if target_counts else args.target_count
     allowed_licenses = normalize_allowed_license_labels(args.allowed_licenses or DEFAULT_ALLOWED_LICENSE_LABELS)
     result = build_arxiv_open_reuse_corpus(
         metadata_path=args.metadata,
@@ -238,6 +250,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         metadata_only=args.metadata_only,
         target_count=target_count,
         target_per_domain=target_per_domain,
+        target_counts=target_counts,
         category_prefixes=category_prefixes,
         oai_sets=tuple(args.oai_sets or DEFAULT_OAI_SETS),
         oai_base_url=normalize_oai_base_url(args.oai_base_url),
@@ -269,6 +282,48 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def build_target_counts(
+    *,
+    category_prefixes: tuple[str, ...],
+    target_count: int,
+    target_per_domain: int | None,
+    target_for_prefix: Iterable[str],
+) -> dict[str, int] | None:
+    overrides = parse_target_for_prefix(target_for_prefix)
+    if target_per_domain is None and not overrides:
+        return None
+    if target_per_domain is None:
+        if len(category_prefixes) == 1:
+            default_target = target_count
+        else:
+            default_target = target_count // max(1, len(category_prefixes))
+    else:
+        default_target = target_per_domain
+    counts = {prefix: default_target for prefix in category_prefixes}
+    unknown = sorted(set(overrides) - set(category_prefixes))
+    if unknown:
+        raise ValueError(
+            "--target-for-prefix used unknown prefix(es): "
+            f"{', '.join(unknown)}. Requested prefixes are: {', '.join(category_prefixes)}"
+        )
+    counts.update(overrides)
+    return counts
+
+
+def parse_target_for_prefix(values: Iterable[str]) -> dict[str, int]:
+    targets = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f"Invalid --target-for-prefix value {value!r}; expected PREFIX=COUNT.")
+        prefix, count_text = value.split("=", 1)
+        prefix = normalize_text(prefix)
+        count_text = normalize_text(count_text)
+        if not prefix or not count_text.isdigit() or int(count_text) < 0:
+            raise ValueError(f"Invalid --target-for-prefix value {value!r}; expected PREFIX=COUNT.")
+        targets[prefix] = int(count_text)
+    return targets
+
+
 def build_arxiv_open_reuse_corpus(
     *,
     metadata_path: str | Path | None = None,
@@ -280,6 +335,7 @@ def build_arxiv_open_reuse_corpus(
     metadata_only: bool = False,
     target_count: int = DEFAULT_TARGET_COUNT,
     target_per_domain: int | None = None,
+    target_counts: dict[str, int] | None = None,
     category_prefixes: tuple[str, ...] = DEFAULT_CATEGORY_PREFIXES,
     oai_sets: tuple[str, ...] = DEFAULT_OAI_SETS,
     oai_base_url: str = OAI_BASE_URL,
@@ -308,12 +364,15 @@ def build_arxiv_open_reuse_corpus(
     cache_path = output_path / DEFAULT_OAI_CACHE
     state_path = output_path / DEFAULT_OAI_STATE
     allowed = allowed_licenses or set(DEFAULT_ALLOWED_LICENSE_LABELS)
+    if target_counts is None and target_per_domain is not None:
+        target_counts = {prefix: target_per_domain for prefix in category_prefixes}
+        target_count = sum(target_counts.values())
     oai_base_url = normalize_oai_base_url(oai_base_url)
     if metadata_source == "oai":
         publish_status(f"[arxiv:oai] base_url={oai_base_url}")
 
     existing_selected = load_jsonl(selected_path) if resume and selected_path.exists() else []
-    if selection_targets_met(existing_selected, target_count, category_prefixes, target_per_domain):
+    if selection_targets_met(existing_selected, target_count, category_prefixes, target_counts):
         selected_records = existing_selected[:target_count]
         scan_stats = resumed_scan_stats(selected_records)
         metadata_file = Path(metadata_path or snapshot_path or output_path / DEFAULT_KAGGLE_SNAPSHOT_FILENAME)
@@ -329,6 +388,7 @@ def build_arxiv_open_reuse_corpus(
             selected_path=selected_path,
             target_count=target_count,
             target_per_domain=target_per_domain,
+            target_counts=target_counts,
             category_prefixes=category_prefixes,
             start_year=start_year,
             end_year=end_year,
@@ -343,6 +403,7 @@ def build_arxiv_open_reuse_corpus(
             selected_path=selected_path,
             target_count=target_count,
             target_per_domain=target_per_domain,
+            target_counts=target_counts,
             category_prefixes=category_prefixes,
             start_year=start_year,
             end_year=end_year,
@@ -382,6 +443,7 @@ def build_arxiv_open_reuse_corpus(
         download_stats=download_stats,
         target_count=target_count,
         target_per_domain=target_per_domain,
+        target_counts=target_counts,
         category_prefixes=category_prefixes,
         start_year=start_year,
         end_year=end_year,
@@ -415,12 +477,12 @@ def selection_targets_met(
     selected_records: list[dict[str, Any]],
     target_count: int,
     category_prefixes: tuple[str, ...],
-    target_per_domain: int | None,
+    target_counts: dict[str, int] | None,
 ) -> bool:
-    if target_per_domain is None:
+    if target_counts is None:
         return len(selected_records) >= target_count
     counts = selected_domain_counts(selected_records, category_prefixes)
-    return all(counts[prefix] >= target_per_domain for prefix in category_prefixes)
+    return all(counts[prefix] >= target_counts[prefix] for prefix in category_prefixes)
 
 
 def selected_domain_counts(records: Iterable[dict[str, Any]], category_prefixes: tuple[str, ...]) -> Counter[str]:
@@ -585,6 +647,7 @@ def select_documents(
     selected_path: Path,
     target_count: int,
     target_per_domain: int | None,
+    target_counts: dict[str, int] | None,
     category_prefixes: tuple[str, ...],
     start_year: int | None,
     end_year: int | None,
@@ -601,6 +664,7 @@ def select_documents(
         selected_path=selected_path,
         target_count=target_count,
         target_per_domain=target_per_domain,
+        target_counts=target_counts,
         category_prefixes=category_prefixes,
         start_year=start_year,
         end_year=end_year,
@@ -621,6 +685,7 @@ def select_documents_from_oai(
     selected_path: Path,
     target_count: int,
     target_per_domain: int | None,
+    target_counts: dict[str, int] | None,
     category_prefixes: tuple[str, ...],
     start_year: int | None,
     end_year: int | None,
@@ -648,6 +713,7 @@ def select_documents_from_oai(
         selected_path=selected_path,
         target_count=target_count,
         target_per_domain=target_per_domain,
+        target_counts=target_counts,
         category_prefixes=category_prefixes,
         start_year=start_year,
         end_year=end_year,
@@ -927,17 +993,19 @@ class SelectionProcessor:
         selected_path: Path,
         target_count: int,
         target_per_domain: int | None,
+        target_counts: dict[str, int] | None,
         category_prefixes: tuple[str, ...],
         start_year: int | None,
         end_year: int | None,
         allowed_licenses: set[str],
         progress_interval: int,
     ) -> None:
-        self.selected = selected[:target_count] if target_per_domain is None else list(selected)
+        self.selected = selected[:target_count] if target_counts is None else list(selected)
         self.selected_ids = {record["arxiv_id"] for record in self.selected if "arxiv_id" in record}
         self.selected_path = selected_path
         self.target_count = target_count
         self.target_per_domain = target_per_domain
+        self.target_counts = target_counts
         self.category_prefixes = category_prefixes
         self.start_year = start_year
         self.end_year = end_year
@@ -997,19 +1065,19 @@ class SelectionProcessor:
         return not self.targets_met()
 
     def targets_met(self) -> bool:
-        if self.target_per_domain is None:
+        if self.target_counts is None:
             return len(self.selected) >= self.target_count
         return all(
-            self.domain_counts[prefix] >= self.target_per_domain
+            self.domain_counts[prefix] >= self.target_counts[prefix]
             for prefix in self.category_prefixes
         )
 
     def next_selection_domain(self, candidate: dict[str, Any]) -> str | None:
-        if self.target_per_domain is None:
+        if self.target_counts is None:
             return "combined"
         matches = tuple(candidate.get("category_matches") or ())
         for prefix in self.category_prefixes:
-            needs_prefix = self.domain_counts[prefix] < self.target_per_domain
+            needs_prefix = self.domain_counts[prefix] < self.target_counts[prefix]
             if needs_prefix and any(str(category).startswith(prefix) for category in matches):
                 return prefix
         return None
@@ -1022,7 +1090,7 @@ class SelectionProcessor:
             len(self.selected),
             self.target_count,
             self.rejection_counts,
-            self.domain_counts if self.target_per_domain is not None else None,
+            self.domain_counts if self.target_counts is not None else None,
         )
 
     def stats(self, *, resumed: bool) -> dict[str, Any]:
@@ -1035,6 +1103,7 @@ class SelectionProcessor:
             "rejection_counts": dict(self.rejection_counts),
             "license_counts": dict(self.license_counts),
             "selected_domain_counts": dict(self.domain_counts),
+            "target_domain_counts": dict(self.target_counts or {}),
             "resumed_from_manifest": resumed,
         }
 
@@ -1755,6 +1824,7 @@ def build_report(
     download_stats: dict[str, Any],
     target_count: int,
     target_per_domain: int | None,
+    target_counts: dict[str, int] | None,
     category_prefixes: tuple[str, ...],
     start_year: int | None,
     end_year: int | None,
@@ -1807,6 +1877,7 @@ def build_report(
         },
         "target_count": target_count,
         "target_per_domain": target_per_domain,
+        "target_domain_counts": target_counts or scan_stats.get("target_domain_counts", {}),
         "metadata_only": metadata_only,
         "total_scanned": scan_stats["total_scanned"],
         "category_matches": scan_stats["category_matches"],

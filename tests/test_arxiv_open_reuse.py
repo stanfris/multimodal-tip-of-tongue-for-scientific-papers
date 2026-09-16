@@ -12,6 +12,7 @@ import pytest
 from dataset_generation.document_downloads.arxiv_open_reuse import HTTPFetchError
 from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
 from dataset_generation.document_downloads.arxiv_open_reuse import build_parser
+from dataset_generation.document_downloads.arxiv_open_reuse import build_target_counts
 from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
 from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
 from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
@@ -228,6 +229,56 @@ def test_target_per_domain_balances_physics_and_engineering(tmp_path) -> None:
     ]
     assert report["target_per_domain"] == 2
     assert report["selected_domain_counts"] == {"eess.": 2, "physics.": 2}
+
+
+def test_target_for_prefix_allows_higher_engineering_target(tmp_path) -> None:
+    metadata = tmp_path / "arxiv-metadata-oai-snapshot.json"
+    write_snapshot(
+        metadata,
+        [
+            kaggle_record("2401.00001v1", categories="physics.ins-det"),
+            kaggle_record("2401.00002v1", categories="physics.optics"),
+            kaggle_record("2401.00003v1", categories="eess.SP"),
+            kaggle_record("2401.00004v1", categories="eess.SY"),
+            kaggle_record("2401.00005v1", categories="eess.AS"),
+        ],
+    )
+
+    result = build_arxiv_open_reuse_corpus(
+        snapshot_path=metadata,
+        output_dir=tmp_path / "out",
+        metadata_only=True,
+        target_count=4,
+        target_counts={"physics.": 1, "eess.": 3},
+        category_prefixes=("physics.", "eess."),
+        progress_interval=0,
+    )
+    selected = [
+        json.loads(line)
+        for line in (tmp_path / "out" / "selected_arxiv_documents.jsonl").read_text().splitlines()
+    ]
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+
+    assert result.eligible_records == 4
+    assert [record["arxiv_id"] for record in selected] == [
+        "2401.00001v1",
+        "2401.00003v1",
+        "2401.00004v1",
+        "2401.00005v1",
+    ]
+    assert report["target_domain_counts"] == {"eess.": 3, "physics.": 1}
+    assert report["selected_domain_counts"] == {"eess.": 3, "physics.": 1}
+
+
+def test_build_target_counts_accepts_prefix_overrides() -> None:
+    counts = build_target_counts(
+        category_prefixes=("physics.", "eess."),
+        target_count=20_000,
+        target_per_domain=None,
+        target_for_prefix=("physics.=30000", "eess.=60000"),
+    )
+
+    assert counts == {"physics.": 30_000, "eess.": 60_000}
 
 
 def test_build_corpus_default_license_allowlist_rejects_non_cc_by_4(tmp_path) -> None:
