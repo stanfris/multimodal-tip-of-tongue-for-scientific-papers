@@ -19,6 +19,7 @@ from dataset_generation.document_downloads.arxiv_open_reuse import find_pdf_chun
 from dataset_generation.document_downloads.arxiv_open_reuse import iter_oai_records
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
+from dataset_generation.document_downloads.arxiv_open_reuse import normalize_oai_base_url
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_arxiv_record
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_pdf_manifest
 from dataset_generation.document_downloads.arxiv_open_reuse import pdf_filename_for_arxiv_id
@@ -61,6 +62,11 @@ def test_license_normalization_maps_urls_to_allowed_labels() -> None:
     assert normalize_license("https://creativecommons.org/licenses/by-sa/4.0/").label == "CC BY-SA 4.0"
     assert normalize_license("https://creativecommons.org/publicdomain/zero/1.0/").label == "CC0 1.0"
     assert normalize_license("http://arxiv.org/licenses/nonexclusive-distrib/1.0/").family == "arxiv-default"
+
+
+def test_obsolete_oai_endpoint_is_rewritten_to_current_endpoint() -> None:
+    assert normalize_oai_base_url("https://export.arxiv.org/oai2") == "https://oaipmh.arxiv.org/oai"
+    assert normalize_oai_base_url("http://export.arxiv.org/oai2/") == "https://oaipmh.arxiv.org/oai"
 
 
 def test_filter_candidate_uses_snapshot_license_before_pdf_download() -> None:

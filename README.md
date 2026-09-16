@@ -177,7 +177,10 @@ Long runs print progress for E-Utilities date-range discovery, AWS
 article-version license checks, PubMed enrichment batches, accepted domain
 counts, and PDF downloads. AWS article-version checks are parallelized
 independently from PDF downloads; tune them with `--aws-metadata-workers`
-(default `64`) and tune PDF downloads with `--max-workers` (default `16`).
+(default `64`). PubMed enrichment now runs only for current candidate batches
+until the default target of `30,000` Biology and `30,000` Medical/Clinical
+records is met; tune each enrichment batch with `--pubmed-batch-size` (default
+`200`) and tune PDF downloads with `--max-workers` (default `16`).
 
 After auditing `data/pmc_oa_strict/report.json` or `report.md`, download the
 eligible PDFs:
@@ -229,6 +232,9 @@ metadata format from `https://oaipmh.arxiv.org/oai`, filters by arXiv category
 prefixes and optional year bounds, and only selects records whose paper-level
 `license` field normalizes to the configured open-license whitelist. It does
 not use the standard paginated arXiv API for large-scale discovery.
+The obsolete `export.arxiv.org/oai2` endpoint is not used; if it is passed via
+`--oai-base-url`, the command rewrites it to the current official endpoint and
+prints the active OAI base URL at startup.
 
 PDFs are retrieved from arXiv's bulk requester-pays S3 bucket. The downloader
 fetches the official PDF manifest (`s3://arxiv/pdf/arXiv_pdf_manifest.xml`),
@@ -266,9 +272,14 @@ requests that include broad physics/eess set filters, while still applying the
 local physics/eess category filter before any PDF retrieval. OAI harvest state
 is written to `oai_harvest_state.json` and harvested records are cached in
 `oai_metadata.jsonl`, so interrupted runs can resume without restarting the
-metadata pass. If arXiv returns `406 Not Acceptable` for a specific datestamp
-window, that window is recorded in `skipped_oai_windows` and the harvester
-continues instead of aborting the run.
+metadata pass. In `auto` mode the harvester first tries arXiv's documented full
+OAI harvest (`ListRecords` without a datestamp range); if arXiv rejects that
+with `406`, it falls back to bounded windows. If arXiv returns `406 Not
+Acceptable` for a specific datestamp window, that window is recorded in
+`skipped_oai_windows` and the harvester continues. If too many consecutive
+windows return `406`, the command stops with a clear historical-harvest-
+unavailable message instead of walking backward to 2005 one skipped day at a
+time. Tune this with `--oai-harvest-mode` and `--max-consecutive-oai-406`.
 
 PDF downloads are separate from selection and intentionally conservative. Tune
 tar extraction concurrency with `--max-workers`, network retry delay with

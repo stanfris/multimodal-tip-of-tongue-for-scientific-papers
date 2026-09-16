@@ -59,6 +59,12 @@ DEFAULT_MAX_WORKERS = min(8, os.cpu_count() or 4)
 DEFAULT_PROGRESS_INTERVAL = 25_000
 USER_AGENT = "visual-tot-arxiv-open-reuse/3.0 (mailto:stanfris2.0@gmail.com)"
 OAI_BASE_URL = "https://oaipmh.arxiv.org/oai"
+OBSOLETE_OAI_BASE_URLS = {
+    "http://export.arxiv.org/oai2",
+    "https://export.arxiv.org/oai2",
+    "http://export.arxiv.org/oai2/",
+    "https://export.arxiv.org/oai2/",
+}
 OAI_METADATA_PREFIX = "arXiv"
 S3_BUCKET = "arxiv"
 S3_PDF_MANIFEST_KEY = "pdf/arXiv_pdf_manifest.xml"
@@ -212,7 +218,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         target_count=target_count,
         category_prefixes=category_prefixes,
         oai_sets=tuple(args.oai_sets or DEFAULT_OAI_SETS),
-        oai_base_url=args.oai_base_url,
+        oai_base_url=normalize_oai_base_url(args.oai_base_url),
         oai_harvest_mode=args.oai_harvest_mode,
         oai_window_days=args.oai_window_days,
         oai_earliest_date=args.oai_earliest_date,
@@ -281,6 +287,8 @@ def build_arxiv_open_reuse_corpus(
     state_path = output_path / DEFAULT_OAI_STATE
     bulk_cache_path = Path(bulk_cache_dir) if bulk_cache_dir is not None else output_path / DEFAULT_BULK_CACHE_DIR
     allowed = allowed_licenses or set(DEFAULT_ALLOWED_LICENSE_LABELS)
+    oai_base_url = normalize_oai_base_url(oai_base_url)
+    publish_status(f"[arxiv:oai] base_url={oai_base_url}")
 
     existing_selected = load_jsonl(selected_path) if resume and selected_path.exists() else []
     if len(existing_selected) >= target_count:
@@ -387,6 +395,18 @@ def resumed_scan_stats(selected_records: list[dict[str, Any]]) -> dict[str, Any]
         "license_counts": {},
         "resumed_from_manifest": True,
     }
+
+
+def normalize_oai_base_url(base_url: str) -> str:
+    normalized = normalize_text(base_url).rstrip("/")
+    if normalized in {url.rstrip("/") for url in OBSOLETE_OAI_BASE_URLS}:
+        LOGGER.warning(
+            "Replacing obsolete arXiv OAI endpoint %s with current endpoint %s",
+            base_url,
+            OAI_BASE_URL,
+        )
+        return OAI_BASE_URL
+    return normalized or OAI_BASE_URL
 
 
 def publish_status(message: str) -> None:
@@ -634,6 +654,130 @@ def select_documents_from_oai(
     stats = processor.stats(resumed=resume)
     stats["skipped_oai_windows"] = skipped_oai_windows
     return processor.selected, stats
+
+
+def harvest_full_oai_stream(
+    *,
+    processor: "SelectionProcessor",
+    cache_path: Path,
+    state_path: Path,
+    state: dict[str, Any],
+    cached_ids: set[str],
+    target_count: int,
+    oai_base_url: str,
+    request_delay_seconds: float,
+    timeout_seconds: float,
+    max_retries: int,
+) -> bool:
+    publish_status(
+        "[arxiv:oai] trying documented full harvest "
+        "(ListRecords without datestamp range)"
+    )
+    token = state.get("full_harvest_resumption_token")
+    for item in iter_oai_full_records(
+        base_url=oai_base_url,
+        start_resumption_token=token,
+        request_delay_seconds=request_delay_seconds,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+    ):
+        record = item.record
+        state["full_harvest_resumption_token"] = item.next_token
+        state["full_harvest_updated_at"] = datetime.now(UTC).isoformat()
+        write_json(state_path, state)
+        if record is None:
+            continue
+        arxiv_id = normalize_text(record.get("id"))
+        if arxiv_id and arxiv_id not in cached_ids:
+            append_jsonl(cache_path, record)
+            cached_ids.add(arxiv_id)
+        if not processor.process(record, None):
+            processor.print_progress()
+            return True
+        if processor.scanned and processor.scanned % max(1, processor.progress_interval or 10_000) == 0:
+            display_tmux_status(
+                f"[arxiv:oai-full] selected={len(processor.selected):,}/{target_count:,} "
+                f"scanned={processor.scanned:,}"
+            )
+    state["full_harvest_completed"] = True
+    state.pop("full_harvest_resumption_token", None)
+    write_json(state_path, state)
+    return len(processor.selected) >= target_count
+
+
+def iter_oai_full_records(
+    *,
+    base_url: str,
+    start_resumption_token: str | None,
+    request_delay_seconds: float,
+    timeout_seconds: float,
+    max_retries: int,
+) -> Iterator[OAIHarvestItem]:
+    token = start_resumption_token
+    synthetic_date = datetime.now(UTC).date()
+    while True:
+        if token:
+            query = {"verb": "ListRecords", "resumptionToken": token}
+        else:
+            query = {"verb": "ListRecords", "metadataPrefix": OAI_METADATA_PREFIX}
+        url = base_url + "?" + urllib.parse.urlencode(query)
+        payload = fetch_bytes(
+            url,
+            request_delay_seconds=request_delay_seconds,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            headers={"User-Agent": USER_AGENT},
+        )
+        root = ET.fromstring(payload)
+        error = first_child(root, "error")
+        if error is not None:
+            code = error.attrib.get("code", "unknown")
+            message = normalize_text(error.text)
+            if code == "noRecordsMatch":
+                yield OAIHarvestItem(None, None, synthetic_date, synthetic_date, "no_records")
+                break
+            raise RuntimeError(f"OAI-PMH full harvest error: {code} {message}")
+        list_records = first_child(root, "ListRecords")
+        if list_records is None:
+            break
+        token_element = first_child(list_records, "resumptionToken")
+        next_token = normalize_text(token_element.text if token_element is not None else None) or None
+        for record_element in children(list_records, "record"):
+            metadata = first_child(record_element, "metadata")
+            if metadata is None:
+                continue
+            arxiv_element = next(iter(list(metadata)), None)
+            if arxiv_element is None:
+                continue
+            try:
+                yield OAIHarvestItem(
+                    record=parse_oai_arxiv_record(arxiv_element),
+                    next_token=next_token,
+                    window_start=synthetic_date,
+                    window_end=synthetic_date,
+                    status="record",
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Skipping malformed OAI record: %s", exc)
+        if not next_token:
+            break
+        token = next_token
+
+
+def count_recent_consecutive_406(rows: Any, stream_key: str) -> int:
+    if not isinstance(rows, list):
+        return 0
+    count = 0
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        if row.get("stream") != stream_key:
+            continue
+        if row.get("status") == "skipped_http_406":
+            count += 1
+            continue
+        break
+    return count
 
 
 class SelectionProcessor:
@@ -1425,8 +1569,10 @@ def build_report(
     metadata_only: bool,
     oai_sets: tuple[str, ...],
     oai_base_url: str,
+    oai_harvest_mode: str,
     oai_window_days: int,
     oai_earliest_date: str,
+    max_consecutive_oai_406: int,
     bulk_cache_dir: Path,
 ) -> dict[str, Any]:
     return {
@@ -1436,8 +1582,10 @@ def build_report(
             "metadata_path": str(metadata_path),
             "oai_base_url": oai_base_url,
             "oai_sets": list(oai_sets),
+            "oai_harvest_mode": oai_harvest_mode,
             "oai_window_days": oai_window_days,
             "oai_earliest_date": oai_earliest_date,
+            "max_consecutive_oai_406": max_consecutive_oai_406,
             "metadata_prefix": OAI_METADATA_PREFIX,
             "license_field": "license",
             "s3_bucket": S3_BUCKET,
@@ -1560,7 +1708,10 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = build_parser().parse_args()
-    result = run(args)
+    try:
+        result = run(args)
+    except OAIHistoricalHarvestUnavailable as exc:
+        raise SystemExit(f"arXiv OAI historical harvest unavailable: {exc}") from None
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

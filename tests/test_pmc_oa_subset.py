@@ -7,7 +7,9 @@ import httpx
 from dataset_generation.document_downloads.pmc_oa_subset import (
     DEFAULT_AWS_METADATA_WORKERS,
     DEFAULT_END_YEAR,
+    DEFAULT_PUBMED_BATCH_SIZE,
     DEFAULT_START_YEAR,
+    DEFAULT_TARGET_PER_DOMAIN,
     build_parser,
     build_report,
     classify_broad_domain,
@@ -30,7 +32,9 @@ def test_parser_defaults_to_recent_pmc_year_window() -> None:
 
     assert args.start_year == DEFAULT_START_YEAR == 2026
     assert args.end_year == DEFAULT_END_YEAR == 2026
+    assert args.target_per_domain == DEFAULT_TARGET_PER_DOMAIN == 30_000
     assert args.aws_metadata_workers == DEFAULT_AWS_METADATA_WORKERS == 64
+    assert args.pubmed_batch_size == DEFAULT_PUBMED_BATCH_SIZE == 200
 
 
 def test_license_policy_only_accepts_cc_by_and_cc0() -> None:

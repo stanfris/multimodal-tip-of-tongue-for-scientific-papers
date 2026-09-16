@@ -32,9 +32,10 @@ DISCOVERED_PMCIDS_FILENAME = "discovered_pmcids.jsonl"
 DISCOVERY_RANGES_FILENAME = "discovery_ranges.jsonl"
 AWS_METADATA_FILENAME = "aws_metadata.jsonl"
 PUBMED_METADATA_FILENAME = "pubmed_metadata.jsonl"
-DEFAULT_TARGET_PER_DOMAIN = 20_000
+DEFAULT_TARGET_PER_DOMAIN = 30_000
 DEFAULT_MAX_WORKERS = 32
 DEFAULT_AWS_METADATA_WORKERS = 64
+DEFAULT_PUBMED_BATCH_SIZE = 200
 DEFAULT_START_YEAR = 2026
 DEFAULT_END_YEAR = 2026
 DEFAULT_DISCOVERY_QUERY = (
@@ -173,6 +174,13 @@ def is_eligible_license(value: str | None) -> bool:
     return normalize_license(value) in ELIGIBLE_LICENSES
 
 
+def target_counts_met(counts: Counter[str], target_per_domain: int) -> bool:
+    return (
+        counts["Biology"] >= target_per_domain
+        and counts["Medical/Clinical Research"] >= target_per_domain
+    )
+
+
 def build_pmc_oa_subset(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     *,
@@ -192,6 +200,7 @@ def build_pmc_oa_subset(
     max_records: int | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     aws_metadata_workers: int = DEFAULT_AWS_METADATA_WORKERS,
+    pubmed_batch_size: int = DEFAULT_PUBMED_BATCH_SIZE,
     request_sleep_seconds: float = 0.11,
     retries: int = 3,
 ) -> PmcBuildResult:
@@ -211,6 +220,7 @@ def build_pmc_oa_subset(
         "include_non_english": include_non_english,
         "include_non_research": include_non_research,
         "aws_metadata_workers": aws_metadata_workers,
+        "pubmed_batch_size": pubmed_batch_size,
         "official_sources": {
             "eutils": NCBI_EUTILS_BASE_URL,
             "pmc_aws": PMC_AWS_BASE_URL,
@@ -244,28 +254,73 @@ def build_pmc_oa_subset(
         )
         print(f"Discovered {len(pmcids):,} unique PMCIDs before AWS article-version license verification.", flush=True)
 
-        written_pmcids = {normalize_pmcid_number(row["pmcid"]) for row in read_jsonl_objects(records_path, missing_ok=True)}
         records: list[dict[str, Any]] = read_jsonl_objects(records_path, missing_ok=True)
-        existing_counts = Counter(row["broad_domain"] for row in records)
-        targets_already_met = (
-            existing_counts["Biology"] >= target_per_domain
-            and existing_counts["Medical/Clinical Research"] >= target_per_domain
-        )
+        written_pmcids = {normalize_pmcid_number(row["pmcid"]) for row in records}
+        counts = Counter(row["broad_domain"] for row in records)
+        targets_already_met = target_counts_met(counts, target_per_domain)
         aws_metadata_path = output_path / AWS_METADATA_FILENAME
-        cached_metadata = read_aws_metadata_cache(aws_metadata_path) if not targets_already_met else {}
-        pending = [] if targets_already_met else [
-            pmcid for pmcid in pmcids if pmcid not in written_pmcids and pmcid not in cached_metadata
-        ]
-        pmid_to_pmcid: dict[str, str] = {}
-        metadata_by_pmcid: dict[str, dict[str, Any]] = {
-            pmcid: row["metadata"]
-            for pmcid, row in cached_metadata.items()
-            if row.get("status") == "eligible" and pmcid not in written_pmcids
-        }
-        for pmcid, version_meta in metadata_by_pmcid.items():
-            pmid = clean_id(version_meta.get("pmid"))
-            if pmid:
-                pmid_to_pmcid[pmid] = pmcid
+        pubmed_metadata_path = output_path / PUBMED_METADATA_FILENAME
+        cached_pubmed_meta = read_pubmed_metadata_cache(pubmed_metadata_path)
+        pubmed_meta = dict(cached_pubmed_meta)
+        candidate_batch: list[dict[str, Any]] = []
+        accepted_before = len(records)
+
+        def flush_candidate_batch() -> None:
+            nonlocal counts
+            if not candidate_batch or target_counts_met(counts, target_per_domain):
+                candidate_batch.clear()
+                return
+            batch = list(candidate_batch)
+            candidate_batch.clear()
+            pmids_to_fetch = sorted(
+                {
+                    pmid
+                    for pmid in (clean_id(version_meta.get("pmid")) for version_meta in batch)
+                    if pmid and pmid not in pubmed_meta
+                }
+            )
+            if pmids_to_fetch:
+                fetched = fetch_pubmed_metadata(
+                    client,
+                    pmids_to_fetch,
+                    email=email,
+                    api_key=api_key,
+                    tool=tool,
+                    request_sleep_seconds=request_sleep_seconds,
+                    retries=retries,
+                    cache_path=pubmed_metadata_path,
+                    batch_size=pubmed_batch_size,
+                )
+                pubmed_meta.update(fetched)
+            for version_meta in batch:
+                if target_counts_met(counts, target_per_domain):
+                    return
+                pmcid = normalize_pmcid_number(version_meta["pmcid"])
+                if pmcid in written_pmcids:
+                    continue
+                pmid = clean_id(version_meta.get("pmid"))
+                record = build_record(version_meta, pubmed_meta.get(pmid, {}))
+                if not include_non_english and record["language"] and record["language"].lower() != "eng":
+                    continue
+                if not include_non_research and should_exclude_article_type(record["article_type"]):
+                    continue
+                if record["broad_domain"] not in {"Biology", "Medical/Clinical Research"}:
+                    continue
+                if counts[record["broad_domain"]] >= target_per_domain:
+                    continue
+                append_jsonl_object(records_path, record)
+                records.append(record)
+                written_pmcids.add(pmcid)
+                counts[record["broad_domain"]] += 1
+                accepted_now = len(records) - accepted_before
+                if accepted_now == 1 or accepted_now % 100 == 0 or target_counts_met(counts, target_per_domain):
+                    print(
+                        "\rAccepted records: "
+                        f"{accepted_now:,} new; Biology={counts['Biology']:,}; "
+                        f"Medical/Clinical={counts['Medical/Clinical Research']:,}",
+                        end="",
+                        flush=True,
+                    )
 
         print_phase("Checking PMC AWS JSON metadata before any PDF download")
         if targets_already_met:
@@ -275,12 +330,31 @@ def build_pmc_oa_subset(
             )
         if written_pmcids:
             print(f"Resuming with {len(written_pmcids):,} PMCIDs already present in {records_path}.", flush=True)
+        if cached_pubmed_meta:
+            print(f"Loaded {len(cached_pubmed_meta):,} cached PubMed metadata records.", flush=True)
+
+        cached_metadata = read_aws_metadata_cache(aws_metadata_path) if not targets_already_met else {}
         if cached_metadata:
+            cached_eligible = 0
+            for pmcid, row in cached_metadata.items():
+                if row.get("status") != "eligible" or pmcid in written_pmcids:
+                    continue
+                candidate_batch.append(row["metadata"])
+                cached_eligible += 1
+                if len(candidate_batch) >= pubmed_batch_size:
+                    flush_candidate_batch()
+                    if target_counts_met(counts, target_per_domain):
+                        break
+            flush_candidate_batch()
             print(
                 f"Loaded {len(cached_metadata):,} cached AWS metadata decisions; "
-                f"{len(metadata_by_pmcid):,} cached eligible records still need classification.",
+                f"{cached_eligible:,} cached eligible records were available for classification.",
                 flush=True,
             )
+
+        pending = [] if target_counts_met(counts, target_per_domain) else [
+            pmcid for pmcid in pmcids if pmcid not in written_pmcids and pmcid not in cached_metadata
+        ]
         for completed, pmcid, version_meta in iter_eligible_article_versions(
             pending,
             max_workers=aws_metadata_workers,
@@ -297,7 +371,14 @@ def build_pmc_oa_subset(
                     },
                 )
                 if completed == 1 or completed % 100 == 0 or completed == len(pending):
-                    print_inline_progress("AWS metadata", completed, len(pending), eligible=len(metadata_by_pmcid))
+                    print_inline_progress(
+                        "AWS metadata",
+                        completed,
+                        len(pending),
+                        accepted=len(records),
+                        biology=counts["Biology"],
+                        medical=counts["Medical/Clinical Research"],
+                    )
                 continue
             if version_meta is None:
                 append_jsonl_object(
@@ -309,7 +390,14 @@ def build_pmc_oa_subset(
                     },
                 )
                 if completed == 1 or completed % 100 == 0 or completed == len(pending):
-                    print_inline_progress("AWS metadata", completed, len(pending), eligible=len(metadata_by_pmcid))
+                    print_inline_progress(
+                        "AWS metadata",
+                        completed,
+                        len(pending),
+                        accepted=len(records),
+                        biology=counts["Biology"],
+                        medical=counts["Medical/Clinical Research"],
+                    )
                 continue
             append_jsonl_object(
                 aws_metadata_path,
@@ -320,61 +408,23 @@ def build_pmc_oa_subset(
                     "checked_at": dt.datetime.now(dt.UTC).isoformat(),
                 },
             )
-            pmid = clean_id(version_meta.get("pmid"))
-            if pmid:
-                pmid_to_pmcid[pmid] = pmcid
-            metadata_by_pmcid[pmcid] = version_meta
+            candidate_batch.append(version_meta)
+            if len(candidate_batch) >= pubmed_batch_size:
+                flush_candidate_batch()
             if completed == 1 or completed % 100 == 0 or completed == len(pending):
-                print_inline_progress("AWS metadata", completed, len(pending), eligible=len(metadata_by_pmcid))
+                print_inline_progress(
+                    "AWS metadata",
+                    completed,
+                    len(pending),
+                    accepted=len(records),
+                    biology=counts["Biology"],
+                    medical=counts["Medical/Clinical Research"],
+                )
+            if target_counts_met(counts, target_per_domain):
+                break
+        flush_candidate_batch()
         if pending:
             print()
-        print(f"License/PDF-gated article versions ready for PubMed enrichment: {len(metadata_by_pmcid):,}", flush=True)
-
-        print_phase("Fetching PubMed subject metadata")
-        pubmed_metadata_path = output_path / PUBMED_METADATA_FILENAME
-        cached_pubmed_meta = read_pubmed_metadata_cache(pubmed_metadata_path)
-        pmids_for_metadata = sorted(pmid_to_pmcid)
-        pmids_to_fetch = [pmid for pmid in pmids_for_metadata if pmid not in cached_pubmed_meta]
-        if cached_pubmed_meta:
-            print(f"Loaded {len(cached_pubmed_meta):,} cached PubMed metadata records.", flush=True)
-        fetched_pubmed_meta = {} if targets_already_met else fetch_pubmed_metadata(
-            client,
-            pmids_to_fetch,
-            email=email,
-            api_key=api_key,
-            tool=tool,
-            request_sleep_seconds=request_sleep_seconds,
-            retries=retries,
-            cache_path=pubmed_metadata_path,
-        )
-        pubmed_meta = {**cached_pubmed_meta, **fetched_pubmed_meta}
-        print(f"Fetched PubMed metadata for {len(pubmed_meta):,} PMID-linked records.", flush=True)
-
-        print_phase("Classifying records into Biology and Medical/Clinical Research")
-        accepted_before = len(records)
-        for pmcid, version_meta in ([] if targets_already_met else metadata_by_pmcid.items()):
-            pmid = clean_id(version_meta.get("pmid"))
-            record = build_record(version_meta, pubmed_meta.get(pmid, {}))
-            if not include_non_english and record["language"] and record["language"].lower() != "eng":
-                continue
-            if not include_non_research and should_exclude_article_type(record["article_type"]):
-                continue
-            if record["broad_domain"] not in {"Biology", "Medical/Clinical Research"}:
-                continue
-            append_jsonl_object(records_path, record)
-            records.append(record)
-            counts = Counter(row["broad_domain"] for row in records)
-            accepted_now = len(records) - accepted_before
-            if accepted_now == 1 or accepted_now % 100 == 0:
-                print(
-                    "\rAccepted records: "
-                    f"{accepted_now:,} new; Biology={counts['Biology']:,}; "
-                    f"Medical/Clinical={counts['Medical/Clinical Research']:,}",
-                    end="",
-                    flush=True,
-                )
-            if counts["Biology"] >= target_per_domain and counts["Medical/Clinical Research"] >= target_per_domain:
-                break
         if len(records) > accepted_before:
             print()
     finally:
@@ -718,18 +768,30 @@ def iter_eligible_article_versions(
         limits=limits,
         follow_redirects=True,
     ) as client:
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {
-                executor.submit(select_eligible_article_version, client, pmcid, retries=retries): pmcid
-                for pmcid in pmcids
-            }
-            for completed, future in enumerate(as_completed(futures), start=1):
-                pmcid = futures[future]
+        executor = ThreadPoolExecutor(max_workers=worker_count)
+        futures = {}
+        submitted = completed = 0
+        pmcid_iter = iter(pmcids)
+        try:
+            while submitted < total and len(futures) < worker_count:
+                pmcid = next(pmcid_iter)
+                futures[executor.submit(select_eligible_article_version, client, pmcid, retries=retries)] = pmcid
+                submitted += 1
+            while futures:
+                done = next(as_completed(futures))
+                pmcid = futures.pop(done)
+                completed += 1
+                if submitted < total:
+                    next_pmcid = next(pmcid_iter)
+                    futures[executor.submit(select_eligible_article_version, client, next_pmcid, retries=retries)] = next_pmcid
+                    submitted += 1
                 try:
-                    yield completed, pmcid, future.result()
+                    yield completed, pmcid, done.result()
                 except Exception as exc:  # noqa: BLE001 - keep discovery moving.
                     LOGGER.warning("Failed AWS metadata check for PMC%s: %s", pmcid, exc)
                     yield completed, pmcid, {"_status": "failed", "_error": str(exc)}
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 def eutils_get(
@@ -1338,6 +1400,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_AWS_METADATA_WORKERS,
         help="Concurrent PMC AWS JSON metadata/license checks before PDF download.",
     )
+    parser.add_argument(
+        "--pubmed-batch-size",
+        type=int,
+        default=DEFAULT_PUBMED_BATCH_SIZE,
+        help="PMIDs to enrich per PubMed XML fetch/classification batch.",
+    )
     parser.add_argument("--request-sleep-seconds", type=float, default=0.11)
     parser.add_argument("--retries", type=int, default=3)
     return parser
@@ -1362,6 +1430,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         max_records=args.max_records,
         max_workers=args.max_workers,
         aws_metadata_workers=args.aws_metadata_workers,
+        pubmed_batch_size=args.pubmed_batch_size,
         request_sleep_seconds=args.request_sleep_seconds,
         retries=args.retries,
     )
