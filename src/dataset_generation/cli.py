@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         "build-arxiv-open-reuse",
         parents=[build_arxiv_open_reuse_parser()],
         add_help=False,
-        help="Harvest arXiv OAI-PMH metadata, filter to CC BY/CC0 Physics and Engineering papers, then download PDFs.",
+        help="Stream the Kaggle arXiv metadata snapshot, filter strict open licenses, then optionally download PDFs.",
     )
     subparsers.add_parser(
         "build-pmc-oa-subset",

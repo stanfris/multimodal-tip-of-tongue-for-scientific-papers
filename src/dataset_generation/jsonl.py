@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Any
 
 
-def read_jsonl_objects(path: str | Path, *, missing_ok: bool = False) -> list[dict[str, Any]]:
+def read_jsonl_objects(
+    path: str | Path,
+    *,
+    missing_ok: bool = False,
+    skip_invalid: bool = False,
+) -> list[dict[str, Any]]:
     """Read a JSONL file whose nonblank lines must all be JSON objects."""
     data_path = Path(path)
     if not data_path.exists():
@@ -23,8 +29,22 @@ def read_jsonl_objects(path: str | Path, *, missing_ok: bool = False) -> list[di
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
+            if skip_invalid:
+                warnings.warn(
+                    f"Skipping invalid JSONL at {data_path}:{line_number}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
             raise ValueError(f"Invalid JSONL at {data_path}:{line_number}") from exc
         if not isinstance(row, dict):
+            if skip_invalid:
+                warnings.warn(
+                    f"Skipping non-object JSONL row at {data_path}:{line_number}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
             raise ValueError(f"Expected JSON object at {data_path}:{line_number}")
         rows.append(row)
     return rows

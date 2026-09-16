@@ -1,117 +1,179 @@
 from __future__ import annotations
 
+import json
 import urllib.error
-from xml.etree import ElementTree
 
 import pytest
 
 from dataset_generation.document_downloads.arxiv_open_reuse import HTTPFetchError
 from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
-from dataset_generation.document_downloads.arxiv_open_reuse import classify_broad_domains
-from dataset_generation.document_downloads.arxiv_open_reuse import classify_license
+from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
+from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
 from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
+from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
-from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_record
-from dataset_generation.document_downloads.arxiv_open_reuse import select_records_for_domain_targets
-from dataset_generation.document_downloads.arxiv_open_reuse import url_with_params
+from dataset_generation.document_downloads.arxiv_open_reuse import pdf_filename_for_arxiv_id
 
 
-def test_license_normalization_accepts_only_cc_by_and_cc0() -> None:
-    assert classify_license(normalize_license_url("http://creativecommons.org/licenses/by/4.0/")) == "cc-by"
-    assert classify_license(normalize_license_url("https://creativecommons.org/publicdomain/zero/1.0/")) == "cc0"
-    assert classify_license(normalize_license_url("http://creativecommons.org/licenses/publicdomain/")) == "cc0"
+def kaggle_record(
+    arxiv_id: str,
+    *,
+    categories: str = "physics.ins-det",
+    license_url: str | None = "http://creativecommons.org/licenses/by/4.0/",
+    created: str = "Mon, 1 Jan 2024 00:00:00 GMT",
+) -> dict:
+    return {
+        "id": arxiv_id,
+        "submitter": "Marie Curie",
+        "authors": "Marie Curie",
+        "authors_parsed": [["Curie", "Marie", ""]],
+        "title": "A robust instrument",
+        "comments": "12 pages",
+        "journal-ref": None,
+        "doi": "10.1234/example",
+        "report-no": None,
+        "categories": categories,
+        "license": license_url,
+        "abstract": "Measurement details.",
+        "versions": [{"version": "v1", "created": created}],
+        "update_date": "2024-01-02",
+    }
 
-    assert (
-        classify_license(normalize_license_url("http://arxiv.org/licenses/nonexclusive-distrib/1.0/"))
-        == "arxiv-default"
+
+def write_snapshot(path, rows: list[dict | str]) -> None:  # type: ignore[no-untyped-def]
+    lines = [row if isinstance(row, str) else json.dumps(row) for row in rows]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_license_normalization_maps_urls_to_allowed_labels() -> None:
+    assert normalize_license_url("http://creativecommons.org/licenses/by/4.0/") == (
+        "https://creativecommons.org/licenses/by/4.0"
     )
-    assert (
-        classify_license(normalize_license_url("https://creativecommons.org/licenses/by-nc/4.0/"))
-        == "other-creative-commons"
-    )
-    assert classify_license(normalize_license_url("https://creativecommons.org/licenses/by-sa/4.0/")) == (
-        "other-creative-commons"
-    )
+    assert normalize_license("https://creativecommons.org/licenses/by-sa/4.0/").label == "CC BY-SA 4.0"
+    assert normalize_license("https://creativecommons.org/publicdomain/zero/1.0/").label == "CC0 1.0"
+    assert normalize_license("http://arxiv.org/licenses/nonexclusive-distrib/1.0/").family == "arxiv-default"
 
 
-def test_category_classification_keeps_cross_domain_records() -> None:
-    assert classify_broad_domains(["hep-th", "quant-ph"]) == ["physics"]
-    assert classify_broad_domains(["eess.SP"]) == ["engineering"]
-    assert classify_broad_domains(["astro-ph.IM", "cs.RO"]) == ["physics", "engineering"]
-    assert classify_broad_domains(["cs.CL"]) == []
-
-
-def test_parse_oai_record_extracts_required_metadata_and_pdf_location() -> None:
-    xml = """
-    <record xmlns="http://www.openarchives.org/OAI/2.0/">
-      <header>
-        <identifier>oai:arXiv.org:2401.01234</identifier>
-        <datestamp>2024-01-05</datestamp>
-        <setSpec>physics</setSpec>
-      </header>
-      <metadata>
-        <arXiv xmlns="http://arxiv.org/OAI/arXiv/">
-          <id>2401.01234</id>
-          <created>2024-01-02</created>
-          <title> A robust instrument </title>
-          <authors>
-            <author>
-              <keyname>Curie</keyname>
-              <forenames>Marie</forenames>
-            </author>
-          </authors>
-          <categories>physics.ins-det eess.SP</categories>
-          <license>http://creativecommons.org/licenses/by/4.0/</license>
-          <abstract> Measurement details. </abstract>
-        </arXiv>
-      </metadata>
-    </record>
-    """
-
-    record = parse_oai_record(ElementTree.fromstring(xml), source_set="physics")
-
-    assert record is not None
-    assert record["arxiv_id"] == "2401.01234"
-    assert record["title"] == "A robust instrument"
-    assert record["authors"] == [{"forenames": "Marie", "keyname": "Curie", "name": "Marie Curie", "suffix": None}]
-    assert record["subject_categories"] == ["physics.ins-det", "eess.SP"]
-    assert record["primary_category"] == "physics.ins-det"
-    assert record["broad_domains"] == ["physics", "engineering"]
-    assert record["license_url"] == "http://creativecommons.org/licenses/by/4.0/"
-    assert record["normalized_license_url"] == "https://creativecommons.org/licenses/by/4.0"
-    assert record["license_family"] == "cc-by"
-    assert record["pdf_url"] == "https://arxiv.org/pdf/2401.01234"
-    assert record["pdf_filename"] == "2401.01234.pdf"
-
-
-def test_select_records_for_domain_targets_deduplicates_and_caps_per_domain() -> None:
-    records = [
-        {"arxiv_id": "3", "created": "2020-01-03", "broad_domains": ["physics"]},
-        {"arxiv_id": "1", "created": "2020-01-01", "broad_domains": ["physics", "engineering"]},
-        {"arxiv_id": "2", "created": "2020-01-02", "broad_domains": ["engineering"]},
-        {"arxiv_id": "4", "created": "2020-01-04", "broad_domains": ["engineering"]},
-    ]
-
-    selected = select_records_for_domain_targets(records, target_per_domain=2)
-
-    assert [record["arxiv_id"] for record in selected] == ["1", "2", "3"]
-
-
-def test_url_with_params_does_not_double_encode_resumption_tokens() -> None:
-    url = url_with_params(
-        "https://oaipmh.arxiv.org/oai",
-        {
-            "verb": "ListRecords",
-            "resumptionToken": "verb%3DListRecords%26metadataPrefix%3DarXiv%26set%3Dphysics%26skip%3D1300",
-        },
+def test_filter_candidate_uses_snapshot_license_before_pdf_download() -> None:
+    candidate, rejection = filter_candidate(
+        kaggle_record("2401.01234v2", categories="physics.ins-det eess.SP"),
+        category_prefixes=("physics.", "eess."),
+        start_year=2020,
+        end_year=2026,
+        allowed_licenses={"CC BY 4.0"},
     )
 
-    assert "resumptionToken=verb%3DListRecords%26metadataPrefix%3DarXiv%26set%3Dphysics%26skip%3D1300" in url
-    assert "%253D" not in url
+    assert rejection is None
+    assert candidate is not None
+    assert candidate["arxiv_id"] == "2401.01234v2"
+    assert candidate["license"] == "CC BY 4.0"
+    assert candidate["categories"] == ["physics.ins-det", "eess.SP"]
+    assert candidate["primary_category"] == "physics.ins-det"
+    assert candidate["latest_version_date"] == "Mon, 1 Jan 2024 00:00:00 GMT"
+    assert candidate["pdf_url"] == "https://arxiv.org/pdf/2401.01234v2"
 
 
-def test_fetch_bytes_retries_406_with_fallback_accept_header(monkeypatch) -> None:
-    requests = []
+@pytest.mark.parametrize(
+    ("record", "reason"),
+    [
+        (kaggle_record("2401.1", categories="cs.CL"), "wrong_category"),
+        (kaggle_record("2401.2", license_url=None), "missing_license"),
+        (
+            kaggle_record("2401.3", license_url="http://arxiv.org/licenses/nonexclusive-distrib/1.0/"),
+            "disallowed_license",
+        ),
+        (kaggle_record("2401.4", created="Mon, 1 Jan 2010 00:00:00 GMT"), "outside_date_range"),
+    ],
+)
+def test_filter_candidate_rejects_unsuitable_records(record, reason) -> None:  # type: ignore[no-untyped-def]
+    candidate, rejection = filter_candidate(
+        record,
+        category_prefixes=("physics.", "eess."),
+        start_year=2020,
+        end_year=2026,
+        allowed_licenses={"CC BY 4.0"},
+    )
+
+    assert candidate is None
+    assert rejection == reason
+
+
+def test_build_corpus_streams_snapshot_and_writes_selected_manifest(tmp_path) -> None:
+    metadata = tmp_path / "arxiv-metadata-oai-snapshot.json"
+    write_snapshot(
+        metadata,
+        [
+            kaggle_record("2401.00001v1", categories="cs.CL"),
+            kaggle_record("2401.00002v1", license_url="http://arxiv.org/licenses/nonexclusive-distrib/1.0/"),
+            "{bad json",
+            kaggle_record("2401.00003v1", categories="physics.ins-det"),
+            kaggle_record("2401.00004v1", categories="eess.SP", license_url="https://creativecommons.org/licenses/by-sa/4.0/"),
+        ],
+    )
+
+    result = build_arxiv_open_reuse_corpus(
+        metadata_path=metadata,
+        output_dir=tmp_path / "out",
+        metadata_only=True,
+        target_count=2,
+        category_prefixes=("physics.", "eess."),
+        allowed_licenses={"CC BY 4.0", "CC BY-SA 4.0"},
+        progress_interval=0,
+    )
+
+    selected_path = tmp_path / "out" / "selected_arxiv_documents.jsonl"
+    selected = [json.loads(line) for line in selected_path.read_text(encoding="utf-8").splitlines()]
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+
+    assert result.metadata_records == 5
+    assert result.eligible_records == 2
+    assert [record["arxiv_id"] for record in selected] == ["2401.00003v1", "2401.00004v1"]
+    assert report["rejection_counts"]["wrong_category"] == 1
+    assert report["rejection_counts"]["disallowed_license"] == 1
+    assert report["rejection_counts"]["malformed_metadata"] == 1
+    assert report["selected_license_counts"] == {"CC BY 4.0": 1, "CC BY-SA 4.0": 1}
+
+
+def test_pdf_filename_handles_old_style_arxiv_ids() -> None:
+    assert pdf_filename_for_arxiv_id("hep-th/9901001v1") == "hep-th_9901001v1.pdf"
+
+
+def test_download_eligible_pdfs_resumes_existing_valid_pdf(monkeypatch, tmp_path) -> None:
+    existing = tmp_path / "2401.00001v1.pdf"
+    existing.write_bytes(b"%PDF\n")
+
+    def fail_download_pdf(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("valid existing PDFs should be skipped")
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_pdf", fail_download_pdf)
+
+    stats = download_eligible_pdfs(
+        [
+            {
+                "arxiv_id": "2401.00001v1",
+                "pdf_url": "https://arxiv.org/pdf/2401.00001v1",
+                "pdf_filename": "2401.00001v1.pdf",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "normalized_license_url": "https://creativecommons.org/licenses/by/4.0",
+                "license": "CC BY 4.0",
+                "license_family": "cc-by",
+            }
+        ],
+        output_dir=tmp_path,
+        overwrite=False,
+        request_delay_seconds=0,
+        timeout_seconds=10,
+        max_retries=1,
+        max_workers=1,
+    )
+
+    assert stats["downloaded"] == 0
+    assert stats["skipped"] == 1
+    assert stats["failed"] == 0
+
+
+def test_fetch_bytes_retries_transient_http_errors(monkeypatch) -> None:
+    calls = []
 
     class FakeResponse:
         def __enter__(self) -> "FakeResponse":
@@ -121,89 +183,37 @@ def test_fetch_bytes_retries_406_with_fallback_accept_header(monkeypatch) -> Non
             return None
 
         def read(self) -> bytes:
-            return b"<OAI-PMH />"
+            return b"%PDF\n"
 
     def fake_urlopen(request, *, timeout):  # type: ignore[no-untyped-def]
-        requests.append(request)
-        if len(requests) == 1:
-            raise urllib.error.HTTPError(request.full_url, 406, "Not Acceptable", hdrs=None, fp=None)
+        calls.append(request)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", hdrs=None, fp=None)
         return FakeResponse()
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     payload = fetch_bytes(
-        "https://oaipmh.arxiv.org/oai?verb=ListRecords&metadataPrefix=arXiv&set=physics",
+        "https://arxiv.org/pdf/2401.00001v1",
         request_delay_seconds=0,
         timeout_seconds=10,
         max_retries=1,
     )
 
-    assert payload == b"<OAI-PMH />"
-    assert requests[0].headers["Accept"] == "application/xml,text/xml,*/*"
-    assert requests[1].headers["Accept"] == "*/*"
+    assert payload == b"%PDF\n"
+    assert len(calls) == 2
 
 
-def test_auto_metadata_source_falls_back_when_oai_returns_406(monkeypatch, tmp_path) -> None:
-    calls = []
+def test_fetch_bytes_stops_on_permanent_http_errors(monkeypatch) -> None:
+    def fake_urlopen(request, *, timeout):  # type: ignore[no-untyped-def]
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
 
-    def fake_oai_harvest(**kwargs):  # type: ignore[no-untyped-def]
-        calls.append("oai")
-        error = urllib.error.HTTPError("https://oaipmh.arxiv.org/oai", 406, "Not Acceptable", hdrs=None, fp=None)
-        raise HTTPFetchError("https://oaipmh.arxiv.org/oai", error, status_code=406)
-
-    def fake_api_abs_harvest(**kwargs):  # type: ignore[no-untyped-def]
-        calls.append("api-abs")
-        return 0
-
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.harvest_oai_metadata", fake_oai_harvest)
-    monkeypatch.setattr(
-        "dataset_generation.document_downloads.arxiv_open_reuse.harvest_api_abs_metadata",
-        fake_api_abs_harvest,
-    )
-
-    result = build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True, metadata_source="auto")
-
-    assert calls == ["oai", "api-abs"]
-    assert result.metadata_records == 0
-    assert '"metadata_source": "api-abs"' in (tmp_path / "report.json").read_text(encoding="utf-8")
-
-
-def test_default_metadata_source_skips_oai(monkeypatch, tmp_path) -> None:
-    calls = []
-
-    def fail_oai_harvest(**kwargs):  # type: ignore[no-untyped-def]
-        raise AssertionError("default metadata source should skip OAI")
-
-    def fake_api_abs_harvest(**kwargs):  # type: ignore[no-untyped-def]
-        calls.append("api-abs")
-        return 0
-
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.harvest_oai_metadata", fail_oai_harvest)
-    monkeypatch.setattr(
-        "dataset_generation.document_downloads.arxiv_open_reuse.harvest_api_abs_metadata",
-        fake_api_abs_harvest,
-    )
-
-    result = build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True)
-
-    assert calls == ["api-abs"]
-    assert result.metadata_records == 0
-    assert '"metadata_source": "api-abs"' in (tmp_path / "report.json").read_text(encoding="utf-8")
-
-
-def test_forced_oai_metadata_source_does_not_fall_back(monkeypatch, tmp_path) -> None:
-    def fake_oai_harvest(**kwargs):  # type: ignore[no-untyped-def]
-        error = urllib.error.HTTPError("https://oaipmh.arxiv.org/oai", 406, "Not Acceptable", hdrs=None, fp=None)
-        raise HTTPFetchError("https://oaipmh.arxiv.org/oai", error, status_code=406)
-
-    def fail_api_abs_harvest(**kwargs):  # type: ignore[no-untyped-def]
-        raise AssertionError("api-abs fallback should not run when metadata_source='oai'")
-
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.harvest_oai_metadata", fake_oai_harvest)
-    monkeypatch.setattr(
-        "dataset_generation.document_downloads.arxiv_open_reuse.harvest_api_abs_metadata",
-        fail_api_abs_harvest,
-    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     with pytest.raises(HTTPFetchError):
-        build_arxiv_open_reuse_corpus(output_dir=tmp_path, metadata_only=True, metadata_source="oai")
+        fetch_bytes(
+            "https://arxiv.org/pdf/missing",
+            request_delay_seconds=0,
+            timeout_seconds=10,
+            max_retries=5,
+        )
