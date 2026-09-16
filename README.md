@@ -219,7 +219,7 @@ metadata checks are retried, cached PubMed metadata is reused, and existing
 valid PDFs are skipped.
 
 The final report explicitly states whether the strict CC BY/CC0 policy produced
-at least 10,000 Biology papers and 10,000 Medical/Clinical Research papers.
+at least 20,000 Biology papers and 20,000 Medical/Clinical Research papers.
 
 ## arXiv Open-Reuse Physics and Engineering Corpus
 
@@ -246,7 +246,7 @@ uv run dataset-generation download-documents arxiv-open-reuse
 scripts/document_downloads/download_arxiv_open_reuse_pdfs.sh
 ```
 
-The default target is 10,000 eligible PDFs per broad domain when enough CC BY
+The default target is 20,000 eligible PDFs per broad domain when enough CC BY
 or CC0 papers exist. The default OAI sets are `physics`, `eess`, `cs:cs:RO`,
 and `math:math:OC`; override them by repeating `--oai-set`. Outputs are written
 under `data/arxiv_open_reuse/`:
