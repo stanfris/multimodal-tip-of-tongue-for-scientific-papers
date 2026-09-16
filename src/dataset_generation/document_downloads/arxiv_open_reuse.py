@@ -1,10 +1,10 @@
-"""Build an arXiv PDF corpus from Kaggle snapshot metadata and bulk S3 PDFs.
+"""Build an arXiv PDF corpus from Cornell's Kaggle arXiv dataset.
 
 The Cornell arXiv Kaggle snapshot mirrors arXiv OAI metadata in JSONL form. We
 stream that snapshot, apply the strict reusable-license filter before any PDF
-work, then retrieve selected PDFs from arXiv's requester-pays S3 bulk PDF tar
-files. OAI helpers remain for legacy incremental use, but bulk collection does
-not depend on the live OAI endpoint.
+work, then retrieve selected PDFs from the public Google Cloud bucket linked by
+the official Kaggle dataset. OAI helpers remain for legacy incremental use, but
+bulk collection does not depend on the live OAI endpoint.
 """
 
 from __future__ import annotations
@@ -16,13 +16,12 @@ import os
 import re
 import shutil
 import subprocess
-import tarfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -38,9 +37,10 @@ DEFAULT_SELECTED_MANIFEST = "selected_arxiv_documents.jsonl"
 DEFAULT_ELIGIBLE_MANIFEST = "eligible_records.jsonl"
 DEFAULT_KAGGLE_SNAPSHOT_FILENAME = "arxiv-metadata-oai-snapshot.json"
 KAGGLE_ARXIV_DATASET = "Cornell-University/arxiv"
+KAGGLE_ARXIV_GCS_BUCKET = "arxiv-dataset"
+KAGGLE_ARXIV_GCS_ROOT_PREFIX = "arxiv"
 DEFAULT_OAI_CACHE = "oai_metadata.jsonl"
 DEFAULT_OAI_STATE = "oai_harvest_state.json"
-DEFAULT_BULK_CACHE_DIR = "bulk_s3"
 DEFAULT_TARGET_COUNT = 20_000
 DEFAULT_TARGET_PER_DOMAIN = DEFAULT_TARGET_COUNT
 DEFAULT_CATEGORY_PREFIXES = ("physics.", "eess.")
@@ -63,8 +63,6 @@ OBSOLETE_OAI_BASE_URLS = {
     "https://export.arxiv.org/oai2/",
 }
 OAI_METADATA_PREFIX = "arXiv"
-S3_BUCKET = "arxiv"
-S3_PDF_MANIFEST_KEY = "pdf/arXiv_pdf_manifest.xml"
 TRANSIENT_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 PERMANENT_HTTP_STATUS_CODES = {400, 401, 403, 404, 410}
 DEFAULT_ARXIV_LICENSE = "https://arxiv.org/licenses/nonexclusive-distrib/1.0"
@@ -97,16 +95,6 @@ class ArxivBuildResult:
 
 
 @dataclass(frozen=True)
-class BulkPdfChunk:
-    filename: str
-    first_item: str
-    last_item: str
-    yymm: str
-    md5sum: str | None
-    size: int | None
-
-
-@dataclass(frozen=True)
 class OAIHarvestItem:
     record: dict[str, Any] | None
     next_token: str | None
@@ -132,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Stream the Cornell arXiv Kaggle snapshot, select strict open-license physics/eess papers, "
-            "and retrieve PDFs from arXiv's bulk S3 tar archives."
+            "and retrieve matching PDFs from the official arXiv Kaggle/GCS dataset."
         )
     )
     parser.add_argument(
@@ -218,10 +206,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--bulk-cache-dir", type=Path, help="Cache directory for S3 manifest and tar chunks.")
-    parser.add_argument("--keep-bulk-archives", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--s3-manifest", type=Path, help="Use an existing arXiv PDF S3 manifest XML file.")
-    parser.add_argument("--aws-cli", default="aws", help="AWS CLI executable used for requester-pays S3 downloads.")
 
     # Kept for old scripts/commands.
     parser.add_argument("--metadata-source", choices=("oai", "snapshot"), default="snapshot", help=argparse.SUPPRESS)
@@ -270,10 +254,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         max_retries=args.max_retries,
         max_workers=args.max_workers,
         resume=args.resume,
-        bulk_cache_dir=args.bulk_cache_dir,
-        keep_bulk_archives=args.keep_bulk_archives,
-        s3_manifest_path=args.s3_manifest,
-        aws_cli=args.aws_cli,
         metadata_source=args.metadata_source,
         selection_seed=args.selection_seed,
     )
@@ -316,10 +296,6 @@ def build_arxiv_open_reuse_corpus(
     max_retries: int = DEFAULT_MAX_RETRIES,
     max_workers: int = DEFAULT_MAX_WORKERS,
     resume: bool = True,
-    bulk_cache_dir: str | Path | None = None,
-    keep_bulk_archives: bool = True,
-    s3_manifest_path: str | Path | None = None,
-    aws_cli: str = "aws",
     metadata_source: str = "snapshot",
     selection_seed: int | None = None,
 ) -> ArxivBuildResult:
@@ -330,7 +306,6 @@ def build_arxiv_open_reuse_corpus(
     eligible_path = output_path / DEFAULT_ELIGIBLE_MANIFEST
     cache_path = output_path / DEFAULT_OAI_CACHE
     state_path = output_path / DEFAULT_OAI_STATE
-    bulk_cache_path = Path(bulk_cache_dir) if bulk_cache_dir is not None else output_path / DEFAULT_BULK_CACHE_DIR
     allowed = allowed_licenses or set(DEFAULT_ALLOWED_LICENSE_LABELS)
     oai_base_url = normalize_oai_base_url(oai_base_url)
     if metadata_source == "oai":
@@ -384,6 +359,7 @@ def build_arxiv_open_reuse_corpus(
             max_retries=max_retries,
         )
 
+    selected_records = [ensure_kaggle_pdf_fields(record) for record in selected_records]
     write_jsonl(selected_records, eligible_path)
 
     download_stats = {"downloaded": 0, "skipped": 0, "failed": 0, "failures": []}
@@ -396,10 +372,6 @@ def build_arxiv_open_reuse_corpus(
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             max_workers=max_workers,
-            bulk_cache_dir=bulk_cache_path,
-            keep_bulk_archives=keep_bulk_archives,
-            s3_manifest_path=Path(s3_manifest_path) if s3_manifest_path is not None else None,
-            aws_cli=aws_cli,
         )
 
     report = build_report(
@@ -420,7 +392,6 @@ def build_arxiv_open_reuse_corpus(
         oai_window_days=oai_window_days,
         oai_earliest_date=oai_earliest_date,
         max_consecutive_oai_406=max_consecutive_oai_406,
-        bulk_cache_dir=bulk_cache_path,
         metadata_source=metadata_source,
         selection_seed=selection_seed,
     )
@@ -465,6 +436,20 @@ def selected_domain_counts(records: Iterable[dict[str, Any]], category_prefixes:
                     counts[prefix] += 1
                     break
     return counts
+
+
+def ensure_kaggle_pdf_fields(record: dict[str, Any]) -> dict[str, Any]:
+    pdf_arxiv_id = normalize_text(record.get("pdf_arxiv_id"))
+    if not pdf_arxiv_id:
+        pdf_arxiv_id = versioned_arxiv_id(str(record["arxiv_id"]), record.get("versions") or [])
+    pdf_object = normalize_text(record.get("kaggle_gcs_object")) or kaggle_pdf_object_name(pdf_arxiv_id)
+    updated = dict(record)
+    updated["pdf_arxiv_id"] = pdf_arxiv_id
+    updated["pdf_filename"] = normalize_text(record.get("pdf_filename")) or pdf_filename_for_arxiv_id(pdf_arxiv_id)
+    updated["pdf_url"] = kaggle_pdf_media_url(pdf_object)
+    updated["kaggle_gcs_bucket"] = KAGGLE_ARXIV_GCS_BUCKET
+    updated["kaggle_gcs_object"] = pdf_object
+    return updated
 
 
 def resumed_scan_stats(selected_records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1228,12 +1213,19 @@ def filter_candidate(
         return None, "missing_license"
     if license_info.label not in allowed_licenses:
         return None, "disallowed_license"
-    pdf_filename = pdf_filename_for_arxiv_id(arxiv_id)
+    versions = record.get("versions") or []
+    try:
+        pdf_arxiv_id = versioned_arxiv_id(arxiv_id, versions)
+        pdf_object = kaggle_pdf_object_name(pdf_arxiv_id)
+        pdf_filename = pdf_filename_for_arxiv_id(pdf_arxiv_id)
+    except ValueError:
+        return None, "missing_pdf_information"
     if not pdf_filename:
         return None, "missing_pdf_information"
 
     return {
         "arxiv_id": arxiv_id,
+        "pdf_arxiv_id": pdf_arxiv_id,
         "title": normalize_text(record.get("title")),
         "authors": normalize_text(record.get("authors")),
         "authors_parsed": record.get("authors_parsed") or [],
@@ -1246,15 +1238,16 @@ def filter_candidate(
         "license_url": normalize_text(record.get("license")),
         "normalized_license_url": license_info.normalized_url,
         "license_family": license_info.family,
-        "versions": record.get("versions") or [],
+        "versions": versions,
         "latest_version_date": latest_version_date,
         "update_date": normalize_text(record.get("update_date")),
         "doi": normalize_text(record.get("doi")) or None,
         "journal_ref": normalize_text(record.get("journal-ref")) or None,
         "comments": normalize_text(record.get("comments")) or None,
-        "pdf_url": pdf_url_for_arxiv_id(arxiv_id),
+        "pdf_url": kaggle_pdf_media_url(pdf_object),
+        "kaggle_gcs_bucket": KAGGLE_ARXIV_GCS_BUCKET,
+        "kaggle_gcs_object": pdf_object,
         "pdf_filename": pdf_filename,
-        "bulk_item_key": bulk_item_key_for_arxiv_id(arxiv_id),
     }, None
 
 
@@ -1355,279 +1348,152 @@ def download_eligible_pdfs(
     timeout_seconds: float,
     max_retries: int,
     max_workers: int = DEFAULT_MAX_WORKERS,
-    bulk_cache_dir: Path | None = None,
-    keep_bulk_archives: bool = True,
-    s3_manifest_path: Path | None = None,
-    aws_cli: str = "aws",
 ) -> dict[str, Any]:
+    del max_workers  # Direct object downloads are sequential to keep Kaggle/GCS load modest and resumable.
     output_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir = bulk_cache_dir or output_dir.parent / DEFAULT_BULK_CACHE_DIR
-    cache_dir.mkdir(parents=True, exist_ok=True)
     failures_path = output_dir / "download_failures.jsonl"
     latest_failures_path = output_dir / "download_failures.latest.jsonl"
+    unavailable_path = output_dir / "kaggle_unavailable_ids.jsonl"
+    latest_unavailable_path = output_dir / "kaggle_unavailable_ids.latest.jsonl"
     manifest_path = output_dir / "download_manifest.jsonl"
     latest_failures_path.write_text("", encoding="utf-8")
-    downloaded = skipped = failed = 0
+    latest_unavailable_path.write_text("", encoding="utf-8")
+    downloaded = skipped = failed = unavailable = 0
     failures = []
+    unavailable_records = []
     total = len(records)
     started_at = time.monotonic()
+    publish_status(f"[arxiv:kaggle] downloading selected PDFs from {KAGGLE_ARXIV_GCS_BUCKET}")
 
-    pending = []
     for record in records:
         destination = output_dir / record["pdf_filename"]
         if destination.exists() and not overwrite and has_pdf_header(destination):
             skipped += 1
             append_download_manifest(manifest_path, record, destination, "skipped", None)
+            print_download_progress(downloaded + skipped + failed + unavailable, total, downloaded, skipped, failed, started_at)
             continue
-        pending.append(record)
-    if not pending:
-        return {"downloaded": downloaded, "skipped": skipped, "failed": failed, "failures": failures}
-
-    bulk_manifest_path = s3_manifest_path or cache_dir / "arXiv_pdf_manifest.xml"
-    ensure_s3_object(
-        S3_PDF_MANIFEST_KEY,
-        bulk_manifest_path,
-        aws_cli=aws_cli,
-        request_delay_seconds=request_delay_seconds,
-        timeout_seconds=timeout_seconds,
-        max_retries=max_retries,
-    )
-    chunks = parse_pdf_manifest(bulk_manifest_path)
-    records_by_chunk: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in pending:
-        chunk = find_pdf_chunk(record, chunks)
-        if chunk is None:
+        status, error = download_kaggle_pdf(
+            record,
+            destination,
+            overwrite=overwrite,
+            request_delay_seconds=request_delay_seconds,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
+        if status == "downloaded":
+            downloaded += 1
+        elif status == "skipped":
+            skipped += 1
+        elif status == "unavailable":
+            unavailable += 1
+            row = unavailable_report_row(record, error or "not found in Kaggle arXiv PDF bucket")
+            unavailable_records.append(row)
+            append_jsonl(unavailable_path, row)
+            append_jsonl(latest_unavailable_path, row)
+        else:
             failed += 1
-            failure = {"arxiv_id": record["arxiv_id"], "pdf_url": record["pdf_url"], "error": "not found in S3 PDF manifest"}
+            failure = {"arxiv_id": record["arxiv_id"], "pdf_url": record["pdf_url"], "error": error}
             failures.append(failure)
             append_jsonl(failures_path, failure)
             append_jsonl(latest_failures_path, failure)
-            append_download_manifest(manifest_path, record, output_dir / record["pdf_filename"], "failed", failure["error"])
-            continue
-        records_by_chunk[chunk.filename].append(record)
-
-    completed = skipped + failed
-    publish_status(f"[arxiv:s3] extracting PDFs from {len(records_by_chunk):,} required bulk chunk(s)")
-    print_download_progress(completed, total, downloaded, skipped, failed, started_at)
-    for chunk_filename, chunk_records in records_by_chunk.items():
-        chunk_path = cache_dir / Path(chunk_filename).name
-        publish_status(f"[arxiv:s3] chunk={chunk_filename} selected_pdfs={len(chunk_records):,}")
-        try:
-            ensure_s3_object(
-                chunk_filename,
-                chunk_path,
-                aws_cli=aws_cli,
-                request_delay_seconds=request_delay_seconds,
-                timeout_seconds=timeout_seconds,
-                max_retries=max_retries,
-            )
-            chunk_results = extract_selected_pdfs_from_tar(
-                chunk_path,
-                chunk_records,
-                output_dir=output_dir,
-                overwrite=overwrite,
-                max_workers=max_workers,
-            )
-        except Exception as exc:  # noqa: BLE001 - keep batch moving.
-            chunk_results = [
-                {
-                    "record": record,
-                    "destination": output_dir / record["pdf_filename"],
-                    "status": "failed",
-                    "error": f"{chunk_filename}: {exc}",
-                }
-                for record in chunk_records
-            ]
-        for result in chunk_results:
-            record = result["record"]
-            destination = result["destination"]
-            status = result["status"]
-            error = result["error"]
-            completed += 1
-            if status == "downloaded":
-                downloaded += 1
-            elif status == "skipped":
-                skipped += 1
-            else:
-                failed += 1
-                failure = {"arxiv_id": record["arxiv_id"], "pdf_url": record["pdf_url"], "error": error}
-                failures.append(failure)
-                append_jsonl(failures_path, failure)
-                append_jsonl(latest_failures_path, failure)
-                LOGGER.warning("Failed to extract %s: %s", record["arxiv_id"], error)
-            append_download_manifest(manifest_path, record, destination, status, error)
-            print_download_progress(completed, total, downloaded, skipped, failed, started_at)
-        if not keep_bulk_archives:
-            chunk_path.unlink(missing_ok=True)
+            LOGGER.warning("Failed to download %s: %s", record["arxiv_id"], error)
+        append_download_manifest(manifest_path, record, destination, status, error)
+        print_download_progress(downloaded + skipped + failed + unavailable, total, downloaded, skipped, failed, started_at)
     if total:
         print()
-    return {"downloaded": downloaded, "skipped": skipped, "failed": failed, "failures": failures}
+    return {
+        "downloaded": downloaded,
+        "skipped": skipped,
+        "failed": failed,
+        "unavailable": unavailable,
+        "failures": failures,
+        "unavailable_records": unavailable_records,
+        "unavailable_report": str(unavailable_path),
+    }
 
 
-def ensure_s3_object(
-    key: str,
+def download_kaggle_pdf(
+    record: dict[str, Any],
     destination: Path,
     *,
-    aws_cli: str,
+    overwrite: bool,
+    request_delay_seconds: float,
+    timeout_seconds: float,
+    max_retries: int,
+) -> tuple[str, str | None]:
+    if destination.exists() and not overwrite and has_pdf_header(destination):
+        return "skipped", None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = destination.with_suffix(destination.suffix + ".part")
+    tmp_path.unlink(missing_ok=True)
+    url = record.get("pdf_url") or kaggle_pdf_media_url(kaggle_pdf_object_name(str(record["pdf_arxiv_id"])))
+    try:
+        download_url_to_file(
+            str(url),
+            tmp_path,
+            request_delay_seconds=request_delay_seconds,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
+    except HTTPFetchError as exc:
+        tmp_path.unlink(missing_ok=True)
+        if exc.status_code == 404:
+            return "unavailable", f"Kaggle object not found: {record.get('kaggle_gcs_object')}"
+        return "failed", str(exc)
+    if not has_pdf_header(tmp_path):
+        tmp_path.unlink(missing_ok=True)
+        return "failed", "downloaded object is not a PDF"
+    tmp_path.replace(destination)
+    return "downloaded", None
+
+
+def download_url_to_file(
+    url: str,
+    destination: Path,
+    *,
     request_delay_seconds: float,
     timeout_seconds: float,
     max_retries: int,
 ) -> None:
-    if destination.exists() and destination.stat().st_size > 0:
-        display_tmux_status(f"[arxiv:s3] reuse {destination.name}", force=True)
-        return
-    if shutil.which(aws_cli) is None:
-        raise RuntimeError(
-            f"AWS CLI executable '{aws_cli}' was not found. Configure AWS credentials and install awscli "
-            "to download arXiv requester-pays S3 bulk data."
-        )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = destination.with_suffix(destination.suffix + ".part")
-    uri = f"s3://{S3_BUCKET}/{key}"
-    publish_status(f"[arxiv:s3] downloading {uri}")
-    cmd = [aws_cli, "s3", "cp", uri, str(tmp_path), "--request-payer", "requester", "--only-show-errors"]
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         if request_delay_seconds > 0:
             time.sleep(request_delay_seconds)
         try:
-            subprocess.run(  # noqa: S603
-                cmd,
-                check=True,
-                timeout=timeout_seconds,
-                capture_output=True,
-                text=True,
-            )
-            tmp_path.replace(destination)
+            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response, destination.open("wb") as file:
+                shutil.copyfileobj(response, file)
             return
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except urllib.error.HTTPError as exc:
             last_error = exc
-            if is_missing_aws_credentials_error(exc):
+            if exc.code in PERMANENT_HTTP_STATUS_CODES:
                 break
-            if attempt < max_retries:
+            if exc.code in TRANSIENT_HTTP_STATUS_CODES and attempt < max_retries:
                 wait_seconds = min(300.0, request_delay_seconds + 2**attempt)
-                LOGGER.warning("S3 download failed for %s; retrying in %.1fs", key, wait_seconds)
+                LOGGER.warning("Download failed (%s); retrying in %.1fs", exc, wait_seconds)
                 time.sleep(wait_seconds)
                 continue
             break
-    tmp_path.unlink(missing_ok=True)
-    raise RuntimeError(format_s3_download_error(uri, aws_cli, last_error)) from last_error
-
-
-def is_missing_aws_credentials_error(error: Exception) -> bool:
-    stderr = normalize_text(getattr(error, "stderr", ""))
-    stdout = normalize_text(getattr(error, "stdout", ""))
-    message = f"{stdout} {stderr}"
-    return "Unable to locate credentials" in message or "NoCredentialsError" in message
-
-
-def format_s3_download_error(uri: str, aws_cli: str, error: Exception | None) -> str:
-    if isinstance(error, subprocess.TimeoutExpired):
-        return f"Timed out downloading {uri} with '{aws_cli}'. Increase --timeout-seconds or retry later."
-    stderr = normalize_text(getattr(error, "stderr", ""))
-    stdout = normalize_text(getattr(error, "stdout", ""))
-    detail = stderr or stdout or str(error)
-    if is_missing_aws_credentials_error(error or RuntimeError("")):
-        return (
-            f"Failed to download {uri}: AWS credentials are missing. arXiv bulk PDFs are requester-pays S3 "
-            "objects, so the AWS CLI must be configured with credentials for an AWS account that can accept "
-            "requester-pays charges. Run `aws configure` or set AWS_PROFILE/AWS_ACCESS_KEY_ID credentials, "
-            "then rerun the build. The command already passes `--request-payer requester`."
-        )
-    return f"Failed to download {uri}: {detail}"
-
-
-def parse_pdf_manifest(path: Path) -> list[BulkPdfChunk]:
-    root = ET.parse(path).getroot()
-    chunks = []
-    for file_element in children(root, "file"):
-        filename = text_of(file_element, "filename")
-        first_item = text_of(file_element, "first_item")
-        last_item = text_of(file_element, "last_item")
-        yymm = text_of(file_element, "yymm")
-        if not filename or not first_item or not last_item:
-            continue
-        size_text = text_of(file_element, "size")
-        chunks.append(
-            BulkPdfChunk(
-                filename=filename,
-                first_item=first_item,
-                last_item=last_item,
-                yymm=yymm,
-                md5sum=text_of(file_element, "md5sum") or None,
-                size=int(size_text) if size_text.isdigit() else None,
-            )
-        )
-    return chunks
-
-
-def find_pdf_chunk(record: dict[str, Any], chunks: list[BulkPdfChunk]) -> BulkPdfChunk | None:
-    item_key = record.get("bulk_item_key") or bulk_item_key_for_arxiv_id(str(record["arxiv_id"]))
-    yymm = yymm_for_bulk_item_key(item_key)
-    candidates = [chunk for chunk in chunks if not yymm or chunk.yymm == yymm]
-    for chunk in candidates:
-        if chunk.first_item <= item_key <= chunk.last_item:
-            return chunk
-    if len(candidates) == 1:
-        return candidates[0]
-    return None
-
-
-def extract_selected_pdfs_from_tar(
-    tar_path: Path,
-    records: list[dict[str, Any]],
-    *,
-    output_dir: Path,
-    overwrite: bool,
-    max_workers: int,
-) -> list[dict[str, Any]]:
-    del max_workers  # Tar extraction is sequential to avoid sharing one TarFile across threads.
-    wanted = {record.get("bulk_item_key") or bulk_item_key_for_arxiv_id(record["arxiv_id"]): record for record in records}
-    found: set[str] = set()
-    results = []
-    with tarfile.open(tar_path) as tar:
-        member_by_key = {}
-        for member in tar.getmembers():
-            if not member.isfile():
+        except (TimeoutError, urllib.error.URLError) as exc:
+            last_error = exc
+            if attempt < max_retries:
+                wait_seconds = min(300.0, request_delay_seconds + 2**attempt)
+                LOGGER.warning("Download failed (%s); retrying in %.1fs", exc, wait_seconds)
+                time.sleep(wait_seconds)
                 continue
-            key = bulk_item_key_for_tar_member(member.name)
-            if key in wanted:
-                member_by_key[key] = member
-        for key, record in wanted.items():
-            destination = output_dir / record["pdf_filename"]
-            if destination.exists() and not overwrite and has_pdf_header(destination):
-                results.append({"record": record, "destination": destination, "status": "skipped", "error": None})
-                found.add(key)
-                continue
-            member = member_by_key.get(key)
-            if member is None:
-                continue
-            part_path = destination.with_suffix(destination.suffix + ".part")
-            source = tar.extractfile(member)
-            if source is None:
-                results.append({"record": record, "destination": destination, "status": "failed", "error": "empty tar member"})
-                found.add(key)
-                continue
-            with source, part_path.open("wb") as out:
-                shutil.copyfileobj(source, out)
-            if not has_pdf_header(part_path):
-                part_path.unlink(missing_ok=True)
-                results.append({"record": record, "destination": destination, "status": "failed", "error": "tar member is not a PDF"})
-            else:
-                part_path.replace(destination)
-                results.append({"record": record, "destination": destination, "status": "downloaded", "error": None})
-            found.add(key)
-    for key, record in wanted.items():
-        if key not in found:
-            results.append(
-                {
-                    "record": record,
-                    "destination": output_dir / record["pdf_filename"],
-                    "status": "failed",
-                    "error": f"PDF {key} not found in {tar_path.name}",
-                }
-            )
-    return results
+            break
+    status_code = last_error.code if isinstance(last_error, urllib.error.HTTPError) else None
+    raise HTTPFetchError(url, last_error or RuntimeError("unknown download error"), status_code=status_code) from last_error
+
+
+def unavailable_report_row(record: dict[str, Any], error: str) -> dict[str, Any]:
+    return {
+        "arxiv_id": record.get("arxiv_id"),
+        "pdf_arxiv_id": record.get("pdf_arxiv_id"),
+        "kaggle_gcs_object": record.get("kaggle_gcs_object"),
+        "pdf_url": record.get("pdf_url"),
+        "error": error,
+    }
 
 
 def append_download_manifest(manifest_path: Path, record: dict[str, Any], destination: Path, status: str, error: str | None) -> None:
@@ -1635,7 +1501,9 @@ def append_download_manifest(manifest_path: Path, record: dict[str, Any], destin
         manifest_path,
         {
             "arxiv_id": record["arxiv_id"],
+            "pdf_arxiv_id": record.get("pdf_arxiv_id"),
             "pdf_url": record["pdf_url"],
+            "kaggle_gcs_object": record.get("kaggle_gcs_object"),
             "pdf_path": str(destination),
             "license_url": record["license_url"],
             "normalized_license_url": record["normalized_license_url"],
@@ -1685,29 +1553,54 @@ def fetch_bytes(
     raise HTTPFetchError(url, last_error or RuntimeError("unknown fetch error"), status_code=status_code) from last_error
 
 
-def pdf_url_for_arxiv_id(arxiv_id: str) -> str:
-    return f"s3://{S3_BUCKET}/pdf bulk archive for {urllib.parse.quote(arxiv_id, safe='/')}"
+def versioned_arxiv_id(arxiv_id: str, versions: Any) -> str:
+    value = normalize_text(arxiv_id)
+    if re.search(r"v\d+$", value):
+        return value
+    version = latest_version_label(versions) or "v1"
+    return f"{value}{version}"
+
+
+def latest_version_label(versions: Any) -> str | None:
+    if not isinstance(versions, list) or not versions:
+        return None
+    for row in reversed(versions):
+        if not isinstance(row, dict):
+            continue
+        version = normalize_text(row.get("version"))
+        if re.fullmatch(r"v\d+", version):
+            return version
+    return None
+
+
+def kaggle_pdf_object_name(pdf_arxiv_id: str) -> str:
+    value = normalize_text(pdf_arxiv_id)
+    if "/" in value:
+        archive, identifier = value.split("/", 1)
+        yymm = yymm_for_arxiv_identifier(identifier)
+        return f"{KAGGLE_ARXIV_GCS_ROOT_PREFIX}/{archive}/pdf/{yymm}/{identifier}.pdf"
+    yymm = yymm_for_arxiv_identifier(value)
+    return f"{KAGGLE_ARXIV_GCS_ROOT_PREFIX}/arxiv/pdf/{yymm}/{value}.pdf"
+
+
+def yymm_for_arxiv_identifier(identifier: str) -> str:
+    unversioned = re.sub(r"v\d+$", "", normalize_text(identifier))
+    match = re.match(r"(\d{4})", unversioned)
+    if not match:
+        raise ValueError(f"Could not derive Kaggle PDF month prefix from arXiv ID: {identifier}")
+    return match.group(1)
+
+
+def kaggle_pdf_media_url(object_name: str) -> str:
+    encoded_name = urllib.parse.quote(object_name, safe="")
+    return (
+        f"https://storage.googleapis.com/download/storage/v1/b/{KAGGLE_ARXIV_GCS_BUCKET}/o/"
+        f"{encoded_name}?alt=media"
+    )
 
 
 def pdf_filename_for_arxiv_id(arxiv_id: str) -> str:
     return f"{arxiv_id.replace('/', '_')}.pdf"
-
-
-def bulk_item_key_for_arxiv_id(arxiv_id: str) -> str:
-    unversioned = re.sub(r"v\d+$", "", normalize_text(arxiv_id))
-    return unversioned.replace("/", "")
-
-
-def yymm_for_bulk_item_key(item_key: str) -> str | None:
-    match = re.search(r"(\d{4})", item_key)
-    return match.group(1) if match else None
-
-
-def bulk_item_key_for_tar_member(name: str) -> str:
-    stem = Path(name).name
-    if stem.endswith(".pdf"):
-        stem = stem[:-4]
-    return stem.replace("/", "")
 
 
 def has_pdf_header(path: Path) -> bool:
@@ -1793,7 +1686,6 @@ def build_report(
     oai_window_days: int,
     oai_earliest_date: str,
     max_consecutive_oai_406: int,
-    bulk_cache_dir: Path,
     metadata_source: str,
     selection_seed: int | None,
 ) -> dict[str, Any]:
@@ -1801,9 +1693,9 @@ def build_report(
         "generated_at": datetime.now(UTC).isoformat(),
         "source": {
             "name": (
-                "Cornell arXiv Kaggle metadata snapshot and arXiv bulk S3 PDFs"
+                "Cornell arXiv Kaggle metadata snapshot and Kaggle/GCS PDFs"
                 if metadata_source == "snapshot"
-                else "arXiv OAI-PMH metadata and arXiv bulk S3 PDFs"
+                else "arXiv OAI-PMH metadata and Kaggle/GCS PDFs"
             ),
             "metadata_source": metadata_source,
             "metadata_path": str(metadata_path),
@@ -1817,12 +1709,12 @@ def build_report(
             "max_consecutive_oai_406": max_consecutive_oai_406,
             "metadata_prefix": OAI_METADATA_PREFIX,
             "license_field": "license",
-            "s3_bucket": S3_BUCKET,
-            "s3_pdf_manifest": f"s3://{S3_BUCKET}/{S3_PDF_MANIFEST_KEY}",
-            "bulk_cache_dir": str(bulk_cache_dir),
+            "kaggle_pdf_bucket": KAGGLE_ARXIV_GCS_BUCKET,
+            "kaggle_pdf_root_prefix": KAGGLE_ARXIV_GCS_ROOT_PREFIX,
             "notes": (
-                "Paper-level OAI license URLs are filtered before PDF retrieval. PDFs are extracted "
-                "from only the arXiv bulk S3 tar chunks selected via the official PDF manifest."
+                "Paper-level license URLs are filtered before PDF retrieval. The downloader uses exact "
+                "public GCS object paths from the official Cornell/Kaggle arXiv dataset and never "
+                "downloads the complete PDF corpus."
             ),
         },
         "category_prefixes": list(category_prefixes),
@@ -1846,6 +1738,8 @@ def build_report(
         "selected": len(selected_records),
         "pdf_downloads_successful": int(download_stats.get("downloaded", 0)) + int(download_stats.get("skipped", 0)),
         "pdf_downloads_failed": int(download_stats.get("failed", 0)),
+        "pdfs_unavailable_in_kaggle": int(download_stats.get("unavailable", 0)),
+        "kaggle_unavailable_report": download_stats.get("unavailable_report"),
         "successfully_downloaded_this_run": int(download_stats.get("downloaded", 0)),
         "already_present_pdfs": int(download_stats.get("skipped", 0)),
         "rejection_counts": scan_stats["rejection_counts"],
@@ -1866,6 +1760,7 @@ def print_corpus_report(report: dict[str, Any]) -> None:
     print(f"Selected:                    {report['selected']:,}")
     print(f"PDF downloads successful:    {report['pdf_downloads_successful']:,}")
     print(f"PDF downloads failed:        {report['pdf_downloads_failed']:,}")
+    print(f"Unavailable in Kaggle:       {report['pdfs_unavailable_in_kaggle']:,}")
     print("Rejections:")
     for reason, count in sorted(report["rejection_counts"].items()):
         print(f"  {reason}: {count:,}")

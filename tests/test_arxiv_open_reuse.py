@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import tarfile
 import urllib.error
 import xml.etree.ElementTree as ET
 from datetime import date
@@ -10,24 +8,21 @@ from datetime import date
 import pytest
 
 from dataset_generation.document_downloads.arxiv_open_reuse import HTTPFetchError
-from dataset_generation.document_downloads.arxiv_open_reuse import bulk_item_key_for_arxiv_id
 from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
 from dataset_generation.document_downloads.arxiv_open_reuse import build_parser
 from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
-from dataset_generation.document_downloads.arxiv_open_reuse import ensure_s3_object
-from dataset_generation.document_downloads.arxiv_open_reuse import extract_selected_pdfs_from_tar
 from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
 from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
-from dataset_generation.document_downloads.arxiv_open_reuse import find_pdf_chunk
 from dataset_generation.document_downloads.arxiv_open_reuse import ensure_kaggle_auth
 from dataset_generation.document_downloads.arxiv_open_reuse import iter_oai_records
+from dataset_generation.document_downloads.arxiv_open_reuse import kaggle_pdf_object_name
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
 from dataset_generation.document_downloads.arxiv_open_reuse import normalize_oai_base_url
 from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_arxiv_record
-from dataset_generation.document_downloads.arxiv_open_reuse import parse_pdf_manifest
 from dataset_generation.document_downloads.arxiv_open_reuse import pdf_filename_for_arxiv_id
 from dataset_generation.document_downloads.arxiv_open_reuse import resolve_kaggle_snapshot
+from dataset_generation.document_downloads.arxiv_open_reuse import versioned_arxiv_id
 
 
 def kaggle_record(
@@ -93,8 +88,9 @@ def test_filter_candidate_uses_snapshot_license_before_pdf_download() -> None:
     assert candidate["categories"] == ["physics.ins-det", "eess.SP"]
     assert candidate["primary_category"] == "physics.ins-det"
     assert candidate["latest_version_date"] == "Mon, 1 Jan 2024 00:00:00 GMT"
-    assert candidate["pdf_url"].startswith("s3://arxiv/pdf bulk archive")
-    assert candidate["bulk_item_key"] == "2401.01234"
+    assert candidate["pdf_arxiv_id"] == "2401.01234v2"
+    assert candidate["kaggle_gcs_object"] == "arxiv/arxiv/pdf/2401/2401.01234v2.pdf"
+    assert candidate["pdf_url"].startswith("https://storage.googleapis.com/download/storage/v1/b/arxiv-dataset/o/")
 
 
 def test_parser_defaults_to_snapshot_and_strict_cc_by_4() -> None:
@@ -338,10 +334,10 @@ def test_resume_skips_existing_selected_metadata_and_pdf(monkeypatch, tmp_path) 
     assert selected is not None
     write_snapshot(output / "selected_arxiv_documents.jsonl", [selected])
 
-    def fail_s3_fetch(*args, **kwargs):  # type: ignore[no-untyped-def]
+    def fail_download(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("valid existing PDF should be skipped on resume")
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.ensure_s3_object", fail_s3_fetch)
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fail_download)
 
     result = build_arxiv_open_reuse_corpus(
         snapshot_path=metadata,
@@ -359,23 +355,30 @@ def test_resume_skips_existing_selected_metadata_and_pdf(monkeypatch, tmp_path) 
 
 def test_pdf_filename_handles_old_style_arxiv_ids() -> None:
     assert pdf_filename_for_arxiv_id("hep-th/9901001v1") == "hep-th_9901001v1.pdf"
-    assert bulk_item_key_for_arxiv_id("hep-th/9901001v1") == "hep-th9901001"
+
+
+def test_kaggle_pdf_object_paths_cover_new_and_old_arxiv_ids() -> None:
+    assert versioned_arxiv_id("2401.00003", [{"version": "v3"}]) == "2401.00003v3"
+    assert kaggle_pdf_object_name("2401.00003v3") == "arxiv/arxiv/pdf/2401/2401.00003v3.pdf"
+    assert kaggle_pdf_object_name("hep-th/9901001v1") == "arxiv/hep-th/pdf/9901/9901001v1.pdf"
 
 
 def test_download_eligible_pdfs_resumes_existing_valid_pdf(monkeypatch, tmp_path) -> None:
     existing = tmp_path / "2401.00001v1.pdf"
     existing.write_bytes(b"%PDF\n")
 
-    def fail_s3_fetch(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise AssertionError("valid existing PDFs should be skipped before S3 access")
+    def fail_download(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("valid existing PDFs should be skipped before Kaggle access")
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.ensure_s3_object", fail_s3_fetch)
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fail_download)
 
     stats = download_eligible_pdfs(
         [
             {
                 "arxiv_id": "2401.00001v1",
+                "pdf_arxiv_id": "2401.00001v1",
                 "pdf_url": "https://arxiv.org/pdf/2401.00001v1",
+                "kaggle_gcs_object": "arxiv/arxiv/pdf/2401/2401.00001v1.pdf",
                 "pdf_filename": "2401.00001v1.pdf",
                 "license_url": "https://creativecommons.org/licenses/by/4.0/",
                 "normalized_license_url": "https://creativecommons.org/licenses/by/4.0",
@@ -396,32 +399,79 @@ def test_download_eligible_pdfs_resumes_existing_valid_pdf(monkeypatch, tmp_path
     assert stats["failed"] == 0
 
 
-def test_s3_missing_credentials_error_is_actionable(monkeypatch, tmp_path) -> None:
-    calls = []
+def test_download_eligible_pdfs_downloads_exact_kaggle_object(monkeypatch, tmp_path) -> None:
+    urls = []
 
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/aws")
+    def fake_download(url, destination, **kwargs):  # type: ignore[no-untyped-def]
+        urls.append(url)
+        destination.write_bytes(b"%PDF\nbody")
 
-    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(cmd)
-        raise subprocess.CalledProcessError(
-            1,
-            cmd,
-            stderr="fatal error: Unable to locate credentials",
-        )
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    stats = download_eligible_pdfs(
+        [
+            {
+                "arxiv_id": "2401.00001",
+                "pdf_arxiv_id": "2401.00001v1",
+                "pdf_url": "https://storage.googleapis.com/download/storage/v1/b/arxiv-dataset/o/arxiv%2Farxiv%2Fpdf%2F2401%2F2401.00001v1.pdf?alt=media",
+                "kaggle_gcs_object": "arxiv/arxiv/pdf/2401/2401.00001v1.pdf",
+                "pdf_filename": "2401.00001v1.pdf",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "normalized_license_url": "https://creativecommons.org/licenses/by/4.0",
+                "license": "CC BY 4.0",
+                "license_family": "cc-by",
+            }
+        ],
+        output_dir=tmp_path,
+        overwrite=False,
+        request_delay_seconds=0,
+        timeout_seconds=10,
+        max_retries=1,
+        max_workers=1,
+    )
 
-    with pytest.raises(RuntimeError, match="AWS credentials are missing"):
-        ensure_s3_object(
-            "pdf/arXiv_pdf_manifest.xml",
-            tmp_path / "arXiv_pdf_manifest.xml",
-            aws_cli="aws",
-            request_delay_seconds=0,
-            timeout_seconds=10,
-            max_retries=5,
-        )
+    assert stats["downloaded"] == 1
+    assert stats["unavailable"] == 0
+    assert urls == [
+        "https://storage.googleapis.com/download/storage/v1/b/arxiv-dataset/o/arxiv%2Farxiv%2Fpdf%2F2401%2F2401.00001v1.pdf?alt=media"
+    ]
+    assert (tmp_path / "2401.00001v1.pdf").read_bytes().startswith(b"%PDF")
 
-    assert len(calls) == 1
+
+def test_download_eligible_pdfs_reports_kaggle_unavailable_ids(monkeypatch, tmp_path) -> None:
+    def fake_download(url, destination, **kwargs):  # type: ignore[no-untyped-def]
+        raise HTTPFetchError(url, urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None), status_code=404)
+
+    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
+
+    stats = download_eligible_pdfs(
+        [
+            {
+                "arxiv_id": "2401.99999",
+                "pdf_arxiv_id": "2401.99999v1",
+                "pdf_url": "https://storage.googleapis.com/download/storage/v1/b/arxiv-dataset/o/missing?alt=media",
+                "kaggle_gcs_object": "arxiv/arxiv/pdf/2401/2401.99999v1.pdf",
+                "pdf_filename": "2401.99999v1.pdf",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "normalized_license_url": "https://creativecommons.org/licenses/by/4.0",
+                "license": "CC BY 4.0",
+                "license_family": "cc-by",
+            }
+        ],
+        output_dir=tmp_path,
+        overwrite=False,
+        request_delay_seconds=0,
+        timeout_seconds=10,
+        max_retries=1,
+        max_workers=1,
+    )
+
+    unavailable = [json.loads(line) for line in (tmp_path / "kaggle_unavailable_ids.jsonl").read_text().splitlines()]
+
+    assert stats["downloaded"] == 0
+    assert stats["unavailable"] == 1
+    assert unavailable[0]["arxiv_id"] == "2401.99999"
+    assert unavailable[0]["kaggle_gcs_object"] == "arxiv/arxiv/pdf/2401/2401.99999v1.pdf"
 
 
 def test_oai_record_parses_to_existing_metadata_shape() -> None:
@@ -447,50 +497,6 @@ def test_oai_record_parses_to_existing_metadata_shape() -> None:
     assert record["authors"] == "Marie Curie"
     assert record["categories"] == "physics.ins-det eess.SP"
     assert record["license"] == "http://creativecommons.org/licenses/by/4.0/"
-
-
-def test_pdf_manifest_maps_selected_papers_to_required_tar_chunks(tmp_path) -> None:
-    manifest = tmp_path / "arXiv_pdf_manifest.xml"
-    manifest.write_text(
-        """
-        <manifest>
-          <file>
-            <filename>pdf/arXiv_pdf_2401_001.tar</filename>
-            <first_item>2401.00001</first_item>
-            <last_item>2401.99999</last_item>
-            <yymm>2401</yymm>
-          </file>
-        </manifest>
-        """,
-        encoding="utf-8",
-    )
-
-    chunks = parse_pdf_manifest(manifest)
-    chunk = find_pdf_chunk({"arxiv_id": "2401.01234v2", "bulk_item_key": "2401.01234"}, chunks)
-
-    assert chunk is not None
-    assert chunk.filename == "pdf/arXiv_pdf_2401_001.tar"
-
-
-def test_extract_selected_pdfs_from_bulk_tar(tmp_path) -> None:
-    tar_path = tmp_path / "arXiv_pdf_2401_001.tar"
-    source_pdf = tmp_path / "2401.00001.pdf"
-    source_pdf.write_bytes(b"%PDF\nbody")
-    with tarfile.open(tar_path, "w") as tar:
-        tar.add(source_pdf, arcname="2401.00001.pdf")
-
-    output_dir = tmp_path / "pdfs"
-    output_dir.mkdir()
-    record = {
-        "arxiv_id": "2401.00001v1",
-        "pdf_filename": "2401.00001v1.pdf",
-        "bulk_item_key": "2401.00001",
-    }
-
-    results = extract_selected_pdfs_from_tar(tar_path, [record], output_dir=output_dir, overwrite=False, max_workers=1)
-
-    assert results[0]["status"] == "downloaded"
-    assert (output_dir / "2401.00001v1.pdf").read_bytes().startswith(b"%PDF")
 
 
 def test_fetch_bytes_retries_transient_http_errors(monkeypatch) -> None:

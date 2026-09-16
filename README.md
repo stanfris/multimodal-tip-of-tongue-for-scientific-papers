@@ -257,11 +257,13 @@ kaggle datasets download \
   --unzip
 ```
 
-PDFs are retrieved from arXiv's bulk requester-pays S3 bucket. The downloader
-fetches the official PDF manifest (`s3://arxiv/pdf/arXiv_pdf_manifest.xml`),
-maps selected papers to the manifest's monthly tar chunks, downloads only those
-chunks, and extracts only the selected PDFs. Configure AWS credentials and an
-AWS CLI capable of requester-pays downloads before running a PDF download pass.
+PDFs are retrieved from the public Google Cloud bucket linked by the official
+Cornell/Kaggle arXiv dataset, not from requester-pays S3. The inspected bucket
+layout stores individual PDFs, so the downloader requests only exact selected
+objects. New-style IDs use paths like
+`arxiv/arxiv/pdf/2401/2401.00003v3.pdf`; old-style IDs use paths like
+`arxiv/hep-th/pdf/9901/9901001v1.pdf`. Selected IDs that are not present in
+the Kaggle/GCS PDF bucket are written to `pdfs/kaggle_unavailable_ids.jsonl`.
 
 Run the combined discovery and PDF download pass:
 
@@ -308,9 +310,11 @@ The old OAI-PMH helpers remain available for legacy incremental use via
 collection path.
 
 PDF downloads are separate from selection and intentionally conservative. Tune
-tar extraction concurrency with `--max-workers`, network retry delay with
-`--request-delay-seconds`, S3 cache location with `--bulk-cache-dir`, and
-archive retention with `--no-keep-bulk-archives`.
+network retry delay with `--request-delay-seconds`, timeouts with
+`--timeout-seconds`, and retry count with `--max-retries`. Downloads are
+resumable: valid existing PDFs are skipped, partial downloads use `.part`
+files, and every completed download is validated for a PDF header before being
+accepted.
 
 You can also download only eligible PDFs later, resuming existing metadata and
 skipping valid PDFs already present:
@@ -333,16 +337,16 @@ report.json                 # counts by domain, category, year, and license
 pdfs/*.pdf                  # downloaded only after eligibility is known
 pdfs/download_manifest.jsonl
 pdfs/download_failures.jsonl
+pdfs/kaggle_unavailable_ids.jsonl
 arxiv-metadata-oai-snapshot.json
-bulk_s3/                    # S3 PDF manifest and downloaded tar chunk cache
 ```
 
 The selector/downloader uses `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
 identifiers. Interrupted runs retain partial manifests and skip selected
 metadata and valid PDFs already present. When running inside tmux, snapshot
-scan, S3, and PDF phases also post short `tmux display-message` status updates
-so pane status bars keep moving during long runs.
+scan and PDF phases also post short `tmux display-message` status updates so
+pane status bars keep moving during long runs.
 
 ## MinerU PDF Extraction
 
