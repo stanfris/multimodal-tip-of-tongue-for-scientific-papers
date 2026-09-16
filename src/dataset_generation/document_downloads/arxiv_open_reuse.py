@@ -44,6 +44,8 @@ DEFAULT_CATEGORY_PREFIXES = ("physics.", "eess.")
 DEFAULT_OAI_SETS: tuple[str, ...] = ()
 DEFAULT_OAI_EARLIEST_DATE = "2005-09-16"
 DEFAULT_OAI_WINDOW_DAYS = 1
+DEFAULT_OAI_HARVEST_MODE = "auto"
+DEFAULT_MAX_CONSECUTIVE_OAI_406 = 30
 DEFAULT_ALLOWED_LICENSE_LABELS = (
     "CC BY 4.0",
     "CC BY 3.0",
@@ -119,6 +121,10 @@ class HTTPFetchError(RuntimeError):
         self.status_code = status_code
 
 
+class OAIHistoricalHarvestUnavailable(RuntimeError):
+    """Raised when arXiv OAI refuses historical/full harvest requests."""
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -156,8 +162,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--oai-base-url", default=OAI_BASE_URL, help="OAI-PMH base URL.")
+    parser.add_argument(
+        "--oai-harvest-mode",
+        choices=("auto", "full", "window"),
+        default=DEFAULT_OAI_HARVEST_MODE,
+        help=(
+            "OAI harvest mode. auto first tries arXiv's documented full ListRecords harvest, "
+            "then falls back to bounded windows if the service rejects it."
+        ),
+    )
     parser.add_argument("--oai-window-days", type=int, default=DEFAULT_OAI_WINDOW_DAYS)
     parser.add_argument("--oai-earliest-date", default=DEFAULT_OAI_EARLIEST_DATE)
+    parser.add_argument("--max-consecutive-oai-406", type=int, default=DEFAULT_MAX_CONSECUTIVE_OAI_406)
     parser.add_argument("--start-year", type=int)
     parser.add_argument("--end-year", type=int)
     parser.add_argument("--allowed-license", action="append", dest="allowed_licenses")
@@ -197,8 +213,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         category_prefixes=category_prefixes,
         oai_sets=tuple(args.oai_sets or DEFAULT_OAI_SETS),
         oai_base_url=args.oai_base_url,
+        oai_harvest_mode=args.oai_harvest_mode,
         oai_window_days=args.oai_window_days,
         oai_earliest_date=args.oai_earliest_date,
+        max_consecutive_oai_406=args.max_consecutive_oai_406,
         start_year=args.start_year,
         end_year=args.end_year,
         allowed_licenses=allowed_licenses,
@@ -235,8 +253,10 @@ def build_arxiv_open_reuse_corpus(
     category_prefixes: tuple[str, ...] = DEFAULT_CATEGORY_PREFIXES,
     oai_sets: tuple[str, ...] = DEFAULT_OAI_SETS,
     oai_base_url: str = OAI_BASE_URL,
+    oai_harvest_mode: str = DEFAULT_OAI_HARVEST_MODE,
     oai_window_days: int = DEFAULT_OAI_WINDOW_DAYS,
     oai_earliest_date: str = DEFAULT_OAI_EARLIEST_DATE,
+    max_consecutive_oai_406: int = DEFAULT_MAX_CONSECUTIVE_OAI_406,
     start_year: int | None = None,
     end_year: int | None = None,
     allowed_licenses: set[str] | None = None,
@@ -295,8 +315,10 @@ def build_arxiv_open_reuse_corpus(
             resume=resume,
             oai_sets=oai_sets,
             oai_base_url=oai_base_url,
+            oai_harvest_mode=oai_harvest_mode,
             oai_window_days=oai_window_days,
             oai_earliest_date=oai_earliest_date,
+            max_consecutive_oai_406=max_consecutive_oai_406,
             request_delay_seconds=request_delay_seconds,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
@@ -333,8 +355,10 @@ def build_arxiv_open_reuse_corpus(
         metadata_only=metadata_only,
         oai_sets=oai_sets,
         oai_base_url=oai_base_url,
+        oai_harvest_mode=oai_harvest_mode,
         oai_window_days=oai_window_days,
         oai_earliest_date=oai_earliest_date,
+        max_consecutive_oai_406=max_consecutive_oai_406,
         bulk_cache_dir=bulk_cache_path,
     )
     report_path = output_path / "report.json"
@@ -447,8 +471,10 @@ def select_documents_from_oai(
     resume: bool,
     oai_sets: tuple[str, ...],
     oai_base_url: str,
+    oai_harvest_mode: str,
     oai_window_days: int,
     oai_earliest_date: str,
+    max_consecutive_oai_406: int,
     request_delay_seconds: float,
     timeout_seconds: float,
     max_retries: int,
@@ -482,6 +508,42 @@ def select_documents_from_oai(
 
     state = load_json(state_path) if resume else {}
     skipped_oai_windows: list[dict[str, str]] = []
+    if oai_harvest_mode in {"auto", "full"} and not state.get("full_harvest_rejected"):
+        try:
+            selected_done = harvest_full_oai_stream(
+                processor=processor,
+                cache_path=cache_path,
+                state_path=state_path,
+                state=state,
+                cached_ids=cached_ids,
+                target_count=target_count,
+                oai_base_url=oai_base_url,
+                request_delay_seconds=request_delay_seconds,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+            )
+            if selected_done:
+                stats = processor.stats(resumed=resume)
+                stats["skipped_oai_windows"] = skipped_oai_windows
+                return processor.selected, stats
+        except HTTPFetchError as exc:
+            if exc.status_code == 406:
+                message = (
+                    "arXiv OAI rejected the documented full ListRecords harvest with HTTP 406. "
+                    "Falling back to bounded datestamp windows."
+                )
+                state["full_harvest_rejected"] = {
+                    "status": 406,
+                    "url": exc.url,
+                    "at": datetime.now(UTC).isoformat(),
+                }
+                write_json(state_path, state)
+                publish_status(f"[arxiv:oai] {message}")
+                if oai_harvest_mode == "full":
+                    raise OAIHistoricalHarvestUnavailable(message) from exc
+            else:
+                raise
+
     harvest_streams = tuple(oai_sets) if oai_sets else (None,)
     completed_streams = set(state.get("completed_sets") or [])
     for set_spec in harvest_streams:
@@ -538,6 +600,13 @@ def select_documents_from_oai(
                         f"skipped {window_start.isoformat()}..{window_end.isoformat()} "
                         f"because arXiv returned HTTP 406"
                     )
+                    if count_recent_consecutive_406(state.get("skipped_oai_windows", []), stream_key) >= max_consecutive_oai_406:
+                        raise OAIHistoricalHarvestUnavailable(
+                            "arXiv OAI has returned HTTP 406 for "
+                            f"{max_consecutive_oai_406} consecutive datestamp windows. "
+                            "The documented full-harvest and historical-window requests are currently unavailable; "
+                            "continuing would just skip backward without discovering enough records."
+                        )
                 state.setdefault("resumption_tokens", {})[stream_key] = next_token
                 state["updated_at"] = datetime.now(UTC).isoformat()
                 write_json(state_path, state)

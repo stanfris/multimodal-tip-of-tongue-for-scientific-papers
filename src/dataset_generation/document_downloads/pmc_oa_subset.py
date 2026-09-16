@@ -864,16 +864,37 @@ def fetch_pubmed_metadata(
         batch = pmids[start : start + batch_size]
         if not batch:
             continue
-        xml_text = eutils_get(
-            client,
-            "efetch.fcgi",
-            {"db": "pubmed", "id": ",".join(batch), "retmode": "xml"},
-            email=email,
-            api_key=api_key,
-            tool=tool,
-            retries=retries,
-        )
-        batch_records = parse_pubmed_xml(xml_text)
+        batch_records: dict[str, dict[str, Any]] = {}
+        parsed_xml = False
+        for attempt in range(retries + 1):
+            xml_text = eutils_get(
+                client,
+                "efetch.fcgi",
+                {"db": "pubmed", "id": ",".join(batch), "retmode": "xml"},
+                email=email,
+                api_key=api_key,
+                tool=tool,
+                retries=retries,
+            )
+            try:
+                batch_records = parse_pubmed_xml(xml_text)
+                parsed_xml = True
+                break
+            except ElementTree.ParseError as exc:
+                if attempt < retries:
+                    time.sleep(min(2**attempt, 30))
+                    continue
+                LOGGER.warning(
+                    "Skipping PubMed metadata batch %s-%s after malformed XML: %s",
+                    start + 1,
+                    start + len(batch),
+                    exc,
+                )
+        if not parsed_xml:
+            time.sleep(request_sleep_seconds)
+            completed = min(start + len(batch), total)
+            print_inline_progress("PubMed batches", completed, total, records=len(records))
+            continue
         records.update(batch_records)
         if cache_path is not None:
             for record in batch_records.values():

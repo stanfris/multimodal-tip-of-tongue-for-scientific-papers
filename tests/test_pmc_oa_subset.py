@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
+
 from dataset_generation.document_downloads.pmc_oa_subset import (
     DEFAULT_AWS_METADATA_WORKERS,
     DEFAULT_END_YEAR,
@@ -9,6 +11,7 @@ from dataset_generation.document_downloads.pmc_oa_subset import (
     build_parser,
     build_report,
     classify_broad_domain,
+    fetch_pubmed_metadata,
     flag_enabled,
     is_eligible_article_metadata,
     is_eligible_license,
@@ -25,7 +28,7 @@ from dataset_generation.document_downloads.pmc_oa_subset import (
 def test_parser_defaults_to_recent_pmc_year_window() -> None:
     args = build_parser().parse_args([])
 
-    assert args.start_year == DEFAULT_START_YEAR == 2024
+    assert args.start_year == DEFAULT_START_YEAR == 2026
     assert args.end_year == DEFAULT_END_YEAR == 2026
     assert args.aws_metadata_workers == DEFAULT_AWS_METADATA_WORKERS == 64
 
@@ -108,6 +111,57 @@ def test_resume_cache_readers_skip_truncated_rows(tmp_path: Path) -> None:
 
     assert set(read_aws_metadata_cache(aws_path)) == {"1"}
     assert set(read_pubmed_metadata_cache(pubmed_path)) == {"10"}
+
+
+def test_fetch_pubmed_metadata_retries_truncated_xml(tmp_path: Path) -> None:
+    responses = iter(
+        [
+            httpx.Response(200, text="<PubmedArticleSet><PubmedArticle>"),
+            httpx.Response(
+                200,
+                text=(
+                    "<PubmedArticleSet><PubmedArticle><MedlineCitation>"
+                    "<PMID>10</PMID><Article><ArticleTitle>Recovered</ArticleTitle>"
+                    "<Language>eng</Language></Article></MedlineCitation></PubmedArticle>"
+                    "</PubmedArticleSet>"
+                ),
+            ),
+        ]
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: next(responses)))
+    cache_path = tmp_path / "pubmed.jsonl"
+
+    records = fetch_pubmed_metadata(
+        client,
+        ["10"],
+        email=None,
+        api_key=None,
+        tool="test",
+        request_sleep_seconds=0,
+        retries=1,
+        cache_path=cache_path,
+    )
+
+    assert records["10"]["title"] == "Recovered"
+    assert read_pubmed_metadata_cache(cache_path)["10"]["title"] == "Recovered"
+
+
+def test_fetch_pubmed_metadata_skips_persistently_truncated_xml() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<PubmedArticleSet><PubmedArticle>"))
+    )
+
+    records = fetch_pubmed_metadata(
+        client,
+        ["10"],
+        email=None,
+        api_key=None,
+        tool="test",
+        request_sleep_seconds=0,
+        retries=1,
+    )
+
+    assert records == {}
 
 
 def test_article_type_filter_excludes_non_research_material() -> None:
