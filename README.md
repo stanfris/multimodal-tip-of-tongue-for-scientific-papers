@@ -370,6 +370,88 @@ This creates `data/pdf_datasets/ACL`, `data/pdf_datasets/Physics`,
 `data/pdf_datasets/Medicine`. Use `--clean` to rebuild the destination from
 scratch, or `--move` if you want to move files instead of copying them.
 
+Package the five-folder corpus for Hugging Face Datasets as one shared
+retrieval corpus:
+
+```bash
+uv run python prepare_hf_dataset.py \
+  --input-root data/pdf_datasets \
+  --output-dir huggingface_dataset \
+  --shard-size-gb 1 \
+  --prepare-only
+```
+
+The command writes:
+
+```text
+huggingface_dataset/
+  README.md
+  metadata.parquet
+  duplicates.parquet
+  preparation_report.json
+  data/<SOURCE>/shard-00000.tar
+```
+
+Each uncompressed TAR shard uses a WebDataset-compatible pair per document:
+`DOCUMENT_ID.pdf` and `DOCUMENT_ID.json`. `metadata.parquet` has one row per
+PDF with the stable `document_id`, source, original relative path, shard path,
+member path, byte size, SHA-256 checksum, document-level license when present,
+title, year, and DOI. Exact duplicate files are preserved and recorded in
+`duplicates.parquet`.
+
+The packager is resumable. Completed shards are written through temporary files,
+atomically renamed, and skipped on rerun when their shard manifest and TAR
+members validate. Use `--force-rebuild` to rebuild completed shards.
+
+Validate an existing prepared folder without uploading:
+
+```bash
+uv run python prepare_hf_dataset.py \
+  --output-dir huggingface_dataset \
+  --validate-only
+```
+
+Upload only after validation succeeds:
+
+```bash
+HF_XET_HIGH_PERFORMANCE=1 \
+uv run python prepare_hf_dataset.py \
+  --output-dir huggingface_dataset \
+  --repo-id kasys/open-source-scientific-documents \
+  --upload-only
+```
+
+The upload path uses the current Hugging Face CLI (`hf upload`) and the existing
+authenticated session or `HF_TOKEN`; it does not print tokens or create manual
+Git commits. The same command is also available through:
+
+```bash
+uv run dataset-generation prepare-hf-dataset --help
+```
+
+To inspect a single packaged PDF by `document_id`:
+
+```python
+import tarfile
+
+import pandas as pd
+
+metadata = pd.read_parquet("huggingface_dataset/metadata.parquet")
+row = metadata.loc[metadata.document_id == "ACL_..."].iloc[0]
+
+with tarfile.open("huggingface_dataset/" + row.shard, "r") as tar:
+    pdf_bytes = tar.extractfile(row.member_path).read()
+```
+
+Create a random fixed-seed train/test split from those five PDF folders with
+1,000 train PDFs and 100 test PDFs per dataset:
+
+```bash
+uv run python scripts/build_pdf_dataset_split.py \
+  --input-dir data/pdf_datasets \
+  --output data/splits/pdf_dataset_split.json
+```
+
 The selector/downloader uses `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
 identifiers. Interrupted runs retain partial manifests and skip selected

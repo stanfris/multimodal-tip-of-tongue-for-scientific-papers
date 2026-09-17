@@ -20,6 +20,8 @@ from dataset_generation.parsed_dataset_stats import build_parser as build_parsed
 from dataset_generation.parsed_dataset_stats import run as run_parsed_stats
 from dataset_generation.document_downloads.pmc_oa_subset import build_parser as build_pmc_oa_subset_parser
 from dataset_generation.document_downloads.pmc_oa_subset import run as run_pmc_oa_subset
+from dataset_generation.hf_dataset_packaging import build_parser as build_hf_dataset_parser
+from dataset_generation.hf_dataset_packaging import run as run_hf_dataset
 from dataset_generation.storage import read_stats
 from dataset_generation.query_generation import build_parser as build_generate_queries_parser
 from dataset_generation.query_generation import run as run_generate_queries
@@ -63,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[build_document_downloads_parser()],
         add_help=False,
         help="Download source-document PDFs from prepared corpus manifests.",
+    )
+    subparsers.add_parser(
+        "prepare-hf-dataset",
+        parents=[build_hf_dataset_parser()],
+        add_help=False,
+        help="Package, validate, and upload the shared PDF corpus to Hugging Face.",
     )
 
     describe = subparsers.add_parser(
@@ -138,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "download-documents":
         print(json.dumps(run_document_downloads(args), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "prepare-hf-dataset":
+        print(json.dumps(run_hf_dataset(args), indent=2, sort_keys=True))
         return 0
 
     if args.command == "stats":
