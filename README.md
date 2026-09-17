@@ -426,6 +426,15 @@ recomputes SHA-256 for every source PDF. The command logs each stage, periodic
 file and byte counts, and elapsed time. Once `starting hf upload` appears,
 transfer progress is reported by the Hugging Face CLI.
 
+If the prepared dataset has already been validated and has not changed, skip
+the local validation pass on upload:
+
+```bash
+HF_XET_HIGH_PERFORMANCE=1 uv run python prepare_hf_dataset.py \
+  --output-dir huggingface_dataset \
+  --upload-only --skip-validation
+```
+
 The upload path uses the current Hugging Face CLI (`hf upload`) and the existing
 authenticated session or `HF_TOKEN`; it does not print tokens or create manual
 Git commits. The same command is also available through:

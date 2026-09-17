@@ -124,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--prepare-only", action="store_true", help="Prepare and validate locally, but do not upload.")
     parser.add_argument("--upload-only", action="store_true", help="Validate and upload an existing output directory.")
+    parser.add_argument("--skip-validation", action="store_true", help="With --upload-only, upload without rechecking TAR members, metadata, or source PDF checksums.")
     parser.add_argument("--validate-only", action="store_true", help="Run validation only.")
     parser.add_argument("--dry-run", action="store_true", help="Discover and plan without writing shards or uploading.")
     parser.add_argument("--force-rebuild", action="store_true", help="Rebuild completed shards instead of reusing them.")
@@ -142,6 +143,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = args.output_dir.expanduser().resolve()
+    if args.skip_validation:
+        if not args.upload_only or args.dry_run or args.validate_only or args.prepare_only:
+            raise ValueError("--skip-validation requires --upload-only and cannot be combined with other modes")
+        required = [output_dir / name for name in ("README.md", "metadata.parquet", "duplicates.parquet", "preparation_report.json")]
+        required.append(output_dir / "data")
+        missing = [str(path) for path in required if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"Prepared dataset is missing: {', '.join(missing)}")
+        LOGGER.info("Skipping local validation; uploading prepared dataset from %s", output_dir)
+        upload_dataset(output_dir=output_dir, repo_id=args.repo_id, hf_cli=args.hf_cli)
+        return {"output_dir": str(output_dir), "uploaded_to": args.repo_id, "validation_skipped": True}
+
     sources = resolve_sources(args)
     if args.dry_run:
         entries, failures = discover_entries(sources, limit_per_source=args.limit_per_source)

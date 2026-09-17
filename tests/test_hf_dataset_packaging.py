@@ -8,7 +8,9 @@ from pathlib import Path
 import pandas as pd
 
 from dataset_generation.hf_dataset_packaging import SourceSpec
+from dataset_generation.hf_dataset_packaging import build_parser
 from dataset_generation.hf_dataset_packaging import prepare_dataset
+from dataset_generation.hf_dataset_packaging import run
 from dataset_generation.hf_dataset_packaging import shard_size_bytes
 from dataset_generation.hf_dataset_packaging import validate_dataset
 
@@ -132,3 +134,27 @@ def test_validation_reports_invalid_pdf_without_packaging_it(tmp_path) -> None:
     report = json.loads((output_dir / "preparation_report.json").read_text(encoding="utf-8"))
     assert report["packaged_pdf_count"] == 0
     assert report["invalid_or_unreadable"][0]["error"] == "invalid_pdf_header"
+
+
+def test_upload_only_can_skip_local_validation(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    for name in ("README.md", "metadata.parquet", "duplicates.parquet", "preparation_report.json"):
+        (output_dir / name).touch()
+    (output_dir / "data").mkdir()
+    calls = []
+    monkeypatch.setattr(
+        "dataset_generation.hf_dataset_packaging.upload_dataset",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "dataset_generation.hf_dataset_packaging.validate_dataset",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("validation should be skipped")),
+    )
+
+    args = build_parser().parse_args(["--upload-only", "--skip-validation", "--output-dir", str(output_dir)])
+    result = run(args)
+
+    assert result["validation_skipped"] is True
+    assert len(calls) == 1
+    assert calls[0]["output_dir"] == output_dir
