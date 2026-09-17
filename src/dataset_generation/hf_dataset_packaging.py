@@ -11,6 +11,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import time
 from io import BytesIO
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -150,16 +151,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.validate_only:
         return validate_dataset(output_dir=output_dir, sources=sources, limit_per_source=args.limit_per_source).as_dict()
 
-    if not args.upload_only:
-        prepare_dataset(
+    if args.upload_only:
+        validation = validate_dataset(output_dir=output_dir, sources=sources, limit_per_source=args.limit_per_source)
+    else:
+        validation = prepare_dataset(
             sources=sources,
             output_dir=output_dir,
             shard_size_bytes=shard_size_bytes(args.shard_size_gb),
             force_rebuild=args.force_rebuild,
             limit_per_source=args.limit_per_source,
         )
-
-    validation = validate_dataset(output_dir=output_dir, sources=sources, limit_per_source=args.limit_per_source)
     if validation.errors:
         raise RuntimeError(f"Validation failed with {len(validation.errors)} error(s); see preparation_report.json.")
 
@@ -370,7 +371,7 @@ def prepare_dataset(
     shard_size_bytes: int,
     force_rebuild: bool = False,
     limit_per_source: int | None = None,
-) -> None:
+) -> ValidationResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     entries, failures = discover_entries(sources, limit_per_source=limit_per_source)
     plans = plan_shards(entries, output_dir=output_dir, shard_size_bytes=shard_size_bytes)
@@ -395,7 +396,7 @@ def prepare_dataset(
         known_failures=failures,
         limit_per_source=limit_per_source,
     )
-    write_report(output_dir / "preparation_report.json", validation.as_dict())
+    return validation
 
 
 def valid_completed_shard(tar_path: Path) -> bool:
@@ -598,6 +599,8 @@ def validate_dataset(
     known_failures: list[dict[str, Any]] | None = None,
     limit_per_source: int | None = None,
 ) -> ValidationResult:
+    started = time.monotonic()
+    LOGGER.info("Validation: reading metadata from %s", output_dir)
     errors: list[str] = []
     failures = list(known_failures or [])
     metadata_path = output_dir / "metadata.parquet"
@@ -616,6 +619,7 @@ def validate_dataset(
     else:
         duplicate_count = len(pd.read_parquet(duplicates_path))
 
+    LOGGER.info("Validation: discovering source PDFs")
     expected_entries, discovered_failures = discover_entries(sources, limit_per_source=limit_per_source)
     if not known_failures:
         failures.extend(discovered_failures)
@@ -629,7 +633,10 @@ def validate_dataset(
     sidecar_member_count = 0
     members_by_shard: dict[str, set[str]] = {}
 
-    for shard in sorted({row.get("shard") for row in metadata_rows if row.get("shard")}):
+    shards = sorted({row.get("shard") for row in metadata_rows if row.get("shard")})
+    LOGGER.info("Validation: checking %s TAR shards and their members", len(shards))
+    last_progress = time.monotonic()
+    for shard_number, shard in enumerate(shards, start=1):
         tar_path = output_dir / str(shard)
         if not tar_path.exists():
             errors.append(f"Metadata references missing shard: {shard}")
@@ -646,8 +653,15 @@ def validate_dataset(
         for name in names:
             if name.endswith(".pdf") and name[:-4] + ".json" not in names:
                 errors.append(f"Missing JSON sidecar for {shard}:{name}")
+        now = time.monotonic()
+        if now - last_progress >= 5:
+            LOGGER.info("Validation: checked %s/%s shards (%.1fs elapsed)", shard_number, len(shards), now - started)
+            last_progress = now
 
-    for row in metadata_rows:
+    LOGGER.info("Validation: checking metadata and SHA-256 of %s source PDFs", len(metadata_rows))
+    checked_bytes = 0
+    last_progress = time.monotonic()
+    for row_number, row in enumerate(metadata_rows, start=1):
         document_id = row.get("document_id")
         member_path = row.get("member_path")
         shard = row.get("shard")
@@ -669,8 +683,19 @@ def validate_dataset(
         try:
             if str(row.get("sha256")) != sha256_file(entry.path):
                 errors.append(f"Checksum mismatch for {document_id}")
+            checked_bytes += entry.size_bytes
         except OSError as exc:
             errors.append(f"Could not checksum source for {document_id}: {exc}")
+        now = time.monotonic()
+        if now - last_progress >= 5:
+            LOGGER.info(
+                "Validation: checked %s/%s PDFs, %.2f GiB read (%.1fs elapsed)",
+                row_number,
+                len(metadata_rows),
+                checked_bytes / (1024 ** 3),
+                now - started,
+            )
+            last_progress = now
 
     expected_ids = set(expected_by_id)
     packaged_ids = {str(row.get("document_id")) for row in metadata_rows}
@@ -709,6 +734,13 @@ def validate_dataset(
         errors=errors,
     )
     write_report(output_dir / "preparation_report.json", result.as_dict())
+    LOGGER.info(
+        "Validation complete: %s PDFs, %.2f GiB checked, %s error(s) in %.1fs",
+        len(metadata_rows),
+        checked_bytes / (1024 ** 3),
+        len(errors),
+        time.monotonic() - started,
+    )
     return result
 
 
@@ -853,8 +885,13 @@ def upload_dataset(*, output_dir: Path, repo_id: str, hf_cli: str) -> None:
     if env.get("HF_XET_HIGH_PERFORMANCE") == "1":
         LOGGER.info("HF_XET_HIGH_PERFORMANCE=1 enabled for upload")
     try:
+        started = time.monotonic()
+        LOGGER.info("Upload: ensuring dataset repository %s exists", repo_id)
         subprocess.run(create_cmd, check=False, env=env)
+        LOGGER.info("Upload: repository check finished in %.1fs; starting hf upload from %s", time.monotonic() - started, output_dir)
+        started = time.monotonic()
         subprocess.run(upload_cmd, check=True, env=env)
+        LOGGER.info("Upload complete in %.1fs", time.monotonic() - started)
     except FileNotFoundError as exc:
         raise RuntimeError(f"Hugging Face CLI not found: {hf_cli}") from exc
 

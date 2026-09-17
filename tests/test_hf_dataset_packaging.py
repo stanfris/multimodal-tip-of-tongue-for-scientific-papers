@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import tarfile
 from pathlib import Path
 
@@ -17,7 +18,8 @@ def write_pdf(path: Path, body: bytes) -> None:
     path.write_bytes(b"%PDF-1.4\n" + body + b"\n%%EOF\n")
 
 
-def test_prepare_dataset_writes_webdataset_shards_and_metadata(tmp_path) -> None:
+def test_prepare_dataset_writes_webdataset_shards_and_metadata(tmp_path, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="dataset_generation.hf_dataset_packaging")
     input_root = tmp_path / "pdf_datasets"
     write_pdf(input_root / "ACL" / "2023.acl-long.1.pdf", b"acl")
     write_pdf(input_root / "Physics" / "2609.17126v1.pdf", b"physics")
@@ -80,6 +82,8 @@ def test_prepare_dataset_writes_webdataset_shards_and_metadata(tmp_path) -> None
     assert result.errors == []
     assert result.packaged_pdf_count == 2
     assert result.unique_content_count == 2
+    assert "Validation: checking metadata and SHA-256 of 2 source PDFs" in caplog.text
+    assert "Validation complete: 2 PDFs" in caplog.text
 
 
 def test_prepare_dataset_records_duplicates_and_can_extract_by_document_id(tmp_path) -> None:

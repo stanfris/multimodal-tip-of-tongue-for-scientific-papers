@@ -421,6 +421,11 @@ uv run python prepare_hf_dataset.py \
   --upload-only
 ```
 
+Before upload, validation scans the source folders, checks TAR members, and
+recomputes SHA-256 for every source PDF. The command logs each stage, periodic
+file and byte counts, and elapsed time. Once `starting hf upload` appears,
+transfer progress is reported by the Hugging Face CLI.
+
 The upload path uses the current Hugging Face CLI (`hf upload`) and the existing
 authenticated session or `HF_TOKEN`; it does not print tokens or create manual
 Git commits. The same command is also available through:
