@@ -1,78 +1,35 @@
-SYSTEM
+Let's do a role play. You are a researcher or student trying to re-find a scientific paper that you encountered previously but can no longer identify. You are writing a query that asks for help finding the paper.
 
-You are simulating a researcher who previously encountered a scientific
-paper and is now trying to find it again.
-
-The researcher cannot remember the title or authors. They only remember
-some aspects of the paper imperfectly.
-
-Your job is to write a natural search request that this researcher might
-give to a search engine or conversational retrieval system.
-
-This is a tip-of-the-tongue known-item search: the user knows that the
-paper exists and wants to re-find that particular paper.
-
-The supplied memory cues are a pool of possible recollections. You do not
-need to use all of them. Select and combine the cues that would make for a
-plausible remembered search request.
-
-USER
-
-Let's do a role play.
-
-You previously read a scientific paper, but some time has passed and you
-cannot remember what it was called.
-
-These are the things you may remember:
+Write a natural, detailed tip-of-the-tongue query of approximately 150–200 words based on the memory cues below. Describe what you remember without revealing or inventing the paper's title, authors, or other identifying information.
 
 MEMORY CUES:
 {selected_cues}
 
-Write one natural-language request that you might use to find the paper.
+Guidelines:
 
-MUST:
+MUST FOLLOW:
+1. Incorporate every provided memory cue faithfully. Do not contradict, omit, or substantially alter any cue.
+2. Do not introduce specific factual details that are not supported by the memory cues.
+3. Do not mention the paper's title, authors, affiliations, venue, DOI, or other direct identifiers, even if they appear in the cues.
+4. Express the information as an imperfect personal recollection rather than as a confident summary of the paper.
+5. Maintain a casual, conversational tone appropriate for someone genuinely asking an online community for help. Do not use headings, bullet points, or formal academic prose.
+6. Describe technical concepts in the way a searcher might remember them, while preserving the terminology supplied by the cues.
+7. When visual cues are provided, emphasize figures that stand out semantically or structurally: their layout, components, relationships, shapes, colours, or overall appearance.
+8. Keep visual and textual recollections distinguishable. Do not claim that textual information appeared in a figure unless the cues explicitly establish this.
+9. Make the query sufficiently descriptive to support retrieval, but avoid turning the cues into an exact, keyword-heavy list.
+10. Begin directly with the recollection. Do not use a formal greeting or address the forum with phrases such as "Hello" or "Hey everyone."
+11. End with a natural request for help identifying the paper.
+12. Output only the final forum post.
 
-1. Use only information contained in the supplied memory cues.
-2. Do not try to include every cue. Select the cues that seem most useful,
-   distinctive, or plausible to mention from memory.
-3. Compress related cues when possible instead of describing every small
-   detail separately.
-4. Preserve uncertainty: phrase the request as recollection rather than
-   authoritative description.
-5. Make it clear that the user is trying to re-find a previously
-   encountered paper.
-6. Express the remembered information naturally rather than as a checklist.
-7. Do not mention the title, authors, venue, DOI, citation, or figure number.
-8. Do not introduce scientific facts that are absent from the supplied cues.
-9. Respect the modality of the supplied memory: if only visual cues are
-   supplied, do not infer the topic, method, dataset, or result.
+COULD FOLLOW:
+1. Frequently convey uncertainty through natural qualifications, competing recollections, or hesitation. Vary the phrasing and avoid repeatedly using stock expressions such as "I'm not sure, but."
+2. Often mention an earlier unsuccessful attempt to find the paper, such as trying search engines, browsing references, or searching with remembered keywords.
+3. Often include a polite request for assistance or brief expression of thanks.
+4. Sometimes state that a particular detail, term, dataset, or part of the figure can no longer be recalled.
+5. Sometimes mention the approximate period or situation in which the paper was encountered, such as during a literature review, course, thesis, seminar, or research project.
+6. Occasionally give an exclusion criterion: something the searcher believes the paper was not about, did not contain, or should not be confused with.
+7. Occasionally express mild frustration, curiosity, or another natural emotional reaction to being unable to locate the paper.
+8. You may include a small amount of ambiguity or uncertainty between plausible interpretations, but do not fabricate concrete details or deliberately contradict the supplied cues.
+9. Prefer coherent prose over presenting each memory cue separately. Connect the clues as parts of one imperfect recollection.
 
-GUIDANCE:
-
-* Focus on the remembered gist rather than reconstructing all available
-  details.
-* Specific details are fine when they seem memorable or distinctive, but
-  avoid unnecessary enumeration.
-* Different queries may emphasize different kinds of memory, such as a
-  visual impression, a method, a result, a topic, a dataset, or a
-  combination of these, depending on the supplied cues.
-* It is fine to mention only one strong recollection, or several weaker
-  recollections.
-* The wording, length, and level of specificity may vary naturally.
-* The request should sound like someone remembering the paper after some
-  time, not someone describing it while looking at it.
-
-Bad:
-"I'm trying to find a paper with two side-by-side panels containing blue
-and green dots in one panel and orange and purple nodes in the other, with
-lines connecting all the nodes and a legend with colored markers. There
-was also a table with bold headers, a horizontal separator, and aligned
-values."
-
-Better:
-"I'm trying to find a paper I saw before. I remember a figure with two
-network-like diagrams side by side, with differently colored groups of
-nodes connected by lines. I vaguely remember there being a large number 
-of results tables as well, with bold headers and aligned values."
-
-Return only the query.
+Generate the forum post now.
