@@ -21,6 +21,7 @@ dependencies = [
     "torchvision",
     "requests>=2.34.2",
     "beautifulsoup4>=4.15.0",
+    "kaggle>=2.2.4",
 ]
 
 [project.scripts]
