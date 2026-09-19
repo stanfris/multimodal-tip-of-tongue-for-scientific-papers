@@ -123,7 +123,7 @@ visual_query:
     resume: true
 
   output:
-    dir: ../data/query_collections
+    dir: ../data/query_collections_test
 
   query_sets:
     train:
