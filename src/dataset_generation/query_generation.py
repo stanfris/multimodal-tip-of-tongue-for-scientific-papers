@@ -777,13 +777,55 @@ def format_identifiers(paper: dict[str, Any]) -> str:
 
 
 def format_query_prompt(prompt_template: str, selected: list[MemoryComponent]) -> str:
-    selected_cues = "\n".join(f"- {component.text}" for component in selected)
+    selected_cues = _format_selected_cues_for_query(selected)
     return prompt_template.replace("{selected_cues}", selected_cues)
 
 
 def _render_null_query(selected: list[MemoryComponent]) -> str:
-    memories = " ".join(component.text.rstrip(".") for component in selected)
+    memories = " ".join(_display_clue_text(component.text).rstrip(".") for component in selected)
     return f"I'm trying to find a paper I read before. I remember that {memories}."
+
+
+def _format_selected_cues_for_query(selected: list[MemoryComponent]) -> str:
+    lines: list[str] = []
+    visual_lines_by_figure: dict[str, list[str]] = {}
+    figure_order: list[str] = []
+
+    for component in selected:
+        if component.kind == "visual":
+            figure_name, clue_text = _split_visual_clue(component.text)
+            if figure_name not in visual_lines_by_figure:
+                figure_order.append(figure_name)
+                visual_lines_by_figure[figure_name] = []
+            visual_lines_by_figure[figure_name].append(f"- {_display_clue_text(clue_text)}")
+        else:
+            lines.append(f"- {_display_clue_text(component.text)}")
+
+    for figure_name in figure_order:
+        if lines:
+            lines.append("")
+        lines.append(figure_name)
+        lines.extend(visual_lines_by_figure[figure_name])
+
+    return "\n".join(lines)
+
+
+def _split_visual_clue(text: str) -> tuple[str, str]:
+    match = re.match(r"^(Figure\s+\d+[a-zA-Z]?|Figure):\s*(.+)$", text.strip())
+    if match:
+        return match.group(1), match.group(2)
+    return "Figure", text
+
+
+def _display_clue_text(text: str) -> str:
+    text = text.strip()
+    textual_match = re.match(r"^textual\s+[^:]+:\s*(.+)$", text, re.IGNORECASE)
+    if textual_match:
+        return textual_match.group(1).strip()
+    generic_match = re.match(r"^[A-Za-z][A-Za-z0-9_ -]*:\s*(.+)$", text)
+    if generic_match:
+        return generic_match.group(1).strip()
+    return text
 
 
 def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGenerationConfig:
