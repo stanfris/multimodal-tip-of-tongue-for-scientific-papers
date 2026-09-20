@@ -1,6 +1,6 @@
-Let's do a role play. You are a researcher or student trying to re-find a scientific paper that you encountered previously but can no longer identify. You are writing a query that asks for help finding the paper.
+Let's do a role play. You are a researcher or student trying to re-find a scientific paper that you encountered previously but can no longer identify. You are writing a query asking an online community for help finding it.
 
-Write a natural, detailed tip-of-the-tongue query of approximately 150–200 words based on the memory cues below. Describe what you remember without revealing or inventing the paper's title, authors, or other identifying information.
+Write a natural tip-of-the-tongue query of approximately 100-150 words using the memory cues below. The query should sound like an imperfect recollection, not a complete description of the document or a summary generated while viewing it.
 
 MEMORY CUES:
 {selected_cues}
@@ -8,28 +8,38 @@ MEMORY CUES:
 Guidelines:
 
 MUST FOLLOW:
-1. Incorporate every provided memory cue faithfully. Do not contradict, omit, or substantially alter any cue.
-2. Do not introduce specific factual details that are not supported by the memory cues.
-3. Do not mention the paper's title, authors, affiliations, venue, DOI, or other direct identifiers, even if they appear in the cues.
-4. Express the information as an imperfect personal recollection rather than as a confident summary of the paper.
-5. Maintain a casual, conversational tone appropriate for someone genuinely asking an online community for help. Do not use headings, bullet points, or formal academic prose.
-6. Describe technical concepts in the way a searcher might remember them, while preserving the terminology supplied by the cues.
-7. When visual cues are provided, emphasize figures that stand out semantically or structurally: their layout, components, relationships, shapes, colours, or overall appearance.
-8. Keep visual and textual recollections distinguishable. Do not claim that textual information appeared in a figure unless the cues explicitly establish this.
-9. Make the query sufficiently descriptive to support retrieval, but avoid turning the cues into an exact, keyword-heavy list.
-10. Begin directly with the recollection. Do not use a formal greeting or address the forum with phrases such as "Hello" or "Hey everyone."
-11. End with a natural request for help identifying the paper.
-12. Output only the final forum post.
+1. Use only information supported by the memory cues. Do not invent claims about the paper's topic, method, results, datasets, or figures.
+2. Choose one primary visual memory and at most two supporting visual
+   details. Do not summarize the document's complete set of figures.
+3. Omit generic properties that would rarely be remembered or help identify
+   the paper, such as white backgrounds, black text, ordinary grid lines,
+   column alignment, or the dimensions of conventional tables.
+4. Organize the query around the primary visual memory. Integrate supporting
+   details into the recollection rather than introducing each with repeated
+   phrases such as "There was," "Another," or "Then there was."
+5. Express uncertainty locally around particular remembered details, not only
+   through a general statement that the title or authors cannot be recalled.
+6. Prefer semantically or structurally distinctive figures over generic tables, formatting details, axes, grid lines, or ordinary document features.
+7. Do not mention the paper's title, authors, affiliations, venue, DOI, citation information, or other direct identifiers, even if they occur in the cues.
+8. Avoid copying long or unusually specific text labels verbatim when they could function as exact-match search keys. Describe their remembered meaning more generally unless the terminology is itself an essential memory cue.
+9. Express the details with realistic uncertainty. The searcher may remember the broad appearance or relationship between elements without remembering every colour, label, position, or interpretation exactly.
+10. When visual cues are provided, describe what the figure looked like: its layout, components, colours, shapes, clusters, connections, contrasts, or other visually salient relationships.
+11. Keep visual and textual recollections distinguishable. Do not claim that textual information appeared inside a figure unless the cues explicitly support this.
+12. Write as a single coherent recollection rather than as a list of clues. Connect the most memorable details naturally.
+13. Maintain a casual, conversational tone appropriate for someone genuinely requesting help online. Do not use headings, bullet points, or formal academic prose.
+14. Begin directly with the recollection. Do not begin with a formal greeting or phrases such as "Hello" or "Hey everyone."
+15. End with a natural request for help identifying the paper.
+16. Output only the final query.
 
 COULD FOLLOW:
-1. Frequently convey uncertainty through natural qualifications, competing recollections, or hesitation. Vary the phrasing and avoid repeatedly using stock expressions such as "I'm not sure, but."
-2. Often mention an earlier unsuccessful attempt to find the paper, such as trying search engines, browsing references, or searching with remembered keywords.
-3. Often include a polite request for assistance or brief expression of thanks.
-4. Sometimes state that a particular detail, term, dataset, or part of the figure can no longer be recalled.
-5. Sometimes mention the approximate period or situation in which the paper was encountered, such as during a literature review, course, thesis, seminar, or research project.
-6. Occasionally give an exclusion criterion: something the searcher believes the paper was not about, did not contain, or should not be confused with.
-7. Occasionally express mild frustration, curiosity, or another natural emotional reaction to being unable to locate the paper.
-8. You may include a small amount of ambiguity or uncertainty between plausible interpretations, but do not fabricate concrete details or deliberately contradict the supplied cues.
-9. Prefer coherent prose over presenting each memory cue separately. Connect the clues as parts of one imperfect recollection.
+1. Frequently convey uncertainty using varied and natural qualifications, such as questioning a colour, arrangement, interpretation, or relationship between remembered elements.
+2. Often mention an unsuccessful earlier search, such as trying broad keywords, searching through references, or browsing papers with similar figures.
+3. Often include a polite request for assistance or a brief expression of thanks.
+4. Sometimes acknowledge being unable to remember a label, technical term, dataset, or part of a figure.
+5. Sometimes mention a plausible general context in which the paper was encountered, such as during coursework, a literature review, thesis work, a seminar, or a research project.
+6. Occasionally mention something the searcher believes the paper was not about or should not be confused with, but only when this can be stated without inventing unsupported facts.
+7. Occasionally express mild frustration, curiosity, or another natural reaction to being unable to locate the paper.
+8. You may introduce ambiguity between interpretations of a supplied cue, but do not fabricate concrete document details or deliberately contradict the cues.
+9. Vary the organization and wording across generated queries. Do not repeatedly rely on stock openings such as "I remember encountering a paper a few years back" or stock endings such as "Does this sound familiar to anyone?"
 
-Generate the forum post now.
+Generate the query now.
