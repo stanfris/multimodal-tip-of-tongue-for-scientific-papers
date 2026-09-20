@@ -214,11 +214,40 @@ def strip_thinking(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
+GPT_OSS_FINAL_MARKER = "<|channel|>final<|message|>"
+GPT_OSS_TRAILING_TOKENS = ("<|return|>", "<|end|>")
+
+
+def is_gpt_oss_model(model_id: str | None) -> bool:
+    return "gpt-oss" in (model_id or "").lower()
+
+
+def apply_gpt_oss_chat_template(tokenizer: Any, prompt: str) -> str:
+    messages = [
+        {"role": "system", "content": "Reasoning: low"},
+        {"role": "user", "content": prompt},
+    ]
+    if not hasattr(tokenizer, "apply_chat_template"):
+        return "Reasoning: low\n\n" + prompt
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+
+def extract_gpt_oss_final_text(text: str) -> str | None:
+    _, marker, final_text = text.rpartition(GPT_OSS_FINAL_MARKER)
+    if not marker:
+        return None
+    final_text = final_text.strip()
+    while final_text.endswith(GPT_OSS_TRAILING_TOKENS):
+        token = next(token for token in GPT_OSS_TRAILING_TOKENS if final_text.endswith(token))
+        final_text = final_text[: -len(token)].rstrip()
+    return final_text
+
+
 def load_mlx_model(model_name: str) -> dict[str, Any]:
     from mlx_lm import load
 
     model, tokenizer = load(model_name)
-    return {"model": model, "tokenizer": tokenizer}
+    return {"model": model, "tokenizer": tokenizer, "model_id": model_name}
 
 
 def generate_with_mlx(
@@ -232,16 +261,27 @@ def generate_with_mlx(
     from mlx_lm.sample_utils import make_sampler
 
     tokenizer = loaded["tokenizer"]
-    prompt = apply_text_chat_template(tokenizer, prompt, thinking=thinking)
-    output = generate(
-        loaded["model"],
-        tokenizer,
-        prompt=prompt,
-        max_tokens=max_tokens,
-        sampler=make_sampler(temp=temperature),
-        verbose=False,
-    )
-    text = str(output).strip()
+    gpt_oss = is_gpt_oss_model(loaded.get("model_id"))
+    if gpt_oss:
+        prompt = apply_gpt_oss_chat_template(tokenizer, prompt)
+    else:
+        prompt = apply_text_chat_template(tokenizer, prompt, thinking=thinking)
+    for token_limit in ([max_tokens, max(max_tokens * 2, 512)] if gpt_oss else [max_tokens]):
+        output = generate(
+            loaded["model"],
+            tokenizer,
+            prompt=prompt,
+            max_tokens=token_limit,
+            sampler=make_sampler(temp=temperature),
+            verbose=False,
+        )
+        text = str(output).strip()
+        if gpt_oss:
+            final_text = extract_gpt_oss_final_text(text)
+            if final_text is not None:
+                return final_text
+    if gpt_oss:
+        raise RuntimeError("gpt-oss output did not include a final channel after retry.")
     return text if thinking else strip_thinking(text)
 
 
@@ -267,7 +307,27 @@ def load_transformers_model(
         tokenizer.pad_token = tokenizer.eos_token
     if hasattr(tokenizer, "padding_side"):
         tokenizer.padding_side = "left"
-    return {"model": model, "tokenizer": tokenizer}
+    return {"model": model, "tokenizer": tokenizer, "model_id": model_name}
+
+
+def _decode_transformers_generation(
+    model: Any,
+    tokenizer: Any,
+    inputs: Any,
+    *,
+    max_tokens: int,
+    temperature: float,
+    skip_special_tokens: bool,
+) -> str:
+    generate_kwargs: dict[str, Any] = {"max_new_tokens": max_tokens}
+    if temperature > 0:
+        generate_kwargs.update({"do_sample": True, "temperature": temperature})
+    else:
+        generate_kwargs["do_sample"] = False
+    generated_ids = model.generate(**inputs, **generate_kwargs)
+    generated_ids_trimmed = generated_ids[:, inputs.input_ids.shape[1] :]
+    output_text = tokenizer.batch_decode(generated_ids_trimmed, skip_special_tokens=skip_special_tokens)
+    return output_text[0].strip()
 
 
 def generate_with_transformers(
@@ -279,18 +339,36 @@ def generate_with_transformers(
 ) -> str:
     model = loaded["model"]
     tokenizer = loaded["tokenizer"]
-    prompt = apply_text_chat_template(tokenizer, prompt, thinking=thinking)
+    gpt_oss = is_gpt_oss_model(loaded.get("model_id"))
+    if gpt_oss:
+        prompt = apply_gpt_oss_chat_template(tokenizer, prompt)
+    else:
+        prompt = apply_text_chat_template(tokenizer, prompt, thinking=thinking)
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    generate_kwargs: dict[str, Any] = {"max_new_tokens": max_tokens}
-    if temperature > 0:
-        generate_kwargs.update({"do_sample": True, "temperature": temperature})
-    else:
-        generate_kwargs["do_sample"] = False
-    generated_ids = model.generate(**inputs, **generate_kwargs)
-    generated_ids_trimmed = generated_ids[:, inputs.input_ids.shape[1] :]
-    output_text = tokenizer.batch_decode(generated_ids_trimmed, skip_special_tokens=True)
-    text = output_text[0].strip()
+    text = _decode_transformers_generation(
+        model,
+        tokenizer,
+        inputs,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        skip_special_tokens=not gpt_oss,
+    )
+    if gpt_oss:
+        final_text = extract_gpt_oss_final_text(text)
+        if final_text is None:
+            text = _decode_transformers_generation(
+                model,
+                tokenizer,
+                inputs,
+                max_tokens=max(max_tokens * 2, 512),
+                temperature=temperature,
+                skip_special_tokens=False,
+            )
+            final_text = extract_gpt_oss_final_text(text)
+        if final_text is None:
+            raise RuntimeError("gpt-oss output did not include a final channel after retry.")
+        return final_text
     return text if thinking else strip_thinking(text)
 
 
@@ -301,6 +379,11 @@ def generate_batch_with_transformers(
     temperature: float,
     thinking: bool = False,
 ) -> list[str]:
+    if is_gpt_oss_model(loaded.get("model_id")):
+        return [
+            generate_with_transformers(loaded, prompt, max_tokens, temperature, thinking=thinking)
+            for prompt in prompts
+        ]
     model = loaded["model"]
     tokenizer = loaded["tokenizer"]
     formatted = [apply_text_chat_template(tokenizer, prompt, thinking=thinking) for prompt in prompts]
