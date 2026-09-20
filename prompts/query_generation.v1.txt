@@ -8,37 +8,40 @@ MEMORY CUES:
 Guidelines:
 
 MUST FOLLOW:
-1. Use only information supported by the memory cues. Do not invent claims about the paper's topic, method, results, datasets, or figures.
-2. Choose one primary visual memory and at most two supporting visual
-   details. Do not summarize the document's complete set of figures.
-3. Omit generic properties that would rarely be remembered or help identify
-   the paper, such as white backgrounds, black text, ordinary grid lines,
-   column alignment, or the dimensions of conventional tables.
-4. Organize the query around the primary visual memory. Integrate supporting
-   details into the recollection rather than introducing each with repeated
-   phrases such as "There was," "Another," or "Then there was."
-5. Express uncertainty locally around particular remembered details, not only
-   through a general statement that the title or authors cannot be recalled.
-6. Prefer semantically or structurally distinctive figures over generic tables, formatting details, axes, grid lines, or ordinary document features.
-7. Do not mention the paper's title, authors, affiliations, venue, DOI, citation information, or other direct identifiers, even if they occur in the cues.
-8. Avoid copying long or unusually specific text labels verbatim when they could function as exact-match search keys. Describe their remembered meaning more generally unless the terminology is itself an essential memory cue.
-9. Express the details with realistic uncertainty. The searcher may remember the broad appearance or relationship between elements without remembering every colour, label, position, or interpretation exactly.
-10. Keep visual and textual recollections distinguishable. Do not claim that textual information appeared inside a figure unless the cues explicitly support this.
-11. Write as a single coherent recollection rather than as a list of clues. Connect the most memorable details naturally.
-12. Maintain a casual, conversational tone appropriate for someone genuinely requesting help online. Do not use headings, bullet points, or formal academic prose.
-13. Begin directly with the recollection. Do not begin with a formal greeting or phrases such as "Hello" or "Hey everyone."
-14. End with a natural request for help identifying the paper.
-15. Output only the final query.
+1. Use only information supported by the memory cues. Do not infer or invent the paper's topic, method, findings, datasets, motivation, or scientific field from the appearance of a figure.
+2. Select one primary visual memory. You may include at most two supporting details, preferably from the same figure or from one clearly related figure. It is not necessary to use every cue.
+3. Prefer the most visually distinctive cue: an unusual diagram, recognizable arrangement, salient contrast, branching structure, cluster, shape, colour pattern, or relationship between elements.
+4. Do not use an ordinary results table as the primary memory when a more distinctive visual cue is available.
+5. Treat overlapping descriptions of the same figure as alternative observations, not as separate memories that must all be included.
+6. If cues appear unrelated or possibly inconsistent, choose the most coherent subset. Do not combine them into a single interpretation merely to include more information.
+7. Organize the entire query around the primary visual memory. Do not enumerate figures or describe the document sequentially.
+8. Omit generic visual properties, including white backgrounds, black text, grid lines, aligned columns, table dimensions, standard axes, or the presence of numerical values.
+9. Describe visible appearance and structure before offering an interpretation of what the figure represented.
+10. Express uncertainty locally. Qualify the particular colour, label, connection, position, or interpretation that may be misremembered.
+11. Do not convert formatting into unsupported meaning. Boldface, italics, arrows, colours, or spatial proximity do not establish scientific importance or causal relationships unless the cues explicitly say so.
+12. Avoid copying long or unusually specific labels verbatim. Paraphrase their apparent meaning unless the supplied terminology is essential to the memory.
+13. Keep visual and textual evidence separate. Do not claim that a topic, finding, or technical concept appeared in a figure unless explicitly stated by the cues.
+14. Do not mention figure numbers unless their location or ordering is genuinely important to the recollection.
+15. Do not mention the title, authors, affiliations, venue, DOI, citations, or other direct identifiers.
+16. Write one coherent, casual paragraph appropriate for an online request. Do not use headings, bullet points, or formal academic prose.
+17. Begin directly with the remembered content, without a greeting or generic stock introduction.
+18. End with a natural request for help identifying the paper.
+19. Output only the final query. Do not output analysis, planning, explanations, or notes.
 
 COULD FOLLOW:
-1. Frequently convey uncertainty using varied and natural qualifications, such as questioning a colour, arrangement, interpretation, or relationship between remembered elements.
-2. Often mention an unsuccessful earlier search, such as trying broad keywords, searching through references, or browsing papers with similar figures.
-3. Often include a polite request for assistance or a brief expression of thanks.
-4. Sometimes acknowledge being unable to remember a label, technical term, dataset, or part of a figure.
-5. Sometimes mention a plausible general context in which the paper was encountered, such as during coursework, a literature review, thesis work, a seminar, or a research project.
-6. Occasionally mention something the searcher believes the paper was not about or should not be confused with, but only when this can be stated without inventing unsupported facts.
-7. Occasionally express mild frustration, curiosity, or another natural reaction to being unable to locate the paper.
-8. You may introduce ambiguity between interpretations of a supplied cue, but do not fabricate concrete document details or deliberately contradict the cues.
-9. Vary the organization and wording across generated queries. Do not repeatedly rely on stock openings such as "I remember encountering a paper a few years back" or stock endings such as "Does this sound familiar to anyone?"
+1. Frequently introduce natural uncertainty about a particular visual detail or its interpretation.
+2. Often mention one unsuccessful search attempt, but keep it brief.
+3. Often include a polite request for help or short expression of thanks.
+4. Sometimes acknowledge that a label or technical term cannot be recalled.
+5. Sometimes mention a general encounter context, but only if supplied by the cues.
+6. Occasionally mention an exclusion criterion, but only when supported by the cues.
+7. Occasionally express mild frustration or curiosity.
+8. Vary the opening, narrative order, uncertainty phrasing, and final request across queries.
+9. Prefer concrete visual recollection over generic statements such as “the paper was technical” or “it contained many numbers.”
+
+Before writing, silently identify:
+- the single most distinctive visual memory;
+- zero to two supporting details;
+- any cues that should be ignored as generic, redundant, disconnected, or overly identifying.
 
 Generate the query now.

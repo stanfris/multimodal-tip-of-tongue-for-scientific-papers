@@ -133,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="train",
         help="Managed query set to generate. Defaults to train.",
     )
-    parser.add_argument("--limit", type=int, help="Maximum number of new queries across all modes in this run.")
+    parser.add_argument("--limit", type=int, help="Target number of queries per mode, including existing queries when resuming.")
     return parser
 
 
@@ -184,10 +184,7 @@ def _generate_query_collections_from_preprocessed(
     root.mkdir(parents=True, exist_ok=True)
     root_query_path = config.clues_dir / "queries.jsonl"
     query_keys = _read_existing_query_keys(root_query_path)
-    generated_count = 0
     for mode in sorted(config.modes, key=lambda value: value != "visual-and-text"):
-        if limit is not None and generated_count >= limit:
-            break
         collection_dir = root / mode.replace("-", "_")
         collection_dir.mkdir(parents=True, exist_ok=True)
         collection_query_path = collection_dir / "queries.jsonl"
@@ -196,8 +193,7 @@ def _generate_query_collections_from_preprocessed(
         existing = _read_existing_query_state(collection_query_path, mode) if config.resume else None
         mode_config = config
         if limit is not None:
-            existing_count = len(existing.examples) if existing is not None else 0
-            max_examples = existing_count + limit - generated_count
+            max_examples = limit
             if config.max_examples is not None:
                 max_examples = min(max_examples, config.max_examples)
             mode_config = replace(config, max_examples=max_examples)
@@ -217,7 +213,6 @@ def _generate_query_collections_from_preprocessed(
             collection_query_path=collection_query_path,
         )
         collection = (existing.examples if existing is not None else []) + examples
-        generated_count += len(examples)
         write_test_collection(collection, collection_dir)
         _write_collection_metadata(collection_dir, mode, config, prompt_sha256, len(collection))
     _write_root_metadata(root, config, prompt_sha256)

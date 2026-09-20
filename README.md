@@ -95,7 +95,7 @@ Figure descriptions, textual clues, query generation, and query judgement are ma
 dataset paths, split index, stage-specific prompt/model/generation settings,
 and the standardized train/test query-set definitions. Runtime overrides for
 managed query settings are intentionally not supported, except for the
-`--limit` smoke-test cap on newly generated queries.
+`--limit` cap on total queries per mode, including existing queries when resuming.
 
 Generate the training set by default, or explicitly select the test set:
 
