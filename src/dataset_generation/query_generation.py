@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -88,7 +88,7 @@ class QueryGenerationConfig:
     judgement_device_map: str = "auto"
     judgement_dtype: str = "bfloat16"
     judgement_attn_implementation: str | None = "sdpa"
-    modes: tuple[QueryMode, ...] = ("visual-only", "visual-and-text")
+    modes: tuple[QueryMode, ...] = ("visual-and-text", "visual-only")
     seed: int = 13
     visual_component_budget: int = DEFAULT_VISUAL_COMPONENT_BUDGET
     textual_component_budget: int = DEFAULT_TEXTUAL_COMPONENT_BUDGET
@@ -133,12 +133,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="train",
         help="Managed query set to generate. Defaults to train.",
     )
+    parser.add_argument("--limit", type=int, help="Maximum number of new queries across all modes in this run.")
     return parser
 
 
 def run(args: argparse.Namespace) -> Path:
     config = load_query_generation_config(args)
-    return generate_query_collections(config)
+    if args.limit is not None and args.limit < 1:
+        raise ValueError("--limit must be at least 1")
+    return generate_query_collections(config, limit=args.limit)
 
 
 def load_query_generation_config(args: argparse.Namespace) -> QueryGenerationConfig:
@@ -147,12 +150,14 @@ def load_query_generation_config(args: argparse.Namespace) -> QueryGenerationCon
     return config
 
 
-def generate_query_collections(config: QueryGenerationConfig) -> Path:
+def generate_query_collections(config: QueryGenerationConfig, *, limit: int | None = None) -> Path:
     prompt_text = config.prompt.read_text(encoding="utf-8")
     prompt_sha256 = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     loaded_generator = load_query_generator(config)
     loaded_judge = load_query_judge(config)
-    return _generate_query_collections_from_preprocessed(config, prompt_text, prompt_sha256, loaded_generator, loaded_judge)
+    return _generate_query_collections_from_preprocessed(
+        config, prompt_text, prompt_sha256, loaded_generator, loaded_judge, limit=limit
+    )
 
 
 
@@ -164,6 +169,8 @@ def _generate_query_collections_from_preprocessed(
     prompt_sha256: str,
     loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
     loaded_judge: tuple[dict[str, Any], JudgementGenerator] | None,
+    *,
+    limit: int | None = None,
 ) -> Path:
     papers = read_preprocessed_papers(config.dataset)
     components_by_paper = _components_by_paper(
@@ -177,19 +184,29 @@ def _generate_query_collections_from_preprocessed(
     root.mkdir(parents=True, exist_ok=True)
     root_query_path = config.clues_dir / "queries.jsonl"
     query_keys = _read_existing_query_keys(root_query_path)
-    for mode in config.modes:
+    generated_count = 0
+    for mode in sorted(config.modes, key=lambda value: value != "visual-and-text"):
+        if limit is not None and generated_count >= limit:
+            break
         collection_dir = root / mode.replace("-", "_")
         collection_dir.mkdir(parents=True, exist_ok=True)
         collection_query_path = collection_dir / "queries.jsonl"
         if not config.resume:
             collection_query_path.unlink(missing_ok=True)
         existing = _read_existing_query_state(collection_query_path, mode) if config.resume else None
+        mode_config = config
+        if limit is not None:
+            existing_count = len(existing.examples) if existing is not None else 0
+            max_examples = existing_count + limit - generated_count
+            if config.max_examples is not None:
+                max_examples = min(max_examples, config.max_examples)
+            mode_config = replace(config, max_examples=max_examples)
         collection_query_keys = _read_existing_query_keys(collection_query_path)
         examples = _generate_mode_examples_from_papers(
             mode,
             selected_papers,
             components_by_paper,
-            config,
+            mode_config,
             prompt_text,
             loaded_generator,
             loaded_judge,
@@ -200,6 +217,7 @@ def _generate_query_collections_from_preprocessed(
             collection_query_path=collection_query_path,
         )
         collection = (existing.examples if existing is not None else []) + examples
+        generated_count += len(examples)
         write_test_collection(collection, collection_dir)
         _write_collection_metadata(collection_dir, mode, config, prompt_sha256, len(collection))
     _write_root_metadata(root, config, prompt_sha256)
@@ -259,6 +277,7 @@ def _generate_mode_examples_from_papers(
             underfilled += 1
             progress.set_status(scanned=scanned, skipped=empty + underfilled + incomplete_clues)
             continue
+        generation_prompt = format_query_prompt(prompt_template, selected)
         query = generate_query_text(selected, config, prompt_template, loaded_generator)
         visual_count = sum(component.kind == "visual" for component in selected)
         text_count = sum(component.kind == "textual" for component in selected)
@@ -281,6 +300,7 @@ def _generate_mode_examples_from_papers(
             "textual_component_budget": config.textual_component_budget,
             "prompt_id": config.prompt_id,
             "prompt_version": config.prompt_version,
+            "prompt": generation_prompt,
             "selected_components": [asdict(component) for component in selected],
         }
         if judgement is not None:
@@ -843,7 +863,7 @@ def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGe
     query_sets = section(visual_query, "query_sets")
     selected_set = section(query_sets, query_set)
     judgement = visual_query.get("judgement") if isinstance(visual_query.get("judgement"), dict) else {}
-    modes = tuple(selection.get("modes", ["visual-only", "visual-and-text"]))
+    modes = tuple(selection.get("modes", ["visual-and-text", "visual-only"]))
     return QueryGenerationConfig(
         dataset=resolve_dataset_path(dataset, "preprocessed", config_dir),
         visual_interpretations=resolve_optional_dataset_path(dataset, "visual_interpretations", config_dir),
