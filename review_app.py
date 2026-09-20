@@ -5,7 +5,6 @@ from __future__ import annotations
 import html
 import json
 import random
-import re
 import shutil
 import subprocess
 import tempfile
@@ -63,8 +62,6 @@ def main() -> None:
         .pdf-page-scroll {height: 420px; overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.75rem; background: #f8fafc;}
         .paper-text {white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.85rem; line-height: 1.35;}
         .clue {border-left: 4px solid #cbd5e1; padding: 0.45rem 0.65rem; margin: 0.35rem 0; background: #f8fafc; color: #000;}
-        .clue-selected {border-left-color: #2563eb; background: #eff6ff; color: #000;}
-        .clue-missing {border-left-color: #dc2626; background: #fef2f2; color: #000;}
         .small-muted {color: #334155; font-size: 0.85rem;}
         </style>
         """,
@@ -98,7 +95,6 @@ def main() -> None:
 
     record = records.get(source_record_id(example), {})
     same_paper_records = records_by_paper(records).get(resolved_paper_id(example, record), [])
-    visual_clues = clues_for_paper(visual_rows, same_paper_records, "visual")
     textual_clues = clues_for_paper(textual_rows, same_paper_records, "textual")
 
     st.caption(f"{st.session_state.example_index + 1} of {len(filtered)} matching examples")
@@ -108,7 +104,6 @@ def main() -> None:
         record,
         same_paper_records,
         visual_rows,
-        visual_clues,
         textual_clues,
         dataset_dir,
     )
@@ -289,28 +284,28 @@ def render_example(
     record: dict[str, Any],
     same_paper_records: list[dict[str, Any]],
     visual_rows: list[dict[str, Any]],
-    visual_clues: list[dict[str, str]],
     textual_clues: list[dict[str, str]],
     dataset_dir: Path,
 ) -> None:
-    selected = selected_components(example)
     render_example_header(example, record)
     render_pdf_panel(example, record, dataset_dir)
     left, right = st.columns([1, 1])
     with left:
         if st.session_state.get("show_figure", True):
-            render_paper_figures(same_paper_records, visual_rows, selected, dataset_dir)
+            render_paper_figures(same_paper_records, visual_rows, dataset_dir)
     with right:
         render_paper_text(record, dataset_dir)
         if st.session_state.get("show_clues", True):
             st.subheader("Textual Clues")
-            render_clues(textual_clues, selected, "textual", box_class="clues-scroll")
+            render_clues(textual_clues, "textual", box_class="clues-scroll")
 
     st.subheader("Generated Query")
     st.markdown(f"<div class='query-box'>{html.escape(str(example.get('query', '')))}</div>", unsafe_allow_html=True)
+    prompt = query_metadata(example).get("prompt")
+    if prompt:
+        with st.expander("Generation Prompt", expanded=True):
+            st.code(str(prompt), language="text")
     render_query_metadata(example)
-    render_selected_components(selected)
-    render_missing_selected(visual_clues + textual_clues, selected)
     with st.expander("Paper JSON Description"):
         st.json(metadata_context(collection, example, record), expanded=False)
 
@@ -370,7 +365,6 @@ def render_pdf_panel(example: dict[str, Any], record: dict[str, Any], dataset_di
 
 def render_clues(
     clues: list[dict[str, str]],
-    selected: list[dict[str, str]],
     kind: str,
     *,
     box_class: str = "",
@@ -382,22 +376,17 @@ def render_clues(
             unsafe_allow_html=True,
         )
         return
-    st.markdown(f"<div class='{classes}'>{''.join(render_clue_items(clues, selected, kind))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='{classes}'>{''.join(render_clue_items(clues, kind))}</div>", unsafe_allow_html=True)
 
 
-def render_clue_items(clues: list[dict[str, str]], selected: list[dict[str, str]], kind: str) -> list[str]:
-    selected_keys = {clue_key(item) for item in selected if item.get("kind") == kind}
-    selected_text_keys = {text_key(item.get("text", "")) for item in selected if item.get("kind") == kind}
+def render_clue_items(clues: list[dict[str, str]], kind: str) -> list[str]:
     rendered = []
     for clue in clues:
-        is_selected = clue_key(clue) in selected_keys or text_key(clue.get("text", "")) in selected_text_keys
-        css = "clue clue-selected" if is_selected else "clue"
-        badge = "selected" if is_selected else "unused"
         category = html.escape(str(clue.get("category", kind)))
         text = html.escape(str(clue.get("text", "")))
         record_id = html.escape(str(clue.get("record_id", "")))
         rendered.append(
-            f"<div class='{css}'><strong>{badge}</strong> <span class='small-muted'>{category} | {record_id}</span><br>{text}</div>",
+            f"<div class='clue'><span class='small-muted'>{category} | {record_id}</span><br>{text}</div>",
         )
     return rendered
 
@@ -405,7 +394,6 @@ def render_clue_items(clues: list[dict[str, str]], selected: list[dict[str, str]
 def render_paper_figures(
     same_paper_records: list[dict[str, Any]],
     visual_rows: list[dict[str, Any]],
-    selected: list[dict[str, str]],
     dataset_dir: Path,
 ) -> None:
     st.subheader("Paper Figures")
@@ -428,7 +416,7 @@ def render_paper_figures(
                     clues = visual_clues_for_record(visual_rows, figure_record)
                     if clues:
                         st.markdown(
-                            "".join(render_clue_items(clues, selected, "visual")),
+                            "".join(render_clue_items(clues, "visual")),
                             unsafe_allow_html=True,
                         )
                     else:
@@ -459,26 +447,6 @@ def render_paper_text(record: dict[str, Any], dataset_dir: Path) -> None:
     )
 
 
-def render_missing_selected(all_clues: list[dict[str, str]], selected: list[dict[str, str]]) -> None:
-    clue_keys = {clue_key(clue) for clue in all_clues}
-    text_keys = {(clue.get("kind", ""), text_key(clue.get("text", ""))) for clue in all_clues}
-    missing = [
-        clue
-        for clue in selected
-        if clue_key(clue) not in clue_keys and (clue.get("kind", ""), text_key(clue.get("text", ""))) not in text_keys
-    ]
-    if not missing:
-        return
-    with st.expander("Selected Clues Not Found In Current Sidecars"):
-        for clue in missing:
-            st.markdown(
-                "<div class='clue clue-missing'><strong>selected</strong> "
-                f"<span class='small-muted'>{html.escape(str(clue.get('kind', '')))} | {html.escape(str(clue.get('record_id', '')))}</span><br>"
-                f"{html.escape(str(clue.get('text', '')))}</div>",
-                unsafe_allow_html=True,
-            )
-
-
 def render_query_metadata(example: dict[str, Any]) -> None:
     metadata = query_metadata(example)
     st.subheader("Query Metadata")
@@ -487,9 +455,6 @@ def render_query_metadata(example: dict[str, Any]) -> None:
         ("split_index", "Split index"),
         ("split_paper_index", "Split paper index"),
         ("component_selection", "Component selection"),
-        ("selected_component_count", "Selected components"),
-        ("selected_visual_count", "Selected visual"),
-        ("selected_text_count", "Selected textual"),
     ]
     rows = [{"Field": label, "Value": format_metadata_value(metadata.get(key))} for key, label in current_fields if key in metadata]
     if rows:
@@ -512,32 +477,6 @@ def render_query_metadata(example: dict[str, Any]) -> None:
         with st.expander("Legacy Selection Budget Fields", expanded=False):
             st.caption("These fields may appear in older metadata but are ignored by all-available component selection.")
             st.table(legacy_rows)
-
-
-def render_selected_components(selected: list[dict[str, str]]) -> None:
-    st.subheader("Selected Components")
-    if not selected:
-        st.caption("No selected components were recorded in this query metadata.")
-        return
-    grouped: dict[str, list[dict[str, str]]] = {"visual": [], "textual": [], "other": []}
-    for component in selected:
-        kind = normalized_kind(component.get("kind"))
-        grouped.setdefault(kind, []).append(component)
-    for kind in ("visual", "textual", "other"):
-        components = grouped.get(kind, [])
-        if not components:
-            continue
-        expanded = len(selected) <= 8
-        with st.expander(f"{kind.title()} Components ({len(components)})", expanded=expanded):
-            for index, component in enumerate(components, start=1):
-                record_id = html.escape(str(component.get("record_id", "")))
-                text = html.escape(str(component.get("text", "")))
-                category = html.escape(str(component.get("category", kind)))
-                st.markdown(
-                    f"<div class='clue clue-selected'><strong>{index}</strong> "
-                    f"<span class='small-muted'>{category} | {record_id}</span><br>{text}</div>",
-                    unsafe_allow_html=True,
-                )
 
 
 def format_metadata_value(value: Any) -> str:
@@ -792,22 +731,6 @@ def metadata_context(collection: Path, example: dict[str, Any], record: dict[str
     }
 
 
-def selected_components(example: dict[str, Any]) -> list[dict[str, str]]:
-    components = query_metadata(example).get("selected_components", [])
-    return [normalize_selected_component(component) for component in components if isinstance(component, dict)]
-
-
-def normalize_selected_component(component: dict[str, Any]) -> dict[str, str]:
-    kind = normalized_kind(component.get("kind"))
-    return {
-        **component,
-        "kind": kind,
-        "record_id": str(component.get("record_id") or component.get("figure_id") or component.get("paper_id") or ""),
-        "category": str(component.get("category") or kind),
-        "text": str(component.get("text") or component.get("description") or component.get("output") or ""),
-    }
-
-
 def normalized_kind(value: Any) -> str:
     cleaned = str(value or "").strip().replace("-", "_").casefold()
     if cleaned in {"visual", "image", "figure", "visual_clue"}:
@@ -993,16 +916,6 @@ def clean_values(row: dict[str, Any]) -> dict[str, Any]:
             cleaned[key] = None
         else:
             cleaned[key] = value
-    return cleaned
-
-
-def clue_key(clue: dict[str, Any]) -> tuple[str, str, str]:
-    return (str(clue.get("kind", "")), str(clue.get("record_id", "")), text_key(clue.get("text", "")))
-
-
-def text_key(text: Any) -> str:
-    cleaned = re.sub(r"\s+", " ", str(text).strip()).casefold()
-    cleaned = re.sub(r"^figure\s*\d+[a-z]?:\s*", "", cleaned)
     return cleaned
 
 

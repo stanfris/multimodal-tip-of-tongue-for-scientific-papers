@@ -94,7 +94,8 @@ Figure descriptions, textual clues, query generation, and query judgement are ma
 `configs/settings.yaml`. That file contains the overall dataset pointer,
 dataset paths, split index, stage-specific prompt/model/generation settings,
 and the standardized train/test query-set definitions. Runtime overrides for
-managed query settings are intentionally not supported.
+managed query settings are intentionally not supported, except for the
+`--limit` smoke-test cap on newly generated queries.
 
 Generate the training set by default, or explicitly select the test set:
 
@@ -106,6 +107,7 @@ scripts/09_judge_train_queries.sh
 scripts/06_describe_all_figures.sh --set test
 scripts/07_describe_all_textual_clues.sh --set test
 scripts/08_generate_queries.sh --set test
+scripts/08_generate_queries.sh --set test --limit 3
 scripts/09_judge_train_queries.sh --set test
 ```
 

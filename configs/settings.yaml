@@ -112,8 +112,8 @@ visual_query:
 
   selection:
     modes:
-      - visual-only
       - visual-and-text
+      - visual-only
     visual_component_budget: 3
     textual_component_budget: 3
     allow_partial_components: false
