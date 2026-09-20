@@ -83,12 +83,12 @@ visual_query:
 
   model:
     provider: "transformers"
-    name: "openai/gpt-oss-20b"
+    name: "allenai/Olmo-3-7B-Instruct"
     temperature: 0.0
     max_tokens: 300
     device_map: "auto"
     dtype: "bfloat16"
-    attn_implementation: "eager"
+    attn_implementation: "sdpa"
     thinking: false
 
   judgement:

@@ -23,13 +23,12 @@ MUST FOLLOW:
 7. Do not mention the paper's title, authors, affiliations, venue, DOI, citation information, or other direct identifiers, even if they occur in the cues.
 8. Avoid copying long or unusually specific text labels verbatim when they could function as exact-match search keys. Describe their remembered meaning more generally unless the terminology is itself an essential memory cue.
 9. Express the details with realistic uncertainty. The searcher may remember the broad appearance or relationship between elements without remembering every colour, label, position, or interpretation exactly.
-10. When visual cues are provided, describe what the figure looked like: its layout, components, colours, shapes, clusters, connections, contrasts, or other visually salient relationships.
-11. Keep visual and textual recollections distinguishable. Do not claim that textual information appeared inside a figure unless the cues explicitly support this.
-12. Write as a single coherent recollection rather than as a list of clues. Connect the most memorable details naturally.
-13. Maintain a casual, conversational tone appropriate for someone genuinely requesting help online. Do not use headings, bullet points, or formal academic prose.
-14. Begin directly with the recollection. Do not begin with a formal greeting or phrases such as "Hello" or "Hey everyone."
-15. End with a natural request for help identifying the paper.
-16. Output only the final query.
+10. Keep visual and textual recollections distinguishable. Do not claim that textual information appeared inside a figure unless the cues explicitly support this.
+11. Write as a single coherent recollection rather than as a list of clues. Connect the most memorable details naturally.
+12. Maintain a casual, conversational tone appropriate for someone genuinely requesting help online. Do not use headings, bullet points, or formal academic prose.
+13. Begin directly with the recollection. Do not begin with a formal greeting or phrases such as "Hello" or "Hey everyone."
+14. End with a natural request for help identifying the paper.
+15. Output only the final query.
 
 COULD FOLLOW:
 1. Frequently convey uncertainty using varied and natural qualifications, such as questioning a colour, arrangement, interpretation, or relationship between remembered elements.
