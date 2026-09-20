@@ -88,7 +88,7 @@ visual_query:
     max_tokens: 300
     device_map: "auto"
     dtype: "bfloat16"
-    attn_implementation: "sdpa"
+    attn_implementation: "eager"
     thinking: false
 
   judgement:
