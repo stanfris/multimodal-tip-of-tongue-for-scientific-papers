@@ -49,6 +49,9 @@ Extract visual memory cues in the following categories:
    The 1-5 aspects of the figure most likely to distinguish it visually
    from other scientific figures.
 
+7. High level meaning:
+   brief summary of what the figure conveys.
+
 
 The input may not be a conventional plot or diagram. Scientific figures can also consist primarily of text, equations, tables, code, program output, parse structures, screenshots, or other document-like content. These are valid figures and MUST still be described visually.
 
