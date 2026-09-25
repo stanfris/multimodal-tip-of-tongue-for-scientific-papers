@@ -53,6 +53,15 @@ class MinerUOptions:
     allow_tiny_markdown: bool = False
 
 
+@dataclass(frozen=True)
+class PDFInput:
+    path: Path
+    relative_path: Path
+    paper_id: str
+    source_dataset: str | None = None
+    split: str | None = None
+
+
 @dataclass
 class ExtractionStats:
     total: int = 0
@@ -97,6 +106,18 @@ def build_extract_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None, help="Optional number of PDFs to process.")
     parser.add_argument("--start-index", type=int, default=0, help="First discovered PDF index to process.")
     parser.add_argument("--end-index", type=int, default=None, help="Exclusive discovered PDF index to process.")
+    parser.add_argument(
+        "--split-index",
+        type=Path,
+        default=None,
+        help="Optional JSON split index with train/test PDF paths relative to --input-dir.",
+    )
+    parser.add_argument(
+        "--split",
+        choices=["train", "test", "all"],
+        default="all",
+        help="Split to process when --split-index is provided.",
+    )
     return parser
 
 
@@ -169,7 +190,7 @@ def options_from_args(args: argparse.Namespace) -> MinerUOptions:
 
 def run_extract(args: argparse.Namespace) -> Path:
     pdfs = select_pdfs(
-        discover_pdfs(args.input_dir),
+        discover_pdfs(args.input_dir, split_index=args.split_index, split=args.split),
         start_index=args.start_index,
         end_index=args.end_index,
         limit=args.limit,
@@ -202,6 +223,8 @@ def run_extract(args: argparse.Namespace) -> Path:
             "start_index": args.start_index,
             "end_index": args.end_index,
             "limit": args.limit,
+            "split_index": str(args.split_index) if args.split_index else None,
+            "split": args.split if args.split_index else None,
         },
     )
     stats = asyncio.run(extract_many(pdfs, args.output_dir, options_from_args(args)))
@@ -243,7 +266,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         "api_url": args.api_url,
         "backend": args.backend,
         "effort": "medium",
-        "sample_pdfs": [str(path) for path in pdfs],
+        "sample_pdfs": [str(pdf.path) for pdf in pdfs],
         "environment": probe_environment(),
         "recommendation": best,
         "results": results,
@@ -299,12 +322,12 @@ def probe_environment() -> dict[str, Any]:
     return env
 
 
-async def extract_many(pdfs: list[Path], output_dir: Path, options: MinerUOptions) -> ExtractionStats:
+async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOptions) -> ExtractionStats:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "papers").mkdir(exist_ok=True)
     (output_dir / "_tmp").mkdir(exist_ok=True)
     stats = ExtractionStats(total=len(pdfs))
-    pending = [pdf for pdf in pdfs if not is_complete(output_dir, paper_id_for_pdf(pdf))]
+    pending = [pdf for pdf in pdfs if not is_complete(output_dir, pdf.paper_id)]
     stats.already_complete = len(pdfs) - len(pending)
     if not pending:
         return stats
@@ -313,21 +336,21 @@ async def extract_many(pdfs: list[Path], output_dir: Path, options: MinerUOption
     async with httpx.AsyncClient(base_url=options.api_url, timeout=timeout, follow_redirects=True) as client:
         health = await get_health(client)
         write_json(output_dir / "mineru_health.json", health)
-        queue: asyncio.Queue[Path | None] = asyncio.Queue(maxsize=options.max_in_flight * 2)
+        queue: asyncio.Queue[PDFInput | None] = asyncio.Queue(maxsize=options.max_in_flight * 2)
 
         async def worker() -> None:
             while True:
-                pdf = await queue.get()
-                if pdf is None:
+                pdf_input = await queue.get()
+                if pdf_input is None:
                     queue.task_done()
                     return
                 stats.submitted += 1
                 stats.in_flight += 1
                 try:
-                    record = await extract_one_with_retries(client, pdf, output_dir, options)
+                    record = await extract_one_with_retries(client, pdf_input, output_dir, options)
                 except ExtractionError as exc:
                     stats.failed += 1
-                    append_failure(output_dir, pdf, exc.error_type, str(exc), exc.attempts)
+                    append_failure(output_dir, pdf_input, exc.error_type, str(exc), exc.attempts)
                 else:
                     stats.completed += 1
                     stats.pages += int(record.get("num_pages") or 0)
@@ -349,7 +372,7 @@ async def extract_many(pdfs: list[Path], output_dir: Path, options: MinerUOption
 
 async def extract_one_with_retries(
     client: httpx.AsyncClient,
-    pdf: Path,
+    pdf_input: PDFInput,
     output_dir: Path,
     options: MinerUOptions,
 ) -> dict[str, Any]:
@@ -357,7 +380,7 @@ async def extract_one_with_retries(
     last: ExtractionError | None = None
     for attempt in range(1, attempts + 1):
         try:
-            return await extract_one(client, pdf, output_dir, options, attempt=attempt)
+            return await extract_one(client, pdf_input, output_dir, options, attempt=attempt)
         except ExtractionError as exc:
             last = exc
             last.attempts = attempt
@@ -376,16 +399,17 @@ async def extract_one_with_retries(
 
 async def extract_one(
     client: httpx.AsyncClient,
-    pdf: Path,
+    pdf_input: PDFInput,
     output_dir: Path,
     options: MinerUOptions,
     *,
     attempt: int,
 ) -> dict[str, Any]:
+    pdf = pdf_input.path
     if not has_pdf_header(pdf):
         raise ExtractionError("invalid_pdf", f"File does not look like a PDF: {pdf}")
 
-    paper_id = paper_id_for_pdf(pdf)
+    paper_id = pdf_input.paper_id
     final_dir = output_dir / "papers" / paper_id
     tmp_dir = output_dir / "_tmp" / f"{paper_id}.{os.getpid()}.{attempt}"
     if tmp_dir.exists():
@@ -397,7 +421,7 @@ async def extract_one(
         result_bytes = await fetch_result(client, task_id, options)
         raw_dir = tmp_dir / "mineru"
         extract_result_zip(result_bytes, raw_dir)
-        record = validate_and_normalize(raw_dir, pdf, tmp_dir, final_dir, options)
+        record = validate_and_normalize(raw_dir, pdf_input, tmp_dir, final_dir, options)
         if final_dir.exists():
             shutil.rmtree(final_dir)
         final_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -482,11 +506,12 @@ async def fetch_result(client: httpx.AsyncClient, task_id: str, options: MinerUO
 
 def validate_and_normalize(
     raw_dir: Path,
-    pdf: Path,
+    pdf_input: PDFInput,
     work_dir: Path,
     final_dir: Path,
     options: MinerUOptions,
 ) -> dict[str, Any]:
+    pdf = pdf_input.path
     markdown_path = choose_markdown(raw_dir)
     markdown = markdown_path.read_text(encoding="utf-8", errors="replace").strip()
     if len(markdown) < options.min_markdown_chars and not options.allow_tiny_markdown:
@@ -500,17 +525,20 @@ def validate_and_normalize(
     except json.JSONDecodeError as exc:
         raise ExtractionError("malformed_structured_output", f"Could not parse MinerU content list JSON: {exc}") from exc
 
-    paper_id = paper_id_for_pdf(pdf)
+    paper_id = pdf_input.paper_id
     markdown_relpath = Path("markdown.md")
     stable_markdown_path = work_dir / markdown_relpath
     stable_markdown_path.write_text(markdown + "\n", encoding="utf-8")
 
     preferred_content = choose_structured_content(content_data)
-    figures = normalize_figures(preferred_content, content_paths[0].parent, paper_id, pdf, work_dir, final_dir)
+    figures = normalize_figures(preferred_content, content_paths[0].parent, paper_id, pdf_input, work_dir, final_dir)
     num_pages = estimate_page_count(preferred_content)
     record = {
         "paper_id": paper_id,
         "source_pdf": str(pdf.resolve()),
+        "source_pdf_relpath": pdf_input.relative_path.as_posix(),
+        "source_paper_dataset": pdf_input.source_dataset,
+        "split": pdf_input.split,
         "markdown_relpath": markdown_relpath.as_posix(),
         "markdown_sha256": sha256_bytes((markdown + "\n").encode("utf-8")),
         "mineru_version": package_version("mineru") or package_version("magic-pdf"),
@@ -534,10 +562,11 @@ def normalize_figures(
     data: Any,
     base_dir: Path,
     paper_id: str,
-    pdf: Path,
+    pdf_input: PDFInput,
     work_dir: Path,
     final_dir: Path,
 ) -> list[dict[str, Any]]:
+    pdf = pdf_input.path
     figures = []
     for index, block in enumerate(iter_content_blocks(data)):
         block_type = str(block.get("type") or "").lower()
@@ -562,6 +591,9 @@ def normalize_figures(
             {
                 "paper_id": paper_id,
                 "source_pdf": str(pdf.resolve()),
+                "source_pdf_relpath": pdf_input.relative_path.as_posix(),
+                "source_paper_dataset": pdf_input.source_dataset,
+                "split": pdf_input.split,
                 "figure_id": figure_id,
                 "type": block_type,
                 "sub_type": sub_type,
@@ -665,20 +697,105 @@ def estimate_page_count(data: Any) -> int | None:
     return max(pages) + 1 if pages else None
 
 
-def discover_pdfs(input_dir: Path) -> list[Path]:
-    if input_dir.is_file() and input_dir.suffix.lower() == ".pdf":
-        return [input_dir]
-    return sorted(path for path in input_dir.rglob("*.pdf") if path.is_file())
+def discover_pdfs(input_dir: Path, *, split_index: Path | None = None, split: str = "all") -> list[PDFInput]:
+    splits_by_path: dict[Path, str] | None = None
+    if split_index is not None:
+        paths, splits_by_path = discover_split_pdfs(input_dir, split_index, split)
+    elif input_dir.is_file() and input_dir.suffix.lower() == ".pdf":
+        paths = [input_dir]
+    else:
+        paths = sorted(path for path in input_dir.rglob("*.pdf") if path.is_file())
+    return build_pdf_inputs(paths, input_dir, splits_by_path=splits_by_path)
 
 
-def select_pdfs(pdfs: list[Path], *, start_index: int = 0, end_index: int | None = None, limit: int | None = None) -> list[Path]:
+def discover_split_pdfs(input_dir: Path, split_index: Path, split: str) -> tuple[list[Path], dict[Path, str]]:
+    index = read_json(split_index)
+    split_names = ["train", "test"] if split == "all" else [split]
+    paths: list[Path] = []
+    splits_by_path: dict[Path, str] = {}
+    for split_name in split_names:
+        rows = index.get(split_name)
+        if not isinstance(rows, list):
+            raise ValueError(f"Split index {split_index} does not contain a list for {split_name!r}")
+        for row in rows:
+            if not isinstance(row, str):
+                raise ValueError(f"Split index {split_index} has a non-string path in {split_name!r}: {row!r}")
+            path = input_dir / row
+            paths.append(path)
+            splits_by_path[path] = split_name
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        preview = ", ".join(str(path) for path in missing[:5])
+        extra = f" and {len(missing) - 5} more" if len(missing) > 5 else ""
+        raise FileNotFoundError(f"Split index references missing PDF files: {preview}{extra}")
+    return paths, splits_by_path
+
+
+def build_pdf_inputs(
+    paths: list[Path],
+    input_dir: Path,
+    *,
+    splits_by_path: dict[Path, str] | None = None,
+) -> list[PDFInput]:
+    raw: list[tuple[Path, Path, str, str | None, str | None]] = []
+    base_dir = input_dir if input_dir.is_dir() else input_dir.parent
+    for path in paths:
+        relative_path = relative_pdf_path(path, base_dir)
+        source_dataset = relative_path.parts[0] if len(relative_path.parts) > 1 else None
+        raw.append(
+            (
+                path,
+                relative_path,
+                safe_paper_id(relative_path.with_suffix("").as_posix()),
+                source_dataset,
+                splits_by_path.get(path) if splits_by_path else None,
+            )
+        )
+
+    counts: dict[str, int] = {}
+    for _, _, paper_id, _, _ in raw:
+        counts[paper_id] = counts.get(paper_id, 0) + 1
+
+    return [
+        PDFInput(
+            path=path,
+            relative_path=relative_path,
+            paper_id=(
+                paper_id
+                if counts[paper_id] == 1
+                else f"{paper_id}.{sha256_bytes(relative_path.as_posix().encode('utf-8'))[:12]}"
+            ),
+            source_dataset=source_dataset,
+            split=split,
+        )
+        for path, relative_path, paper_id, source_dataset, split in raw
+    ]
+
+
+def select_pdfs(
+    pdfs: list[PDFInput], *, start_index: int = 0, end_index: int | None = None, limit: int | None = None
+) -> list[PDFInput]:
     selected = pdfs[start_index:end_index]
     if limit is not None:
         selected = selected[:limit]
     return selected
 
 
-def paper_id_for_pdf(pdf: Path) -> str:
+def relative_pdf_path(pdf: Path, input_dir: Path) -> Path:
+    try:
+        return pdf.relative_to(input_dir)
+    except ValueError:
+        return Path(pdf.name)
+
+
+def safe_paper_id(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in "._-" else "_" for char in value).strip("._")
+    return cleaned or "unknown"
+
+
+def paper_id_for_pdf(pdf: Path | PDFInput) -> str:
+    if isinstance(pdf, PDFInput):
+        return pdf.paper_id
     return pdf.stem
 
 
@@ -749,10 +866,13 @@ def extract_result_zip(content: bytes, output_dir: Path) -> None:
             raise ExtractionError("malformed_structured_output", f"MinerU result ZIP is invalid: {exc}") from exc
 
 
-def append_failure(output_dir: Path, pdf: Path, error_type: str, message: str, attempts: int) -> None:
+def append_failure(output_dir: Path, pdf_input: PDFInput, error_type: str, message: str, attempts: int) -> None:
     failure = {
-        "source": str(pdf.resolve()),
-        "paper_id": paper_id_for_pdf(pdf),
+        "source": str(pdf_input.path.resolve()),
+        "source_pdf_relpath": pdf_input.relative_path.as_posix(),
+        "source_paper_dataset": pdf_input.source_dataset,
+        "split": pdf_input.split,
+        "paper_id": pdf_input.paper_id,
         "error_type": error_type,
         "message": message,
         "attempts": attempts,

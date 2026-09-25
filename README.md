@@ -496,14 +496,21 @@ scripts/03_start_mineru_router.sh
 
 Use `uv run mineru-router --help` directly for custom router settings.
 
-Run extraction against the downloaded ACL subset PDFs:
+Run extraction against the consolidated large-scale PDF datasets:
 
 ```bash
 scripts/04_run_mineru_full_extraction.sh
 ```
 
 Use `uv run dataset-generation extract-mineru-pdfs --help` directly for custom
-extraction settings.
+extraction settings. The script reads `data/pdf_datasets/{ACL,Physics,Engineering,Biology,Medicine}`
+through `data/splits/pdf_dataset_split.json`, so train/test split membership
+and source dataset names are recorded in each extracted `paper.json`. For a
+small smoke run, pass normal CLI overrides through the script:
+
+```bash
+scripts/04_run_mineru_full_extraction.sh --split train --limit 20 --max-in-flight 2
+```
 
 Completed papers are skipped on restart. Each successful paper has:
 
@@ -516,13 +523,14 @@ data/preprocessed/papers/<paper_id>/
   mineru/                  # MinerU Markdown, content_list JSON, images
 ```
 
-`paper.json` records the source PDF, MinerU configuration/version, Markdown
-path, page count if available, and normalized `image`/`chart` figure records
-with page, bounding box, caption, footnote, and image paths. Failed PDFs are
-appended to `data/processed/mineru_pdf_extraction/failures.jsonl` and do not
-stop the batch. Full-run logs are written under
-`data/processed/mineru_pdf_extraction/logs/`, and the latest run configuration
-and summary are saved as `run_config.json` and `last_run_summary.json`.
+`paper_id` is derived from the PDF path relative to the input root, so repeated
+filenames across datasets do not collide. `paper.json` records the source PDF,
+relative source path, source dataset, split, MinerU configuration/version,
+Markdown path, page count if available, and normalized `image`/`chart` figure
+records with page, bounding box, caption, footnote, and image paths. Failed PDFs are
+appended to `<output-dir>/failures.jsonl` and do not stop the batch. The latest
+run configuration and summary are saved as `run_config.json` and
+`last_run_summary.json`.
 
 Before a full run, benchmark medium-effort throughput on a small sample:
 
