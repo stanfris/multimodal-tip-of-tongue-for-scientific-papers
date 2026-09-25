@@ -29,3 +29,12 @@ def test_append_jsonl_object_round_trips_utf8(tmp_path: Path) -> None:
         {"paper_id": "p1", "query": "visual clue"},
         {"paper_id": "p2", "query": "textual clue"},
     ]
+
+
+def test_append_jsonl_object_can_replace_existing_file(tmp_path: Path) -> None:
+    path = tmp_path / "rows.jsonl"
+
+    append_jsonl_object(path, {"query": "old clue"})
+    append_jsonl_object(path, {"query": "new clue"}, append=False)
+
+    assert read_jsonl_objects(path) == [{"query": "new clue"}]

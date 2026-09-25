@@ -503,13 +503,12 @@ def run(args: argparse.Namespace) -> Path:
     output_path.mkdir(parents=True, exist_ok=True)
     failure_file = output_path / "textual_failures.jsonl"
     if args.all and args.overwrite:
-        for sample in samples:
-            textual_clue_path(output_path, str(sample.metadata["paper_id"])).unlink(missing_ok=True)
         failure_file.unlink(missing_ok=True)
     started = time.time()
     processed = 0
     skipped = 0
     failed = 0
+    overwritten_clue_paths: set[Path] = set()
 
     batches = batched(samples, args.batch_size)
     for batch in progress(batches, total=len(batches), enabled=args.all, description="Textual clue batches"):
@@ -556,7 +555,13 @@ def run(args: argparse.Namespace) -> Path:
                     "thinking": args.thinking,
                 },
             )
-            _append_textual_clue(record, output_path)
+            target_clue_path = textual_clue_path(output_path, str(sample.metadata["paper_id"]))
+            clue_path = _append_textual_clue(
+                record,
+                output_path,
+                overwrite=args.overwrite and target_clue_path not in overwritten_clue_paths,
+            )
+            overwritten_clue_paths.add(clue_path)
             completed.add(interpretation_key(record))
             processed += 1
             if not args.all:
@@ -631,7 +636,8 @@ def load_managed_textual_description_args(args: argparse.Namespace) -> argparse.
     return managed
 
 
-def _append_textual_clue(record: InterpretationRecord, clues_dir: str | Path) -> None:
+def _append_textual_clue(record: InterpretationRecord, clues_dir: str | Path, *, overwrite: bool = False) -> Path:
+    clue_path = textual_clue_path(clues_dir, record.record_id)
     row = {
         "paper_id": record.record_id,
         "kind": record.kind,
@@ -640,7 +646,8 @@ def _append_textual_clue(record: InterpretationRecord, clues_dir: str | Path) ->
         "prompt_version": record.prompt_version,
         "output": record.text,
     }
-    append_clue_row(textual_clue_path(clues_dir, record.record_id), row)
+    append_clue_row(clue_path, row, append=not overwrite)
+    return clue_path
 
 
 def _completed_textual_keys_from_clues(

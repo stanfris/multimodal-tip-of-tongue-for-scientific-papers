@@ -375,17 +375,12 @@ def run(args: argparse.Namespace) -> Path:
     output_path.mkdir(parents=True, exist_ok=True)
     failure_file = output_path / "visual_failures.jsonl"
     if args.all and args.overwrite:
-        for sample in samples:
-            visual_clue_path(
-                output_path,
-                str(sample.metadata["paper_id"]),
-                str(sample.metadata["figure_id"]),
-            ).unlink(missing_ok=True)
         failure_file.unlink(missing_ok=True)
     started = time.time()
     processed = 0
     skipped = 0
     failed = 0
+    overwritten_clue_paths: set[Path] = set()
 
     batches = batched(samples, args.batch_size)
     for batch in progress(batches, total=len(batches), enabled=args.all, description="Figure description batches"):
@@ -435,7 +430,17 @@ def run(args: argparse.Namespace) -> Path:
                     "image_path": str(sample.image_path),
                 },
             )
-            _append_visual_clue(record, output_path)
+            target_clue_path = visual_clue_path(
+                output_path,
+                str(sample.metadata["paper_id"]),
+                str(sample.metadata["figure_id"]),
+            )
+            clue_path = _append_visual_clue(
+                record,
+                output_path,
+                overwrite=args.overwrite and target_clue_path not in overwritten_clue_paths,
+            )
+            overwritten_clue_paths.add(clue_path)
             completed.add(interpretation_key(record))
             processed += 1
             if not args.all:
@@ -508,9 +513,10 @@ def load_managed_visual_description_args(args: argparse.Namespace) -> argparse.N
     return managed
 
 
-def _append_visual_clue(record: InterpretationRecord, clues_dir: str | Path) -> None:
+def _append_visual_clue(record: InterpretationRecord, clues_dir: str | Path, *, overwrite: bool = False) -> Path:
     paper_id = str(record.metadata.get("paper_id") or record.metadata.get("resolved_paper_id"))
     figure_id = str(record.metadata.get("figure_id") or record.record_id)
+    clue_path = visual_clue_path(clues_dir, paper_id, figure_id)
     row = {
         "paper_id": paper_id,
         "figure_id": figure_id,
@@ -520,7 +526,8 @@ def _append_visual_clue(record: InterpretationRecord, clues_dir: str | Path) -> 
         "prompt_version": record.prompt_version,
         "output": record.text,
     }
-    append_clue_row(visual_clue_path(clues_dir, paper_id, figure_id), row)
+    append_clue_row(clue_path, row, append=not overwrite)
+    return clue_path
 
 
 def _completed_visual_keys_from_clues(

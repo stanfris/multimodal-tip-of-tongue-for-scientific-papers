@@ -56,11 +56,13 @@ def append_jsonl_object(
     *,
     sort_keys: bool = True,
     fsync: bool = False,
+    append: bool = True,
 ) -> None:
-    """Append one JSON object to a JSONL file."""
+    """Write one JSON object to a JSONL file."""
     data_path = Path(path)
     data_path.parent.mkdir(parents=True, exist_ok=True)
-    with data_path.open("a", encoding="utf-8") as handle:
+    mode = "a" if append else "w"
+    with data_path.open(mode, encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=sort_keys, ensure_ascii=False))
         handle.write("\n")
         if fsync:

@@ -112,8 +112,8 @@ def read_clue_rows(path: str | Path) -> list[dict[str, Any]]:
     return read_jsonl_objects(path, missing_ok=True)
 
 
-def append_clue_row(path: str | Path, row: dict[str, Any]) -> None:
-    append_jsonl_object(path, row, sort_keys=False)
+def append_clue_row(path: str | Path, row: dict[str, Any], *, append: bool = True) -> None:
+    append_jsonl_object(path, row, sort_keys=False, append=append)
 
 
 def safe_path_name(value: str) -> str:
