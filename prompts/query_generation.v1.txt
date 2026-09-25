@@ -1,6 +1,6 @@
 Let's do a role play. You are a researcher or student trying to re-find a scientific paper that you encountered previously but can no longer identify. You are writing a query asking an online community for help finding it.
 
-Write a natural tip-of-the-tongue query of approximately 100-150 words using the memory cues below. The query should sound like an imperfect recollection, not a complete description of the document or a summary generated while viewing it.
+Write a natural tip-of-the-tongue query of approximately 50-100 words using the memory cues below. The query should sound like an imperfect recollection, not a complete description of the document or a summary generated while viewing it.
 
 MEMORY CUES:
 {selected_cues}
@@ -9,24 +9,18 @@ Guidelines:
 
 MUST FOLLOW:
 1. Use only information supported by the memory cues. Do not infer or invent the paper's topic, method, findings, datasets, motivation, or scientific field from the appearance of a figure.
-2. Select one primary visual memory. You may include at most two supporting details, preferably from the same figure or from one clearly related figure. It is not necessary to use every cue.
-3. Prefer the most visually distinctive cue: an unusual diagram, recognizable arrangement, salient contrast, branching structure, cluster, shape, colour pattern, or relationship between elements.
-4. Do not use an ordinary results table as the primary memory when a more distinctive visual cue is available.
-5. Treat overlapping descriptions of the same figure as alternative observations, not as separate memories that must all be included.
-6. If cues appear unrelated or possibly inconsistent, choose the most coherent subset. Do not combine them into a single interpretation merely to include more information.
-7. Organize the entire query around the primary visual memory. Do not enumerate figures or describe the document sequentially.
-8. Omit generic visual properties, including white backgrounds, black text, grid lines, aligned columns, table dimensions, standard axes, or the presence of numerical values.
-9. Describe visible appearance and structure before offering an interpretation of what the figure represented.
-10. Express uncertainty locally. Qualify the particular colour, label, connection, position, or interpretation that may be misremembered.
-11. Do not convert formatting into unsupported meaning. Boldface, italics, arrows, colours, or spatial proximity do not establish scientific importance or causal relationships unless the cues explicitly say so.
-12. Avoid copying long or unusually specific labels verbatim. Paraphrase their apparent meaning unless the supplied terminology is essential to the memory.
-13. Keep visual and textual evidence separate. Do not claim that a topic, finding, or technical concept appeared in a figure unless explicitly stated by the cues.
-14. Do not mention figure numbers unless their location or ordering is genuinely important to the recollection.
-15. Do not mention the title, authors, affiliations, venue, DOI, citations, or other direct identifiers.
-16. Write one coherent, casual paragraph appropriate for an online request. Do not use headings, bullet points, or formal academic prose.
-17. Begin directly with the remembered content, without a greeting or generic stock introduction.
-18. End with a natural request for help identifying the paper.
-19. Output only the final query. Do not output analysis, planning, explanations, or notes.
+2. If the cues include textual clues, you must include them in some way, preferably towards the start of the query.
+3. Select one primary visual memory, prefer the most visually distinctive visual element to be the primary memory: an unusual diagram, recognizable arrangement, salient contrast, branching structure, cluster, shape, colour pattern, or relationship between elements. 
+4. From the visual element, choose at most 2 memorable features to describe in the query, never more.
+5. If cues appear unrelated or possibly inconsistent, choose the most coherent subset. Do not combine them into a single interpretation merely to include more information.
+6. Omit generic visual properties, including white backgrounds, black text, grid lines, aligned columns, table dimensions, standard axes, or the presence of numerical values.
+7. Keep visual and textual evidence separate. Do not claim that a topic, finding, or technical concept appeared in a figure unless explicitly stated by the cues.
+8. Do not mention figure numbers or any textual elements such as axis labels or element titles verbatim or in quotes, provide a rough description instead.
+9. Do not mention the title, authors, affiliations, venue, DOI, citations, or other direct identifiers.
+10. Write one coherent, casual paragraph appropriate for an online request. Do not use headings, bullet points, or formal academic prose.
+11. Begin directly with the remembered content, without a greeting or generic stock introduction.
+12. End with a natural request for help identifying the paper.
+13. Output only the final query. Do not output analysis, planning, explanations, or notes.
 
 COULD FOLLOW:
 1. Frequently introduce natural uncertainty about a particular visual detail or its interpretation.

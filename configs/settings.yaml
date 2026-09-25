@@ -12,8 +12,8 @@ visual_descriptions:
 
   prompt:
     name: visual_interpretation
-    version: v1
-    template: ../prompts/visual_interpretation.v1.txt
+    version: v2
+    template: ../prompts/visual_interpretation.v2.txt
     variables:
       - image
 
@@ -83,12 +83,12 @@ visual_query:
 
   model:
     provider: "transformers"
-    name: "openai/gpt-oss-20b"
-    temperature: 0.0
+    name: "microsoft/phi-4"
+    temperature: 0.2
     max_tokens: 300
     device_map: "auto"
     dtype: "bfloat16"
-    attn_implementation: "eager"
+    attn_implementation: "sdpa"
     thinking: false
 
   judgement:
