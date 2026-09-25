@@ -2,7 +2,7 @@ dataset:
   name: acl_visual_tip_of_the_tongue
   root: ../data
   preprocessed: preprocessed
-  clues_dir: clues
+  clues_dir: clues1
   split_index: splits/document_split.json
   visual_interpretations:
   textual_interpretations:
@@ -12,8 +12,8 @@ visual_descriptions:
 
   prompt:
     name: visual_interpretation
-    version: v1
-    template: ../prompts/visual_interpretation.v1.txt
+    version: v2
+    template: ../prompts/visual_interpretation.v2.txt
     variables:
       - image
 
