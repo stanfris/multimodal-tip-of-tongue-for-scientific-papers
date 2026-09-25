@@ -2,7 +2,7 @@ dataset:
   name: acl_visual_tip_of_the_tongue
   root: ../data
   preprocessed: preprocessed
-  clues_dir: clues1
+  clues_dir: clues
   split_index: splits/document_split.json
   visual_interpretations:
   textual_interpretations:
@@ -84,7 +84,7 @@ visual_query:
   model:
     provider: "transformers"
     name: "microsoft/phi-4"
-    temperature: 0.1
+    temperature: 0.2
     max_tokens: 300
     device_map: "auto"
     dtype: "bfloat16"
