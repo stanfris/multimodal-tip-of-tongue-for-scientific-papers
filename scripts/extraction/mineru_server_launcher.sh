@@ -121,7 +121,12 @@ mineru_wait_for_ready() {
   local deadline=$((SECONDS + timeout_seconds))
   while (( SECONDS < deadline )); do
     if ! kill -0 "$MINERU_SERVER_PID" >/dev/null 2>&1; then
-      printf 'MinerU server exited before readiness. See %s\n' "$server_log" >&2
+      local server_status=0
+      wait "$MINERU_SERVER_PID" || server_status=$?
+      printf '[%s] MinerU server exited before readiness with status %s\n' \
+        "$(mineru_timestamp)" "$server_status" >>"$server_log"
+      printf 'MinerU server exited before readiness with status %s. See %s\n' \
+        "$server_status" "$server_log" >&2
       return 1
     fi
     if mineru_health_check "$api_url"; then

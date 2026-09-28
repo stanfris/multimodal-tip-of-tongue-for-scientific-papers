@@ -93,6 +93,7 @@ def test_mineru_server_output_is_logged_but_only_caller_output_is_teed() -> None
     assert '>>"$server_log" 2>&1 &' in launcher
     assert '> >(tee -a "$server_log")' not in launcher
     assert '"${caller_cmd[@]}" 2>&1 | tee -a "$caller_log"' in launcher
+    assert "MinerU server exited before readiness with status %s" in launcher
 
 
 def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
@@ -102,12 +103,14 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
 
     assert "#SBATCH --array" not in script
     assert "SLURM_ARRAY_TASK_ID" not in script
-    assert "#SBATCH --output=mineru_extract_%j.out" in script
-    assert "#SBATCH --error=mineru_extract_%j.err" in script
+    assert "#SBATCH --output=scripts/extraction/slurm/mineru_extract_%j.out" in script
+    assert "#SBATCH --error=scripts/extraction/slurm/mineru_extract_%j.err" in script
     assert 'DEFAULT_ROOT_DIR="$SLURM_SUBMIT_DIR"' in script
     assert 'ROOT_DIR="${ROOT_DIR:-$DEFAULT_ROOT_DIR}"' in script
     assert 'DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"' in script
     assert 'source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"' in script
-    assert 'SERVER_LOG="${MINERU_SERVER_LOG:-logs/mineru/slurm/${RUN_ID}.server.log}"' in script
-    assert 'CALLER_LOG="${MINERU_CALLER_LOG:-logs/mineru/slurm/${RUN_ID}.caller.log}"' in script
+    assert 'SERVER_LOG="${MINERU_SERVER_LOG:-scripts/extraction/slurm/${RUN_ID}.server.log}"' in script
+    assert 'CALLER_LOG="${MINERU_CALLER_LOG:-scripts/extraction/slurm/${RUN_ID}.caller.log}"' in script
+    assert 'SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV_DIR/bin/mineru-router' in script
+    assert '--output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"' in script
     assert "mineru_run_caller_with_server" in script
