@@ -135,15 +135,6 @@ scripts/document_splits/build_document_split.sh \
   --output data/splits/document_split.json
 ```
 
-For the scratch-shared extraction layout, set its root directly:
-
-```bash
-scripts/document_splits/build_document_split.sh --root-dir /scratch-shared/sfris1
-```
-
-This reads `/scratch-shared/sfris1/processed` and writes
-`/scratch-shared/sfris1/data/splits/document_split.json`.
-
 Figure descriptions, textual clues, query generation, and query judgement are managed by
 `configs/settings.yaml`. That file contains the overall dataset pointer,
 dataset paths, split index, stage-specific prompt/model/generation settings,
@@ -564,6 +555,15 @@ scripts/pdf_corpus/build_pdf_dataset_split.sh \
   --input-dir data/pdf_datasets \
   --output data/splits/pdf_dataset_split.json
 ```
+
+For the scratch-shared corpus, both paths can be selected with its root:
+
+```bash
+scripts/pdf_corpus/build_pdf_dataset_split.sh --root-dir /scratch-shared/sfris1
+```
+
+This reads the PDF subfolders beneath `/scratch-shared/sfris1/pdf_datasets`
+and writes `/scratch-shared/sfris1/data/splits/pdf_dataset_split.json`.
 
 The split contains source documents, not a guaranteed number of generated
 queries: downstream generation can emit one or more queries per selected PDF.
