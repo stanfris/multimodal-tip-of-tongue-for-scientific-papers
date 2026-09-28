@@ -106,7 +106,8 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     assert "#SBATCH --output=scripts/extraction/slurm/mineru_extract_%j.out" in script
     assert "#SBATCH --error=scripts/extraction/slurm/mineru_extract_%j.err" in script
     assert 'DEFAULT_ROOT_DIR="$SLURM_SUBMIT_DIR"' in script
-    assert 'ROOT_DIR="${ROOT_DIR:-$DEFAULT_ROOT_DIR}"' in script
+    assert "--root-dir)" in script
+    assert 'ROOT_DIR="${ROOT_DIR_ARG:-${ROOT_DIR:-$DEFAULT_ROOT_DIR}}"' in script
     assert 'DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"' in script
     assert 'source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"' in script
     assert 'SERVER_LOG="${MINERU_SERVER_LOG:-scripts/extraction/slurm/${RUN_ID}.server.log}"' in script

@@ -12,12 +12,40 @@
 
 set -euo pipefail
 
+ROOT_DIR_ARG=""
+CALLER_ARGS=()
+while (($#)); do
+  case "$1" in
+    --root-dir)
+      if (($# < 2)); then
+        echo "--root-dir requires a path." >&2
+        exit 2
+      fi
+      ROOT_DIR_ARG="$2"
+      shift 2
+      ;;
+    --root-dir=*)
+      ROOT_DIR_ARG="${1#*=}"
+      shift
+      ;;
+    --)
+      shift
+      CALLER_ARGS+=("$@")
+      break
+      ;;
+    *)
+      CALLER_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
 if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   DEFAULT_ROOT_DIR="$SLURM_SUBMIT_DIR"
 else
   DEFAULT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 fi
-ROOT_DIR="${ROOT_DIR:-$DEFAULT_ROOT_DIR}"
+ROOT_DIR="${ROOT_DIR_ARG:-${ROOT_DIR:-$DEFAULT_ROOT_DIR}}"
 cd "$ROOT_DIR"
 
 if [[ ! -f "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh" ]]; then
@@ -89,7 +117,7 @@ CALLER_CMD=(
   --split "${SPLIT:-train+test}"
   --output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"
   --api-url "$API_URL"
-  "$@"
+  "${CALLER_ARGS[@]}"
 )
 
 printf 'Job %s processes the full %s split from %s.\n' "$JOB_ID" "${SPLIT:-train+test}" "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
