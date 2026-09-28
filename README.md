@@ -564,7 +564,9 @@ CUDA_VISIBLE_DEVICES=0 scripts/extraction/start_mineru_router.sh \
 
 The wrapper activates `.venv-mineru` for the router and its vLLM/FlashInfer
 subprocesses. This is required so JIT build tools such as `ninja` remain on
-`PATH`. Pass `--help` to the wrapper for custom router settings.
+`PATH`. The environment also pins `pdftext==0.6.3`: MinerU 3.4.0 is not
+compatible with the non-iterable `PageChars` API introduced in pdftext 0.7.
+Pass `--help` to the wrapper for custom router settings.
 
 Run extraction against the consolidated large-scale PDF datasets:
 
@@ -676,8 +678,10 @@ PDFS_PER_TASK=100 sbatch --array=0-119%8 scripts/extraction/slurm/run_mineru_ful
 The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a 30-minute
 time limit. It chooses a per-task localhost port, writes server/caller logs to
 `logs/mineru/slurm/<job>_<task>.*.log`, and uses `$SLURM_TMPDIR` for temporary
-files when available. Additional arguments after the script path are forwarded
-to `extract-mineru-pdfs`; environment variables such as `INPUT_DIR`,
+files when available. Live extraction progress is written to both the caller
+log and Slurm's `mineru_extract_<job>_<task>.out`; MinerU server output remains
+only in the server log. Additional arguments after the script path are
+forwarded to `extract-mineru-pdfs`; environment variables such as `INPUT_DIR`,
 `SPLIT_INDEX`, `SPLIT`, `OUTPUT_DIR`, `MINERU_PORT`, and
 `MINERU_STARTUP_TIMEOUT` override the defaults.
 

@@ -66,6 +66,11 @@ if ! command -v ninja >/dev/null 2>&1; then
   exit 2
 fi
 
+if ! mineru_check_pdftext_compatibility "$MINERU_VENV/bin/python"; then
+  echo "Repair the environment with scripts/environment/sync_mineru_env.sh before submitting." >&2
+  exit 2
+fi
+
 SLURM_TMP_BASE="${SLURM_TMPDIR:-/tmp/${USER:-mineru}/mineru_${RUN_ID}}"
 mkdir -p "$SLURM_TMP_BASE" logs/mineru/slurm logs/slurm
 export TMPDIR="$SLURM_TMP_BASE/tmp"

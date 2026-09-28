@@ -20,6 +20,26 @@ mineru_python() {
   fi
 }
 
+mineru_check_pdftext_compatibility() {
+  local python_bin="$1"
+
+  "$python_bin" - <<'PY'
+from importlib.metadata import PackageNotFoundError, version
+
+expected = "0.6.3"
+try:
+    installed = version("pdftext")
+except PackageNotFoundError as exc:
+    raise SystemExit("MinerU runtime dependency is missing: pdftext") from exc
+
+if installed != expected:
+    raise SystemExit(
+        f"Incompatible pdftext version {installed}; MinerU 3.4.0 requires {expected} "
+        "to avoid the non-iterable PageChars API"
+    )
+PY
+}
+
 mineru_health_check() {
   local url="$1"
   local python_bin

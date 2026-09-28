@@ -392,7 +392,7 @@ def resolve_split_index(
 
 def probe_environment() -> dict[str, Any]:
     packages = {}
-    for name in ("mineru", "magic-pdf", "vllm", "torch", "httpx", "tqdm"):
+    for name in ("mineru", "magic-pdf", "pdftext", "vllm", "torch", "httpx", "tqdm"):
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:

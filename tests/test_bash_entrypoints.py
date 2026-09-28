@@ -57,6 +57,7 @@ def test_mineru_environment_includes_flashinfer_build_tool() -> None:
     sync_script = (PROJECT_ROOT / "scripts/environment/sync_mineru_env.sh").read_text(encoding="utf-8")
 
     assert "ninja>=1.11,<2" in sync_script
+    assert "pdftext==0.6.3" in sync_script
 
 
 def test_mineru_server_launchers_expose_environment_build_tools() -> None:
@@ -71,6 +72,16 @@ def test_mineru_server_launchers_expose_environment_build_tools() -> None:
         assert 'export VIRTUAL_ENV="$MINERU_VENV_DIR"' in script
         assert 'export PATH="$VIRTUAL_ENV/bin:$PATH"' in script
         assert "command -v ninja" in script or 'shutil.which("ninja")' in script
+        assert "mineru_check_pdftext_compatibility" in script
+
+
+def test_mineru_runtime_rejects_non_iterable_pagechars_dependency() -> None:
+    launcher = (PROJECT_ROOT / "scripts/extraction/mineru_server_launcher.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'expected = "0.6.3"' in launcher
+    assert "non-iterable PageChars API" in launcher
 
 
 def test_mineru_server_output_is_logged_but_only_caller_output_is_teed() -> None:
@@ -81,3 +92,16 @@ def test_mineru_server_output_is_logged_but_only_caller_output_is_teed() -> None
     assert '>>"$server_log" 2>&1 &' in launcher
     assert '> >(tee -a "$server_log")' not in launcher
     assert '"${caller_cmd[@]}" 2>&1 | tee -a "$caller_log"' in launcher
+
+
+def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
+    script = (
+        PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch"
+    ).read_text(encoding="utf-8")
+
+    assert "#SBATCH --output=mineru_extract_%A_%a.out" in script
+    assert "#SBATCH --error=mineru_extract_%A_%a.err" in script
+    assert 'source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"' in script
+    assert 'SERVER_LOG="${MINERU_SERVER_LOG:-logs/mineru/slurm/${RUN_ID}.server.log}"' in script
+    assert 'CALLER_LOG="${MINERU_CALLER_LOG:-logs/mineru/slurm/${RUN_ID}.caller.log}"' in script
+    assert "mineru_run_caller_with_server" in script

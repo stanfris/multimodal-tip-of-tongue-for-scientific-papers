@@ -90,6 +90,11 @@ fi
 export VIRTUAL_ENV="$MINERU_VENV_DIR"
 export PATH="$VIRTUAL_ENV/bin:$PATH"
 
+if ! mineru_check_pdftext_compatibility "$MINERU_VENV/bin/python"; then
+  printf 'Repair the environment with: scripts/environment/sync_mineru_env.sh\n' >&2
+  exit 2
+fi
+
 if ! "$MINERU_VENV/bin/python" - <<'PY'
 import shutil
 from importlib.metadata import PackageNotFoundError, version
@@ -116,7 +121,10 @@ if not hasattr(config, "reading_order_config"):
 if shutil.which("ninja") is None:
     raise SystemExit("Missing ninja executable required by vLLM/FlashInfer JIT compilation")
 
-print(f"MinerU runtime OK: mineru={mineru_version} transformers={transformers_version}")
+print(
+    f"MinerU runtime OK: mineru={mineru_version} "
+    f"transformers={transformers_version} pdftext=0.6.3"
+)
 PY
 then
   cat >&2 <<'EOF'
