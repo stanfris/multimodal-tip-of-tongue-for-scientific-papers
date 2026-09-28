@@ -512,6 +512,68 @@ small smoke run, pass normal CLI overrides through the script:
 scripts/04_run_mineru_full_extraction.sh --split train --limit 20 --max-in-flight 2
 ```
 
+To run the router and extraction caller together on one GPU machine, use the
+portable launcher. It starts one local MinerU server, waits for the real
+`/health` endpoint on `127.0.0.1`, runs the existing extraction caller, then
+shuts the server down and exits with the caller's status:
+
+```bash
+scripts/run_mineru_full_extraction_gpu.sh --split train --limit 20 --max-in-flight 2
+```
+
+The launcher defaults to port `8002` and writes separate server/caller logs
+under `logs/mineru/local/`. Override launcher settings before normal caller
+arguments:
+
+```bash
+scripts/run_mineru_full_extraction_gpu.sh \
+  --port 8012 \
+  --startup-timeout 900 \
+  -- \
+  --input-dir data/pdf_datasets \
+  --output-dir data/preprocessed \
+  --split all
+```
+
+By default the server command is:
+
+```bash
+uv run --no-sync mineru-router --host 127.0.0.1 --port <PORT>
+```
+
+If a local MinerU install exposes a different router flag shape, pass the exact
+server command with `--server-cmd` or `MINERU_SERVER_CMD`. The caller remains
+the repository CLI and preserves the current `hybrid-engine`, page range, and
+output format defaults unless you explicitly override them with caller args.
+
+On a Slurm cluster with A100 nodes, submit one server plus one caller per array
+task:
+
+```bash
+sbatch --array=0-119%8 scripts/slurm/run_mineru_full_extraction_a100.sbatch
+```
+
+Each task maps its array ID to an extraction shard with:
+
+```text
+start-index = SLURM_ARRAY_TASK_ID * PDFS_PER_TASK
+end-index   = start-index + PDFS_PER_TASK
+```
+
+`PDFS_PER_TASK` defaults to `1`. For 100 PDFs per task, submit:
+
+```bash
+PDFS_PER_TASK=100 sbatch --array=0-119%8 scripts/slurm/run_mineru_full_extraction_a100.sbatch
+```
+
+The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a 30-minute
+time limit. It chooses a per-task localhost port, writes server/caller logs to
+`logs/mineru/slurm/<job>_<task>.*.log`, and uses `$SLURM_TMPDIR` for temporary
+files when available. Additional arguments after the script path are forwarded
+to `extract-mineru-pdfs`; environment variables such as `INPUT_DIR`,
+`SPLIT_INDEX`, `SPLIT`, `OUTPUT_DIR`, `MINERU_PORT`, and
+`MINERU_STARTUP_TIMEOUT` override the defaults.
+
 Completed papers are skipped on restart. Each successful paper has:
 
 ```text
