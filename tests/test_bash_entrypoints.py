@@ -8,7 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_ENTRYPOINTS = {
-    "scripts/environment/sync_mineru_env.sh": "transformers>=4.57.3,<5",
+    "scripts/environment/sync_mineru_env.sh": "transformers==4.57.3",
     "scripts/pdf_corpus/build_pdf_dataset_split.sh": "python -m pdf_corpus.build_pdf_dataset_split",
     "scripts/pdf_corpus/build_pdf_datasets_folder.sh": "python -m pdf_corpus.build_pdf_datasets_folder",
     "scripts/pdf_corpus/split_arxiv_pdfs_by_domain.sh": "python -m pdf_corpus.split_arxiv_pdfs_by_domain",

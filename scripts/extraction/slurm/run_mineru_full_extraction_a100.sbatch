@@ -44,6 +44,13 @@ END_INDEX="${END_INDEX:-$((START_INDEX + PDFS_PER_TASK))}"
 MINERU_PORT="${MINERU_PORT:-$(choose_free_port)}"
 MINERU_STARTUP_TIMEOUT="${MINERU_STARTUP_TIMEOUT:-600}"
 API_URL="http://127.0.0.1:${MINERU_PORT}"
+MINERU_VENV="${MINERU_VENV:-.venv-mineru}"
+
+if [[ ! -x "$MINERU_VENV/bin/python" ]] || [[ ! -x "$MINERU_VENV/bin/mineru-router" ]]; then
+  echo "Dedicated MinerU environment not found: $MINERU_VENV" >&2
+  echo "Create it with scripts/environment/sync_mineru_env.sh before submitting." >&2
+  exit 2
+fi
 
 SLURM_TMP_BASE="${SLURM_TMPDIR:-/tmp/${USER:-mineru}/mineru_${RUN_ID}}"
 mkdir -p "$SLURM_TMP_BASE" logs/mineru/slurm logs/slurm
@@ -52,14 +59,14 @@ mkdir -p "$TMPDIR"
 
 SERVER_LOG="${MINERU_SERVER_LOG:-logs/mineru/slurm/${RUN_ID}.server.log}"
 CALLER_LOG="${MINERU_CALLER_LOG:-logs/mineru/slurm/${RUN_ID}.caller.log}"
-SERVER_CMD="${MINERU_SERVER_CMD:-uv run --no-sync mineru-router --host 127.0.0.1 --port ${MINERU_PORT}}"
+SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV/bin/mineru-router --host 127.0.0.1 --port ${MINERU_PORT}}"
 
 CALLER_CMD=(
-  uv run --no-sync dataset-generation extract-mineru-pdfs
+  env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction
   --input-dir "${INPUT_DIR:-data/pdf_datasets}"
   --split-index "${SPLIT_INDEX:-data/splits/pdf_dataset_split.json}"
   --split "${SPLIT:-train+test}"
-  --output-dir "${OUTPUT_DIR:-data/preprocessed}"
+  --output-dir "${OUTPUT_DIR:-data/processed}"
   --start-index "$START_INDEX"
   --end-index "$END_INDEX"
   --api-url "$API_URL"

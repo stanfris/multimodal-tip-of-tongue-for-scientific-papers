@@ -84,22 +84,24 @@ fi
 
 if ! "$MINERU_VENV/bin/python" - <<'PY'
 from importlib.metadata import PackageNotFoundError, version
+from packaging.version import Version
 
 try:
     mineru_version = version("mineru")
     transformers_version = version("transformers")
-    from transformers import PPDocLayoutV2Config
+    from mineru.model.layout.pp_doclayoutv2 import PPDocLayoutV2Config
 
     config = PPDocLayoutV2Config()
 except (ImportError, PackageNotFoundError) as exc:
     raise SystemExit(f"MinerU runtime dependency is missing: {exc}") from exc
 
-if not mineru_version.startswith("3."):
-    raise SystemExit(f"Expected MinerU 3.x for the /tasks API, found {mineru_version}")
+if Version(mineru_version) != Version("3.4.0"):
+    raise SystemExit(f"Expected MinerU 3.4.0, found {mineru_version}")
+if Version(transformers_version) != Version("4.57.3"):
+    raise SystemExit(f"Expected Transformers 4.57.3, found {transformers_version}")
 if not hasattr(config, "reading_order_config"):
     raise SystemExit(
-        "Incompatible Transformers runtime: "
-        f"{transformers_version} PPDocLayoutV2Config lacks reading_order_config"
+        "Incompatible MinerU runtime: PPDocLayoutV2Config lacks reading_order_config"
     )
 
 print(f"MinerU runtime OK: mineru={mineru_version} transformers={transformers_version}")

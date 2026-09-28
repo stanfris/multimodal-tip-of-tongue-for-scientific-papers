@@ -56,8 +56,10 @@ scripts/environment/sync_env.sh
 scripts/environment/sync_mineru_env.sh
 ```
 
-`.venv` is the main project environment. `.venv-mineru` is the isolated MinerU
-3.x GPU environment. Standard wrappers select the correct environment
+`.venv` is the main project environment. `.venv-mineru` is a disposable,
+isolated MinerU 3.4.0 GPU environment pinned to Transformers 4.57.3. Re-running
+its sync script clears and rebuilds it, so incompatible packages cannot linger.
+Standard wrappers select the correct environment
 automatically. To switch an interactive shell explicitly:
 
 ```bash
@@ -626,7 +628,7 @@ scripts/extraction/run_mineru_full_extraction_gpu.sh \
 ```
 
 Before submitting PDFs, the launcher verifies that `.venv-mineru` has MinerU
-3.x and a Transformers 4.x PP-DocLayoutV2 configuration with reading-order
+3.4.0 and a Transformers 4.57.3 PP-DocLayoutV2 configuration with reading-order
 support. Create or repair that isolated environment with:
 
 ```bash
