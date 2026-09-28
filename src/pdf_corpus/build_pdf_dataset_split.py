@@ -22,15 +22,24 @@ DEFAULT_DATASETS = ("ACL", "Biology", "Engineering", "Medicine", "Physics")
 DEFAULT_SEED = 42
 DEFAULT_TRAIN_SIZE_PER_DATASET = 2000
 DEFAULT_TEST_SIZE_PER_DATASET = 100
+DEFAULT_INPUT_DIR = Path("data/pdf_datasets")
+DEFAULT_OUTPUT = Path("data/splits/pdf_dataset_split.json")
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", type=Path, default=Path("data/pdf_datasets"))
+    parser.add_argument(
+        "--root-dir",
+        type=Path,
+        help=(
+            "Dataset storage root. Defaults --input-dir to ROOT/pdf_datasets "
+            "and --output to ROOT/data/splits/pdf_dataset_split.json."
+        ),
+    )
+    parser.add_argument("--input-dir", type=Path)
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/splits/pdf_dataset_split.json"),
         help="Output JSON split index.",
     )
     parser.add_argument(
@@ -52,7 +61,16 @@ def parse_args() -> argparse.Namespace:
         default=list(DEFAULT_DATASETS),
         help="Dataset subset folders to sample from.",
     )
-    return parser.parse_args()
+    return parser
+
+
+def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    root_dir = args.root_dir.expanduser().resolve() if args.root_dir is not None else None
+    input_dir = args.input_dir or (root_dir / "pdf_datasets" if root_dir is not None else DEFAULT_INPUT_DIR)
+    output = args.output or (
+        root_dir / "data/splits/pdf_dataset_split.json" if root_dir is not None else DEFAULT_OUTPUT
+    )
+    return input_dir, output
 
 
 def build_pdf_dataset_split(
@@ -124,15 +142,16 @@ def write_pdf_dataset_split(split_index: dict[str, Any], output: Path) -> Path:
 
 
 def main() -> int:
-    args = parse_args()
+    args = build_parser().parse_args()
+    input_dir, output = resolve_paths(args)
     split_index = build_pdf_dataset_split(
-        input_dir=args.input_dir,
+        input_dir=input_dir,
         datasets=args.datasets,
         train_size_per_dataset=args.train_size_per_dataset,
         test_size_per_dataset=args.test_size_per_dataset,
         seed=args.seed,
     )
-    output_path = write_pdf_dataset_split(split_index, args.output)
+    output_path = write_pdf_dataset_split(split_index, output)
     print(json.dumps({"output": str(output_path), **split_index["metadata"]}, indent=2, sort_keys=True))
     return 0
 
