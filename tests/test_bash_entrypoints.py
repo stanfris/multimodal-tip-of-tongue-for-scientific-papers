@@ -71,3 +71,13 @@ def test_mineru_server_launchers_expose_environment_build_tools() -> None:
         assert 'export VIRTUAL_ENV="$MINERU_VENV_DIR"' in script
         assert 'export PATH="$VIRTUAL_ENV/bin:$PATH"' in script
         assert "command -v ninja" in script or 'shutil.which("ninja")' in script
+
+
+def test_mineru_server_output_is_logged_but_only_caller_output_is_teed() -> None:
+    launcher = (PROJECT_ROOT / "scripts/extraction/mineru_server_launcher.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert '>>"$server_log" 2>&1 &' in launcher
+    assert '> >(tee -a "$server_log")' not in launcher
+    assert '"${caller_cmd[@]}" 2>&1 | tee -a "$caller_log"' in launcher

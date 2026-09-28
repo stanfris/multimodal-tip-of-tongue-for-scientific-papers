@@ -619,9 +619,10 @@ shuts the server down and exits with the caller's status:
 scripts/extraction/run_mineru_full_extraction_gpu.sh --split train --limit 20 --max-in-flight 2
 ```
 
-The launcher defaults to port `8002` and writes separate server/caller logs
-under `logs/mineru/local/`. Override launcher settings before normal caller
-arguments:
+The launcher defaults to port `8002` and writes separate server/caller logs.
+Server output stays in the server log, while extraction progress is both shown
+live and appended to the caller log under `logs/mineru/local/`. Override
+launcher settings before normal caller arguments:
 
 ```bash
 scripts/extraction/run_mineru_full_extraction_gpu.sh \

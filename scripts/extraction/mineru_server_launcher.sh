@@ -51,12 +51,12 @@ mineru_start_server() {
   local server_log="$2"
 
   mkdir -p "$(dirname "$server_log")"
-  printf '[%s] Starting MinerU server: %s\n' "$(mineru_timestamp)" "$server_cmd" | tee -a "$server_log"
+  printf '[%s] Starting MinerU server: %s\n' "$(mineru_timestamp)" "$server_cmd" >>"$server_log"
 
   if command -v setsid >/dev/null 2>&1; then
-    PYTHONUNBUFFERED=1 setsid bash -lc "exec $server_cmd" > >(tee -a "$server_log") 2>&1 &
+    PYTHONUNBUFFERED=1 setsid bash -lc "exec $server_cmd" >>"$server_log" 2>&1 &
   else
-    PYTHONUNBUFFERED=1 bash -lc "exec $server_cmd" > >(tee -a "$server_log") 2>&1 &
+    PYTHONUNBUFFERED=1 bash -lc "exec $server_cmd" >>"$server_log" 2>&1 &
   fi
   MINERU_SERVER_PID=$!
   MINERU_SERVER_STARTED=1
@@ -102,11 +102,10 @@ mineru_wait_for_ready() {
   while (( SECONDS < deadline )); do
     if ! kill -0 "$MINERU_SERVER_PID" >/dev/null 2>&1; then
       printf 'MinerU server exited before readiness. See %s\n' "$server_log" >&2
-      tail -n 80 "$server_log" >&2 || true
       return 1
     fi
     if mineru_health_check "$api_url"; then
-      printf '[%s] MinerU server is ready at %s\n' "$(mineru_timestamp)" "$api_url" | tee -a "$server_log"
+      printf '[%s] MinerU server is ready at %s\n' "$(mineru_timestamp)" "$api_url" >>"$server_log"
       return 0
     fi
     sleep 2
@@ -114,7 +113,6 @@ mineru_wait_for_ready() {
 
   printf 'Timed out after %s seconds waiting for MinerU readiness at %s. See %s\n' \
     "$timeout_seconds" "$api_url" "$server_log" >&2
-  tail -n 80 "$server_log" >&2 || true
   return 1
 }
 

@@ -13,8 +13,8 @@ Usage:
 
 Starts one MinerU router/API server in the background, waits for /health, runs
 the existing extract-mineru-pdfs caller against 127.0.0.1, then shuts the server
-down and exits with the caller's status. Server and extraction progress are
-shown live while also being appended to their separate log files.
+down and exits with the caller's status. Server output is written only to the
+server log. Extraction progress is shown live and appended to the caller log.
 
 Launcher options:
   --port PORT                 MinerU server port (default: $MINERU_PORT or 8002)
