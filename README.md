@@ -682,35 +682,23 @@ server command with `--server-cmd` or `MINERU_SERVER_CMD`. The caller remains
 the repository CLI and preserves the current `hybrid-engine`, page range, and
 output format defaults unless you explicitly override them with caller args.
 
-On a Slurm cluster with A100 nodes, submit one server plus one caller per array
-task:
+On a Slurm cluster with A100 nodes, submit one server plus one caller as a
+single job:
 
 ```bash
-sbatch --array=0-119%8 scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch
-```
-
-Each task maps its array ID to an extraction shard with:
-
-```text
-start-index = SLURM_ARRAY_TASK_ID * PDFS_PER_TASK
-end-index   = start-index + PDFS_PER_TASK
-```
-
-`PDFS_PER_TASK` defaults to `1`. For 100 PDFs per task, submit:
-
-```bash
-PDFS_PER_TASK=100 sbatch --array=0-119%8 scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch
+sbatch scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch
 ```
 
 The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a 30-minute
-time limit. It chooses a per-task localhost port, writes server/caller logs to
-`logs/mineru/slurm/<job>_<task>.*.log`, and uses `$SLURM_TMPDIR` for temporary
-files when available. Live extraction progress is written to both the caller
-log and Slurm's `mineru_extract_<job>_<task>.out`; MinerU server output remains
-only in the server log. Additional arguments after the script path are
-forwarded to `extract-mineru-pdfs`; environment variables such as `INPUT_DIR`,
-`SPLIT_INDEX`, `SPLIT`, `OUTPUT_DIR`, `MINERU_PORT`, and
-`MINERU_STARTUP_TIMEOUT` override the defaults.
+time limit. It chooses a localhost port, writes server/caller logs to
+`logs/mineru/slurm/<job>.*.log`, and uses `$SLURM_TMPDIR` for temporary files
+when available. Live extraction progress is written to both the caller log and
+Slurm's `mineru_extract_<job>.out`; MinerU server output remains only in the
+server log. Input, split-index, and output paths default to locations beneath
+`/scratch-shared/sfris1`. Additional arguments after the script path are
+forwarded to `extract-mineru-pdfs`; environment variables such as
+`DATASET_DIR`, `INPUT_DIR`, `SPLIT_INDEX`, `SPLIT`, `OUTPUT_DIR`,
+`MINERU_PORT`, and `MINERU_STARTUP_TIMEOUT` override the defaults.
 
 Completed papers are skipped on restart. Each successful paper has:
 

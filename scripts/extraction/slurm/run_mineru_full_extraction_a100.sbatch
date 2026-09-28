@@ -7,9 +7,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --time=00:30:00
-#SBATCH --array=0-0%8
-#SBATCH --output=mineru_extract_%A_%a.out
-#SBATCH --error=mineru_extract_%A_%a.err
+#SBATCH --output=mineru_extract_%j.out
+#SBATCH --error=mineru_extract_%j.err
 
 set -euo pipefail
 
@@ -17,11 +16,6 @@ ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 cd "$ROOT_DIR"
 
 source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"
-
-if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
-  echo "This script is intended to run under sbatch as an array job." >&2
-  exit 2
-fi
 
 choose_free_port() {
   local python_bin
@@ -35,12 +29,9 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 PY
 }
 
-TASK_ID="$SLURM_ARRAY_TASK_ID"
-JOB_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
-RUN_ID="${JOB_ID}_${TASK_ID}"
-PDFS_PER_TASK="${PDFS_PER_TASK:-1}"
-START_INDEX="${START_INDEX:-$((TASK_ID * PDFS_PER_TASK))}"
-END_INDEX="${END_INDEX:-$((START_INDEX + PDFS_PER_TASK))}"
+JOB_ID="${SLURM_JOB_ID:-manual}"
+RUN_ID="$JOB_ID"
+DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"
 MINERU_PORT="${MINERU_PORT:-$(choose_free_port)}"
 MINERU_STARTUP_TIMEOUT="${MINERU_STARTUP_TIMEOUT:-600}"
 API_URL="http://127.0.0.1:${MINERU_PORT}"
@@ -82,17 +73,15 @@ SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV/bin/mineru-router --host 127.0.0.1
 
 CALLER_CMD=(
   env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction
-  --input-dir "${INPUT_DIR:-data/pdf_datasets}"
-  --split-index "${SPLIT_INDEX:-data/splits/pdf_dataset_split.json}"
+  --input-dir "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
+  --split-index "${SPLIT_INDEX:-$DATASET_DIR/data/splits/pdf_dataset_split.json}"
   --split "${SPLIT:-train+test}"
-  --output-dir "${OUTPUT_DIR:-data/processed}"
-  --start-index "$START_INDEX"
-  --end-index "$END_INDEX"
+  --output-dir "${OUTPUT_DIR:-$DATASET_DIR/data/processed}"
   --api-url "$API_URL"
   "$@"
 )
 
-printf 'Job %s task %s processes discovered PDF indices [%s, %s).\n' "$JOB_ID" "$TASK_ID" "$START_INDEX" "$END_INDEX"
+printf 'Job %s processes the full %s split from %s.\n' "$JOB_ID" "${SPLIT:-train+test}" "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
 printf 'MinerU server log: %s\n' "$SERVER_LOG"
 printf 'MinerU caller log: %s\n' "$CALLER_LOG"
 printf 'Temporary path: %s\n' "$SLURM_TMP_BASE"

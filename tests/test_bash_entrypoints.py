@@ -100,8 +100,11 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
         PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch"
     ).read_text(encoding="utf-8")
 
-    assert "#SBATCH --output=mineru_extract_%A_%a.out" in script
-    assert "#SBATCH --error=mineru_extract_%A_%a.err" in script
+    assert "#SBATCH --array" not in script
+    assert "SLURM_ARRAY_TASK_ID" not in script
+    assert "#SBATCH --output=mineru_extract_%j.out" in script
+    assert "#SBATCH --error=mineru_extract_%j.err" in script
+    assert 'DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"' in script
     assert 'source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"' in script
     assert 'SERVER_LOG="${MINERU_SERVER_LOG:-logs/mineru/slurm/${RUN_ID}.server.log}"' in script
     assert 'CALLER_LOG="${MINERU_CALLER_LOG:-logs/mineru/slurm/${RUN_ID}.caller.log}"' in script
