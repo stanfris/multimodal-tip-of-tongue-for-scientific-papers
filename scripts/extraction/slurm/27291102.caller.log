@@ -1,0 +1,104 @@
+[2026-09-28T09:45:08Z] Starting caller: env PYTHONPATH=/gpfs/home5/sfris1/multimodal-tip-of-tongue-for-scientific-papers/src .venv-mineru/bin/python -m extraction --input-dir /scratch-shared/sfris1/pdf_datasets --split-index /scratch-shared/sfris1/data/splits/pdf_dataset_split.json --split train+test --output-dir /scratch-shared/sfris1/processed --api-url http://127.0.0.1:42001
+{
+  "mineru_health": {
+    "completed_tasks": 0,
+    "failed_tasks": 0,
+    "max_concurrent_requests": 3,
+    "processing_tasks": 0,
+    "processing_window_size": 64,
+    "protocol_version": 2,
+    "queued_tasks": 0,
+    "servers": [
+      {
+        "base_url": "http://127.0.0.1:44685",
+        "completed_tasks": 0,
+        "failed_tasks": 0,
+        "gpu": "0",
+        "healthy": true,
+        "last_checked_at": "2026-09-28T09:45:18.910105+00:00",
+        "last_error": null,
+        "max_concurrent_requests": 3,
+        "processing_tasks": 0,
+        "processing_window_size": 64,
+        "queued_tasks": 0,
+        "server_id": "local-gpu-0",
+        "source": "local"
+      }
+    ],
+    "status": "healthy",
+    "version": "3.4.0"
+  }
+}
+failure paper_id=ACL_2022.coling-1.132 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=1 in_flight=3 remaining=11549 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.149 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=2 in_flight=3 remaining=11548 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.162 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=3 in_flight=3 remaining=11547 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.175 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=4 in_flight=3 remaining=11546 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.178 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=5 in_flight=3 remaining=11545 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.182 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=6 in_flight=3 remaining=11544 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.195 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=7 in_flight=3 remaining=11543 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.203 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=8 in_flight=3 remaining=11542 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.251 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=9 in_flight=3 remaining=11541 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.254 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=10 in_flight=3 remaining=11540 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.262 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=11 in_flight=3 remaining=11539 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.273 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=12 in_flight=3 remaining=11538 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.28 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=13 in_flight=3 remaining=11537 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.290 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=14 in_flight=3 remaining=11536 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.310 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=15 in_flight=3 remaining=11535 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.325 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=16 in_flight=3 remaining=11534 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.327 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=17 in_flight=3 remaining=11533 papers/s=0.0 pages/s=0.0
+failure paper_id=ACL_2022.coling-1.33 error_type=submission_failure attempts=3 message=Server error '503 Service Unavailable' for url 'http://127.0.0.1:42001/tasks'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503
+progress completed=0 failed=18 in_flight=3 remaining=11532 papers/s=0.0 pages/s=0.0
+progress completed=1 failed=18 in_flight=3 remaining=11531 papers/s=0.0048 pages/s=0.0482
+progress completed=2 failed=18 in_flight=3 remaining=11530 papers/s=0.0096 pages/s=0.0963
+progress completed=3 failed=18 in_flight=3 remaining=11529 papers/s=0.0144 pages/s=0.1435
+progress completed=4 failed=18 in_flight=3 remaining=11528 papers/s=0.0178 pages/s=0.1775
+progress completed=5 failed=18 in_flight=3 remaining=11527 papers/s=0.022 pages/s=0.2202
+progress completed=6 failed=18 in_flight=3 remaining=11526 papers/s=0.0254 pages/s=0.2541
+progress completed=7 failed=18 in_flight=3 remaining=11525 papers/s=0.0296 pages/s=0.2964
+progress completed=8 failed=18 in_flight=3 remaining=11524 papers/s=0.0329 pages/s=0.3286
+progress completed=9 failed=18 in_flight=3 remaining=11523 papers/s=0.0362 pages/s=0.3577
+progress completed=10 failed=18 in_flight=3 remaining=11522 papers/s=0.0402 pages/s=0.3817
+progress completed=11 failed=18 in_flight=3 remaining=11521 papers/s=0.0425 pages/s=0.4054
+progress completed=12 failed=18 in_flight=3 remaining=11520 papers/s=0.0457 pages/s=0.4377
+progress completed=13 failed=18 in_flight=3 remaining=11519 papers/s=0.0482 pages/s=0.4632
+progress completed=14 failed=18 in_flight=3 remaining=11518 papers/s=0.0511 pages/s=0.4924
+progress completed=15 failed=18 in_flight=3 remaining=11517 papers/s=0.0539 pages/s=0.5209
+progress completed=16 failed=18 in_flight=3 remaining=11516 papers/s=0.056 pages/s=0.5425
+progress completed=17 failed=18 in_flight=3 remaining=11515 papers/s=0.0583 pages/s=0.5655
+progress completed=18 failed=18 in_flight=3 remaining=11514 papers/s=0.0613 pages/s=0.5963
+progress completed=19 failed=18 in_flight=3 remaining=11513 papers/s=0.0627 pages/s=0.6107
