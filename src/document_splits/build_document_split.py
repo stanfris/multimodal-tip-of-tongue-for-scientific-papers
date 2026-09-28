@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""Write a fixed-seed stratified train/test document split index."""
+"""Deprecated: write a post-extraction document split index for legacy datasets."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from document_splits.document_splits import (
@@ -47,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    print(
+        "Deprecated: use pdf_corpus.build_pdf_dataset_split before extraction; "
+        "newly extracted paper.json files retain that canonical split.",
+        file=sys.stderr,
+    )
     if args.test_fraction is None:
         split_index = build_split_index(
             read_preprocessed_papers(args.dataset),

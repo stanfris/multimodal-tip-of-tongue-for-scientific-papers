@@ -151,7 +151,16 @@ def filter_papers_by_split(
 ) -> list[dict[str, Any]]:
     paper_rows = list(papers)
     if split_index_path is None:
-        return paper_rows
+        if split_name is None:
+            return paper_rows
+        selected_splits = {"train", "test"} if split_name in {"all", "train+test"} else {split_name}
+        missing = [str(paper.get("paper_id", "unknown")) for paper in paper_rows if not paper.get("split")]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} papers do not contain canonical PDF split metadata; "
+                f"first missing paper ID: {missing[0]}"
+            )
+        return [paper for paper in paper_rows if str(paper["split"]) in selected_splits]
     if split_name is None:
         raise ValueError("split_name is required when split_index_path is set")
     by_id = {str(paper["paper_id"]): paper for paper in paper_rows}

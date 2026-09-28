@@ -3,7 +3,6 @@ dataset:
   root: ../data
   preprocessed: preprocessed
   clues_dir: clues
-  split_index: splits/document_split.json
   visual_interpretations:
   textual_interpretations:
 
