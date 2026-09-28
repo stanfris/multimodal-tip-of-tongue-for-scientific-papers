@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.build_pdf_dataset_split import DEFAULT_DATASETS
-from scripts.build_pdf_dataset_split import DEFAULT_TEST_SIZE_PER_DATASET
-from scripts.build_pdf_dataset_split import DEFAULT_TRAIN_SIZE_PER_DATASET
-from scripts.build_pdf_dataset_split import build_pdf_dataset_split
+from pdf_corpus.build_pdf_dataset_split import DEFAULT_DATASETS
+from pdf_corpus.build_pdf_dataset_split import DEFAULT_TEST_SIZE_PER_DATASET
+from pdf_corpus.build_pdf_dataset_split import DEFAULT_TRAIN_SIZE_PER_DATASET
+from pdf_corpus.build_pdf_dataset_split import build_pdf_dataset_split
 
 
 def make_pdf_dataset(root, dataset: str, count: int) -> None:

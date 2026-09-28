@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 
-from dataset_generation.document_downloads.pmc_oa_subset import (
+from document_downloads.pmc_oa_subset import (
     DEFAULT_AWS_METADATA_WORKERS,
     DEFAULT_END_YEAR,
     DEFAULT_PUBMED_BATCH_SIZE,

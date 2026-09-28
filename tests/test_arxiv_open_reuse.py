@@ -9,23 +9,23 @@ from datetime import date
 
 import pytest
 
-from dataset_generation.document_downloads.arxiv_open_reuse import HTTPFetchError
-from dataset_generation.document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
-from dataset_generation.document_downloads.arxiv_open_reuse import build_parser
-from dataset_generation.document_downloads.arxiv_open_reuse import build_target_counts
-from dataset_generation.document_downloads.arxiv_open_reuse import download_eligible_pdfs
-from dataset_generation.document_downloads.arxiv_open_reuse import filter_candidate
-from dataset_generation.document_downloads.arxiv_open_reuse import fetch_bytes
-from dataset_generation.document_downloads.arxiv_open_reuse import ensure_kaggle_auth
-from dataset_generation.document_downloads.arxiv_open_reuse import iter_oai_records
-from dataset_generation.document_downloads.arxiv_open_reuse import kaggle_pdf_object_name
-from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license
-from dataset_generation.document_downloads.arxiv_open_reuse import normalize_license_url
-from dataset_generation.document_downloads.arxiv_open_reuse import normalize_oai_base_url
-from dataset_generation.document_downloads.arxiv_open_reuse import parse_oai_arxiv_record
-from dataset_generation.document_downloads.arxiv_open_reuse import pdf_filename_for_arxiv_id
-from dataset_generation.document_downloads.arxiv_open_reuse import resolve_kaggle_snapshot
-from dataset_generation.document_downloads.arxiv_open_reuse import versioned_arxiv_id
+from document_downloads.arxiv_open_reuse import HTTPFetchError
+from document_downloads.arxiv_open_reuse import build_arxiv_open_reuse_corpus
+from document_downloads.arxiv_open_reuse import build_parser
+from document_downloads.arxiv_open_reuse import build_target_counts
+from document_downloads.arxiv_open_reuse import download_eligible_pdfs
+from document_downloads.arxiv_open_reuse import filter_candidate
+from document_downloads.arxiv_open_reuse import fetch_bytes
+from document_downloads.arxiv_open_reuse import ensure_kaggle_auth
+from document_downloads.arxiv_open_reuse import iter_oai_records
+from document_downloads.arxiv_open_reuse import kaggle_pdf_object_name
+from document_downloads.arxiv_open_reuse import normalize_license
+from document_downloads.arxiv_open_reuse import normalize_license_url
+from document_downloads.arxiv_open_reuse import normalize_oai_base_url
+from document_downloads.arxiv_open_reuse import parse_oai_arxiv_record
+from document_downloads.arxiv_open_reuse import pdf_filename_for_arxiv_id
+from document_downloads.arxiv_open_reuse import resolve_kaggle_snapshot
+from document_downloads.arxiv_open_reuse import versioned_arxiv_id
 
 
 def kaggle_record(
@@ -340,7 +340,7 @@ def test_reuses_existing_snapshot_without_kaggle_download(monkeypatch, tmp_path)
     def fail_download(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("existing snapshot should be reused")
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_kaggle_snapshot", fail_download)
+    monkeypatch.setattr("document_downloads.arxiv_open_reuse.download_kaggle_snapshot", fail_download)
 
     assert resolve_kaggle_snapshot(
         snapshot_path=snapshot,
@@ -390,7 +390,7 @@ def test_resume_skips_existing_selected_metadata_and_pdf(monkeypatch, tmp_path) 
     def fail_download(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("valid existing PDF should be skipped on resume")
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fail_download)
+    monkeypatch.setattr("document_downloads.arxiv_open_reuse.download_url_to_file", fail_download)
 
     result = build_arxiv_open_reuse_corpus(
         snapshot_path=metadata,
@@ -423,7 +423,7 @@ def test_download_eligible_pdfs_resumes_existing_valid_pdf(monkeypatch, tmp_path
     def fail_download(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("valid existing PDFs should be skipped before Kaggle access")
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fail_download)
+    monkeypatch.setattr("document_downloads.arxiv_open_reuse.download_url_to_file", fail_download)
 
     stats = download_eligible_pdfs(
         [
@@ -459,7 +459,7 @@ def test_download_eligible_pdfs_downloads_exact_kaggle_object(monkeypatch, tmp_p
         urls.append(url)
         destination.write_bytes(b"%PDF\nbody")
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
+    monkeypatch.setattr("document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
 
     stats = download_eligible_pdfs(
         [
@@ -506,7 +506,7 @@ def test_download_eligible_pdfs_uses_multiple_workers(monkeypatch, tmp_path) -> 
         with lock:
             active -= 1
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
+    monkeypatch.setattr("document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
 
     records = [
         {
@@ -541,7 +541,7 @@ def test_download_eligible_pdfs_reports_kaggle_unavailable_ids(monkeypatch, tmp_
     def fake_download(url, destination, **kwargs):  # type: ignore[no-untyped-def]
         raise HTTPFetchError(url, urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None), status_code=404)
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
+    monkeypatch.setattr("document_downloads.arxiv_open_reuse.download_url_to_file", fake_download)
 
     stats = download_eligible_pdfs(
         [
@@ -649,7 +649,7 @@ def test_oai_harvest_skips_http_406_windows(monkeypatch) -> None:
     def fake_fetch_bytes(url, **kwargs):  # type: ignore[no-untyped-def]
         raise HTTPFetchError(url, urllib.error.HTTPError(url, 406, "Not Acceptable", hdrs=None, fp=None), status_code=406)
 
-    monkeypatch.setattr("dataset_generation.document_downloads.arxiv_open_reuse.fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr("document_downloads.arxiv_open_reuse.fetch_bytes", fake_fetch_bytes)
 
     items = list(
         iter_oai_records(

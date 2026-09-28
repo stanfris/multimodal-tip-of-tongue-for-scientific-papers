@@ -9,13 +9,27 @@ paper directories.
 ## Repository Layout
 
 ```text
-src/dataset_generation/
-  schema.py      # Output schema validation
-  document_downloads/ # Source-document metadata builders and PDF download commands
-  preprocessed.py # Direct reader for extracted paper directories and clues
-  storage.py     # Artifact writing and reading
-  synthetic.py   # Stable interfaces for later test collection generation
-  cli.py         # dataset-generation command line interface
+src/
+  cli.py                 # dataset-generation command line interface
+  common/                # Shared JSONL, settings, validation, and model helpers
+  document_downloads/    # Source metadata builders and PDF download commands
+  pdf_corpus/            # PDF corpus assembly, splitting, and statistics
+  document_splits/       # Extracted-document split generation and filtering
+  extraction/            # MinerU extraction logic
+  preprocessing/         # Preprocessed paper readers and cleanup tools
+  clues/                 # Textual and visual clue generation
+  queries/               # Query generation, judgement, and test collections
+  dataset_packaging/     # Dataset schema, storage, and Hugging Face packaging
+  review/                # Streamlit query review application
+
+scripts/
+  environment/           # Environment setup
+  document_downloads/    # Document corpus workflow wrappers
+  extraction/            # Local and Slurm extraction wrappers
+  preprocessing/         # Preprocessing workflow wrappers
+  clues/                 # Clue-generation wrappers
+  queries/               # Query-generation and judgement wrappers
+  packaging/             # Hugging Face upload/download wrappers
 ```
 
 Generated data is intentionally ignored by Git:
@@ -41,7 +55,7 @@ uv sync --dev
 Launch the local Streamlit reviewer for generated tip-of-the-tongue query collections:
 
 ```bash
-.venv/bin/python -m streamlit run review_app.py --server.address 127.0.0.1
+.venv/bin/python -m streamlit run src/review/review_app.py --server.address 127.0.0.1
 ```
 
 The reviewer can inspect generated query collections and writes manual
@@ -52,27 +66,27 @@ annotations separately to `data/reviews/query_review_annotations.jsonl`.
 Run the dataset generation stages individually:
 
 ```bash
-scripts/00_sync_env.sh
+scripts/environment/sync_env.sh
 scripts/document_downloads/build_acl_subset.sh
 scripts/document_downloads/download_acl_pdfs.sh
-scripts/03_start_mineru_router.sh
-scripts/04_run_mineru_full_extraction.sh
-scripts/05_reduce_and_compact_preprocessed.sh
-scripts/06_describe_all_figures.sh
-scripts/07_describe_all_textual_clues.sh
-scripts/08_generate_queries.sh
-scripts/09_judge_train_queries.sh
+scripts/extraction/start_mineru_router.sh
+scripts/extraction/run_mineru_full_extraction.sh
+scripts/preprocessing/reduce_and_compact_preprocessed.sh
+scripts/clues/describe_all_figures.sh
+scripts/clues/describe_all_textual_clues.sh
+scripts/queries/generate_queries.sh
+scripts/queries/judge_train_queries.sh
 ```
 
-Run `03_start_mineru_router.sh` in a separate terminal before
-`04_run_mineru_full_extraction.sh`. The clue and query stages read directly
+Run `start_mineru_router.sh` in a separate terminal before
+`run_mineru_full_extraction.sh`. The clue and query stages read directly
 from `data/preprocessed` or `data/preprocessed/papers`.
 
 The bash scripts are intentionally thin wrappers for the standard workflow.
 Use the Python CLIs directly for ad hoc runs.
 
 All source-document PDF downloads are centralized under
-`src/dataset_generation/document_downloads/` and exposed through:
+`src/document_downloads/` and exposed through:
 
 ```bash
 uv run dataset-generation download-documents --help
@@ -85,7 +99,7 @@ Build a fixed-seed stratified document split before clue/query generation.
 The default split is 1,000 train documents and 200 test documents:
 
 ```bash
-uv run python scripts/build_document_split.py \
+uv run python -m document_splits.build_document_split \
   --dataset data/preprocessed \
   --output data/splits/document_split.json
 ```
@@ -100,15 +114,15 @@ managed query settings are intentionally not supported, except for the
 Generate the training set by default, or explicitly select the test set:
 
 ```bash
-scripts/06_describe_all_figures.sh
-scripts/07_describe_all_textual_clues.sh
-scripts/08_generate_queries.sh
-scripts/09_judge_train_queries.sh
-scripts/06_describe_all_figures.sh --set test
-scripts/07_describe_all_textual_clues.sh --set test
-scripts/08_generate_queries.sh --set test
-scripts/08_generate_queries.sh --set test --limit 3
-scripts/09_judge_train_queries.sh --set test
+scripts/clues/describe_all_figures.sh
+scripts/clues/describe_all_textual_clues.sh
+scripts/queries/generate_queries.sh
+scripts/queries/judge_train_queries.sh
+scripts/clues/describe_all_figures.sh --set test
+scripts/clues/describe_all_textual_clues.sh --set test
+scripts/queries/generate_queries.sh --set test
+scripts/queries/generate_queries.sh --set test --limit 3
+scripts/queries/judge_train_queries.sh --set test
 ```
 
 The split index stores ordered paper IDs. For standard full-run behavior, edit
@@ -137,7 +151,7 @@ scripts/document_downloads/build_acl_subset.sh
 
 This writes `data/acl_subset/papers.jsonl` plus build metadata. The target
 volumes are explicitly configured in
-`dataset_generation.document_downloads.acl_subset.TARGET_VOLUMES`
+`document_downloads.acl_subset.TARGET_VOLUMES`
 and are not selected by fuzzy venue/title matching.
 
 Download the corresponding PDFs after writing metadata:
@@ -350,7 +364,7 @@ To materialize separate Physics and Engineering PDF folders from the combined
 manifest, run:
 
 ```bash
-uv run python scripts/split_arxiv_pdfs_by_domain.py
+uv run python -m pdf_corpus.split_arxiv_pdfs_by_domain
 ```
 
 This copies valid source PDFs from `data/arxiv_open_reuse/pdfs/` into
@@ -363,8 +377,8 @@ To build one consolidated five-folder PDF dataset, first make sure arXiv has
 already been split into `pdfs_by_domain/`, then run:
 
 ```bash
-uv run python scripts/build_pdf_datasets_folder.py --dry-run
-uv run python scripts/build_pdf_datasets_folder.py
+uv run python -m pdf_corpus.build_pdf_datasets_folder --dry-run
+uv run python -m pdf_corpus.build_pdf_datasets_folder
 ```
 
 This creates `data/pdf_datasets/ACL`, `data/pdf_datasets/Physics`,
@@ -376,7 +390,7 @@ Package the five-folder corpus for Hugging Face Datasets as one shared
 retrieval corpus:
 
 ```bash
-uv run python prepare_hf_dataset.py \
+uv run python -m dataset_packaging.prepare_hf_dataset \
   --input-root data/pdf_datasets \
   --output-dir huggingface_dataset \
   --shard-size-gb 1 \
@@ -408,7 +422,7 @@ members validate. Use `--force-rebuild` to rebuild completed shards.
 Validate an existing prepared folder without uploading:
 
 ```bash
-uv run python prepare_hf_dataset.py \
+uv run python -m dataset_packaging.prepare_hf_dataset \
   --output-dir huggingface_dataset \
   --validate-only
 ```
@@ -416,12 +430,12 @@ uv run python prepare_hf_dataset.py \
 Upload only after validation succeeds:
 
 ```bash
-scripts/10_upload_huggingface_dataset.sh huggingface_dataset
+scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset
 ```
 
 The upload script targets `kasys/open-source-scientific-documents` by default.
 Set `HF_REPO_ID=owner/dataset-name` to use a different dataset repository. Any
-arguments after the dataset directory are forwarded to `prepare_hf_dataset.py`.
+arguments after the dataset directory are forwarded to `dataset_packaging.prepare_hf_dataset`.
 
 Before upload, validation scans the source folders, checks TAR members, and
 recomputes SHA-256 for every source PDF. The command logs each stage, periodic
@@ -432,7 +446,7 @@ If the prepared dataset has already been validated and has not changed, skip
 the local validation pass on upload:
 
 ```bash
-HF_XET_HIGH_PERFORMANCE=1 uv run python prepare_hf_dataset.py \
+HF_XET_HIGH_PERFORMANCE=1 uv run python -m dataset_packaging.prepare_hf_dataset \
   --output-dir huggingface_dataset \
   --upload-only --skip-validation
 ```
@@ -448,7 +462,7 @@ uv run dataset-generation prepare-hf-dataset --help
 Download the complete dataset repository into a specific local directory:
 
 ```bash
-scripts/11_download_huggingface_dataset.sh data/downloaded_hf_dataset
+scripts/packaging/download_huggingface_dataset.sh data/downloaded_hf_dataset
 ```
 
 The downloader uses the same default repository. Override it with
@@ -456,7 +470,7 @@ The downloader uses the same default repository. Override it with
 on `PATH`. Additional arguments are forwarded to `hf download`, for example:
 
 ```bash
-scripts/11_download_huggingface_dataset.sh data/metadata-only \
+scripts/packaging/download_huggingface_dataset.sh data/metadata-only \
   --include "*.parquet" "README.md"
 ```
 
@@ -479,7 +493,7 @@ default, each dataset group contributes 2,000 train PDFs and 100 test PDFs, for
 10,000 train PDFs and 500 test PDFs in total:
 
 ```bash
-uv run python scripts/build_pdf_dataset_split.py \
+uv run python -m pdf_corpus.build_pdf_dataset_split \
   --input-dir data/pdf_datasets \
   --output data/splits/pdf_dataset_split.json
 ```
@@ -512,7 +526,7 @@ uv run dataset-generation probe-mineru-env
 On the DGX, start a persistent router:
 
 ```bash
-scripts/03_start_mineru_router.sh
+scripts/extraction/start_mineru_router.sh
 ```
 
 Use `uv run mineru-router --help` directly for custom router settings.
@@ -520,7 +534,7 @@ Use `uv run mineru-router --help` directly for custom router settings.
 Run extraction against the consolidated large-scale PDF datasets:
 
 ```bash
-scripts/04_run_mineru_full_extraction.sh
+scripts/extraction/run_mineru_full_extraction.sh
 ```
 
 Use `uv run dataset-generation extract-mineru-pdfs --help` directly for custom
@@ -530,20 +544,20 @@ and source dataset names are recorded in each extracted `paper.json`. For a
 small smoke run, pass normal CLI overrides through the script:
 
 ```bash
-scripts/04_run_mineru_full_extraction.sh --split train --limit 20 --max-in-flight 2
+scripts/extraction/run_mineru_full_extraction.sh --split train --limit 20 --max-in-flight 2
 ```
 
 Process only the PDFs listed in both the train and test portions of the
 canonical split index:
 
 ```bash
-scripts/04_run_mineru_full_extraction.sh --split train+test
+scripts/extraction/run_mineru_full_extraction.sh --split train+test
 ```
 
 Restrict that split-index run to one or more domain groups:
 
 ```bash
-scripts/04_run_mineru_full_extraction.sh \
+scripts/extraction/run_mineru_full_extraction.sh \
   --split train+test \
   --domains ACL Biology
 ```
@@ -552,7 +566,7 @@ To process every PDF in selected domain folders, including documents outside
 the train/test split, bypass the split index explicitly:
 
 ```bash
-scripts/04_run_mineru_full_extraction.sh \
+scripts/extraction/run_mineru_full_extraction.sh \
   --domains Engineering Physics \
   --all-domain-pdfs
 ```
@@ -563,7 +577,7 @@ portable launcher. It starts one local MinerU server, waits for the real
 shuts the server down and exits with the caller's status:
 
 ```bash
-scripts/run_mineru_full_extraction_gpu.sh --split train --limit 20 --max-in-flight 2
+scripts/extraction/run_mineru_full_extraction_gpu.sh --split train --limit 20 --max-in-flight 2
 ```
 
 The launcher defaults to port `8002` and writes separate server/caller logs
@@ -571,7 +585,7 @@ under `logs/mineru/local/`. Override launcher settings before normal caller
 arguments:
 
 ```bash
-scripts/run_mineru_full_extraction_gpu.sh \
+scripts/extraction/run_mineru_full_extraction_gpu.sh \
   --port 8012 \
   --startup-timeout 900 \
   -- \
@@ -595,7 +609,7 @@ On a Slurm cluster with A100 nodes, submit one server plus one caller per array
 task:
 
 ```bash
-sbatch --array=0-119%8 scripts/slurm/run_mineru_full_extraction_a100.sbatch
+sbatch --array=0-119%8 scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch
 ```
 
 Each task maps its array ID to an extraction shard with:
@@ -608,7 +622,7 @@ end-index   = start-index + PDFS_PER_TASK
 `PDFS_PER_TASK` defaults to `1`. For 100 PDFs per task, submit:
 
 ```bash
-PDFS_PER_TASK=100 sbatch --array=0-119%8 scripts/slurm/run_mineru_full_extraction_a100.sbatch
+PDFS_PER_TASK=100 sbatch --array=0-119%8 scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch
 ```
 
 The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a 30-minute
@@ -664,7 +678,7 @@ output in MinerU responses.
 Generate Qwen-VL visual descriptions from preprocessed ACL subset papers:
 
 ```bash
-scripts/06_describe_all_figures.sh
+scripts/clues/describe_all_figures.sh
 ```
 
 This reads figure image references from
@@ -686,7 +700,7 @@ Use `--clues-dir` to write to a different clue directory.
 Generate semantic memory cues from preprocessed paper markdown:
 
 ```bash
-scripts/07_describe_all_textual_clues.sh
+scripts/clues/describe_all_textual_clues.sh
 ```
 
 This writes textual clues to `data/clues/<paper_id>/base/textual_clues.jsonl`.
@@ -733,7 +747,7 @@ Each preprocessed paper directory must contain:
 
 ## Synthetic Test Collections
 
-`dataset_generation.synthetic` defines stable interfaces for later retrieval/evaluation dataset generation:
+`queries.synthetic` defines stable interfaces for later retrieval/evaluation dataset generation:
 
 - `TestCollectionExample`
 - `SyntheticCollectionConfig`

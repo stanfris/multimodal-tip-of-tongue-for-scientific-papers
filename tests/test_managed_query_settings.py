@@ -4,22 +4,22 @@ from pathlib import Path
 
 import pytest
 
-from dataset_generation.query_generation import (
+from queries.query_generation import (
     QueryGenerationConfig,
     _eligible_papers,
     _query_id,
     build_parser,
     load_query_generation_config,
 )
-from dataset_generation.textual_clue_descriptions import (
+from clues.textual_clue_descriptions import (
     build_parser as build_textual_parser,
     load_managed_textual_description_args,
 )
-from dataset_generation.vl_figure_descriptions import (
+from clues.vl_figure_descriptions import (
     build_parser as build_visual_parser,
     load_managed_visual_description_args,
 )
-from scripts.judge_queries import build_parser as build_judgement_parser, load_managed_judgement_args
+from queries.judge_queries import build_parser as build_judgement_parser, load_managed_judgement_args
 
 
 def write_settings(tmp_path: Path) -> Path:

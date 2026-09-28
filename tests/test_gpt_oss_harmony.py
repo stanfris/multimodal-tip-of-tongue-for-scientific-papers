@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dataset_generation.textual_clue_descriptions import extract_gpt_oss_final_text, generate_with_transformers
+from clues.textual_clue_descriptions import extract_gpt_oss_final_text, generate_with_transformers
 
 
 class FakeInputIds:

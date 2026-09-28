@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from scripts.build_pdf_datasets_folder import DatasetSource
-from scripts.build_pdf_datasets_folder import materialize_pdf_datasets
+from pdf_corpus.build_pdf_datasets_folder import DatasetSource
+from pdf_corpus.build_pdf_datasets_folder import materialize_pdf_datasets
 
 
 def test_materialize_pdf_datasets_copies_five_folders(tmp_path) -> None:

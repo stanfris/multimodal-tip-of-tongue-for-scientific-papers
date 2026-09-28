@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dataset_generation.validation import validate_index_window
+from common.validation import validate_index_window
 
 
 def test_validate_index_window_accepts_open_ended_range() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from scripts.split_arxiv_pdfs_by_domain import split_pdfs
+from pdf_corpus.split_arxiv_pdfs_by_domain import split_pdfs
 
 
 def write_manifest(path, rows):  # type: ignore[no-untyped-def]

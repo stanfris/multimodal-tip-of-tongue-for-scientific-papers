@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dataset_generation.interpretations import InterpretationRecord
-from dataset_generation.preprocessed import read_clue_rows
-from dataset_generation.textual_clue_descriptions import _append_textual_clue
-from dataset_generation.vl_figure_descriptions import _append_visual_clue
+from clues.interpretations import InterpretationRecord
+from preprocessing.preprocessed import read_clue_rows
+from clues.textual_clue_descriptions import _append_textual_clue
+from clues.vl_figure_descriptions import _append_visual_clue
 
 
 def test_visual_clue_overwrite_replaces_existing_file(tmp_path: Path) -> None:

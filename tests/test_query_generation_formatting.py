@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataset_generation.query_generation import MemoryComponent, format_query_prompt
+from queries.query_generation import MemoryComponent, format_query_prompt
 
 
 def test_format_query_prompt_groups_visual_clues_by_figure_once() -> None:

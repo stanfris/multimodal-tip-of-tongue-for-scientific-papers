@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from dataset_generation.mineru_extraction import build_pdf_inputs
-from dataset_generation.mineru_extraction import build_extract_parser
-from dataset_generation.mineru_extraction import discover_pdfs
-from dataset_generation.mineru_extraction import resolve_split_index
+from extraction.mineru_extraction import build_pdf_inputs
+from extraction.mineru_extraction import build_extract_parser
+from extraction.mineru_extraction import discover_pdfs
+from extraction.mineru_extraction import resolve_split_index
 
 
 def write_pdf(path: Path) -> None:

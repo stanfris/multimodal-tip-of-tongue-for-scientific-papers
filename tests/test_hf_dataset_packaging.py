@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from dataset_generation.hf_dataset_packaging import SourceSpec
-from dataset_generation.hf_dataset_packaging import build_parser
-from dataset_generation.hf_dataset_packaging import prepare_dataset
-from dataset_generation.hf_dataset_packaging import run
-from dataset_generation.hf_dataset_packaging import shard_size_bytes
-from dataset_generation.hf_dataset_packaging import validate_dataset
+from dataset_packaging.hf_dataset_packaging import SourceSpec
+from dataset_packaging.hf_dataset_packaging import build_parser
+from dataset_packaging.hf_dataset_packaging import prepare_dataset
+from dataset_packaging.hf_dataset_packaging import run
+from dataset_packaging.hf_dataset_packaging import shard_size_bytes
+from dataset_packaging.hf_dataset_packaging import validate_dataset
 
 
 def write_pdf(path: Path, body: bytes) -> None:
@@ -21,7 +21,7 @@ def write_pdf(path: Path, body: bytes) -> None:
 
 
 def test_prepare_dataset_writes_webdataset_shards_and_metadata(tmp_path, caplog) -> None:
-    caplog.set_level(logging.INFO, logger="dataset_generation.hf_dataset_packaging")
+    caplog.set_level(logging.INFO, logger="dataset_packaging.hf_dataset_packaging")
     input_root = tmp_path / "pdf_datasets"
     write_pdf(input_root / "ACL" / "2023.acl-long.1.pdf", b"acl")
     write_pdf(input_root / "Physics" / "2609.17126v1.pdf", b"physics")
@@ -144,11 +144,11 @@ def test_upload_only_can_skip_local_validation(tmp_path, monkeypatch) -> None:
     (output_dir / "data").mkdir()
     calls = []
     monkeypatch.setattr(
-        "dataset_generation.hf_dataset_packaging.upload_dataset",
+        "dataset_packaging.hf_dataset_packaging.upload_dataset",
         lambda **kwargs: calls.append(kwargs),
     )
     monkeypatch.setattr(
-        "dataset_generation.hf_dataset_packaging.validate_dataset",
+        "dataset_packaging.hf_dataset_packaging.validate_dataset",
         lambda **kwargs: (_ for _ in ()).throw(AssertionError("validation should be skipped")),
     )
 

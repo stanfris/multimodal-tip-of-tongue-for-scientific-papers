@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataset_generation.model_output import parse_json_object
+from common.model_output import parse_json_object
 
 
 def test_parse_json_object_accepts_surrounding_text() -> None:

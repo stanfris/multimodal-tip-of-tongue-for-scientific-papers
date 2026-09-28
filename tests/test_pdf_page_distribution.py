@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts.pdf_page_distribution import arxiv_subset_from_manifest_row
+from pdf_corpus.pdf_page_distribution import arxiv_subset_from_manifest_row
 
 
 def test_arxiv_subset_prefers_selection_domain_over_primary_category() -> None:

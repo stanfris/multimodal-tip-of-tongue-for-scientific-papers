@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-import dataset_generation.query_generation as query_generation
-from dataset_generation.synthetic import TestCollectionExample as QueryExample
+import queries.query_generation as query_generation
+from queries.synthetic import TestCollectionExample as QueryExample
 from tests.test_managed_query_settings import write_settings
 
 

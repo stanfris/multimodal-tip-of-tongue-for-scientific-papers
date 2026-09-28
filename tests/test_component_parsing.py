@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataset_generation.component_parsing import split_component_text
+from clues.component_parsing import split_component_text
 
 
 def test_split_textual_components_from_jsonish_output() -> None:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dataset_generation.jsonl import append_jsonl_object, read_jsonl_objects
+from common.jsonl import append_jsonl_object, read_jsonl_objects
 
 
 def test_read_jsonl_objects_missing_ok(tmp_path: Path) -> None:

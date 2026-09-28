@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dataset-generation = "dataset_generation.cli:main"
+dataset-generation = "cli:main"
 
 [dependency-groups]
 dev = [
