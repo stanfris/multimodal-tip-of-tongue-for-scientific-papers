@@ -135,6 +135,15 @@ scripts/document_splits/build_document_split.sh \
   --output data/splits/document_split.json
 ```
 
+For the scratch-shared extraction layout, set its root directly:
+
+```bash
+scripts/document_splits/build_document_split.sh --root-dir /scratch-shared/sfris1
+```
+
+This reads `/scratch-shared/sfris1/processed` and writes
+`/scratch-shared/sfris1/data/splits/document_split.json`.
+
 Figure descriptions, textual clues, query generation, and query judgement are managed by
 `configs/settings.yaml`. That file contains the overall dataset pointer,
 dataset paths, split index, stage-specific prompt/model/generation settings,
