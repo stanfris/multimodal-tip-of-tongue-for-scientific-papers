@@ -12,8 +12,19 @@
 
 set -euo pipefail
 
-ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  DEFAULT_ROOT_DIR="$SLURM_SUBMIT_DIR"
+else
+  DEFAULT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+fi
+ROOT_DIR="${ROOT_DIR:-$DEFAULT_ROOT_DIR}"
 cd "$ROOT_DIR"
+
+if [[ ! -f "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh" ]]; then
+  echo "Repository root not found at: $ROOT_DIR" >&2
+  echo "Submit this job from the repository root or set ROOT_DIR explicitly." >&2
+  exit 2
+fi
 
 source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"
 
