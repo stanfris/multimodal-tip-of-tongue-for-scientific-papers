@@ -57,3 +57,17 @@ def test_mineru_environment_includes_flashinfer_build_tool() -> None:
     sync_script = (PROJECT_ROOT / "scripts/environment/sync_mineru_env.sh").read_text(encoding="utf-8")
 
     assert "ninja>=1.11,<2" in sync_script
+
+
+def test_mineru_server_launchers_expose_environment_build_tools() -> None:
+    launchers = (
+        PROJECT_ROOT / "scripts/extraction/start_mineru_router.sh",
+        PROJECT_ROOT / "scripts/extraction/run_mineru_full_extraction_gpu.sh",
+        PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch",
+    )
+
+    for launcher in launchers:
+        script = launcher.read_text(encoding="utf-8")
+        assert 'export VIRTUAL_ENV="$MINERU_VENV_DIR"' in script
+        assert 'export PATH="$VIRTUAL_ENV/bin:$PATH"' in script
+        assert "command -v ninja" in script or 'shutil.which("ninja")' in script

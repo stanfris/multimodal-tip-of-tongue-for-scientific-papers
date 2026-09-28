@@ -557,10 +557,14 @@ scripts/extraction/probe_mineru_env.sh
 On the DGX, start a persistent router:
 
 ```bash
-scripts/extraction/start_mineru_router.sh
+CUDA_VISIBLE_DEVICES=0 scripts/extraction/start_mineru_router.sh \
+  --host 127.0.0.1 \
+  --port 8002
 ```
 
-Use `uv run mineru-router --help` directly for custom router settings.
+The wrapper activates `.venv-mineru` for the router and its vLLM/FlashInfer
+subprocesses. This is required so JIT build tools such as `ninja` remain on
+`PATH`. Pass `--help` to the wrapper for custom router settings.
 
 Run extraction against the consolidated large-scale PDF datasets:
 

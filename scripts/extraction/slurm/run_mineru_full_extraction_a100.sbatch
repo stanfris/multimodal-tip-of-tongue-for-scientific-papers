@@ -52,6 +52,20 @@ if [[ ! -x "$MINERU_VENV/bin/python" ]] || [[ ! -x "$MINERU_VENV/bin/mineru-rout
   exit 2
 fi
 
+if [[ "$MINERU_VENV" = /* ]]; then
+  MINERU_VENV_DIR="$MINERU_VENV"
+else
+  MINERU_VENV_DIR="$ROOT_DIR/$MINERU_VENV"
+fi
+export VIRTUAL_ENV="$MINERU_VENV_DIR"
+export PATH="$VIRTUAL_ENV/bin:$PATH"
+
+if ! command -v ninja >/dev/null 2>&1; then
+  echo "MinerU requires ninja for vLLM/FlashInfer JIT compilation." >&2
+  echo "Repair the environment with scripts/environment/sync_mineru_env.sh before submitting." >&2
+  exit 2
+fi
+
 SLURM_TMP_BASE="${SLURM_TMPDIR:-/tmp/${USER:-mineru}/mineru_${RUN_ID}}"
 mkdir -p "$SLURM_TMP_BASE" logs/mineru/slurm logs/slurm
 export TMPDIR="$SLURM_TMP_BASE/tmp"
