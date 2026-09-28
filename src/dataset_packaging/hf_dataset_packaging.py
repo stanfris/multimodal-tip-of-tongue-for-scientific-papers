@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -891,9 +892,17 @@ Some source records have incomplete bibliographic metadata. Missing license, tit
     )
 
 
+def hf_cli_command(hf_cli: str) -> list[str]:
+    command = shlex.split(hf_cli)
+    if not command:
+        raise ValueError("Hugging Face CLI command cannot be empty")
+    return command
+
+
 def upload_dataset(*, output_dir: Path, repo_id: str, hf_cli: str) -> None:
-    create_cmd = [hf_cli, "repo", "create", repo_id, "--type", "dataset", "--yes"]
-    upload_cmd = [hf_cli, "upload", repo_id, str(output_dir), ".", "--repo-type", "dataset"]
+    hf_cmd = hf_cli_command(hf_cli)
+    create_cmd = [*hf_cmd, "repo", "create", repo_id, "--type", "dataset", "--yes"]
+    upload_cmd = [*hf_cmd, "upload", repo_id, str(output_dir), ".", "--repo-type", "dataset"]
     env = os.environ.copy()
     if env.get("HF_XET_HIGH_PERFORMANCE") == "1":
         LOGGER.info("HF_XET_HIGH_PERFORMANCE=1 enabled for upload")

@@ -20,6 +20,7 @@ EXPECTED_ENTRYPOINTS = {
     "scripts/preprocessing/parsed_dataset_stats.sh": "dataset-generation parsed-dataset-stats",
     "scripts/reporting/generated_artifact_stats.sh": "dataset-generation stats",
     "scripts/packaging/prepare_huggingface_dataset.sh": "dataset-generation prepare-hf-dataset",
+    "scripts/packaging/restore_pdf_datasets_from_huggingface.sh": "python -m dataset_packaging.restore_hf_dataset",
 }
 
 

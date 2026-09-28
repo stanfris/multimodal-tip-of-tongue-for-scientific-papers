@@ -16,7 +16,7 @@ shift
 HF_REPO_ID="${HF_REPO_ID:-kasys/open-source-scientific-documents}"
 HF_CLI="${HF_CLI:-uv run hf}"
 
-if ! command -v "$HF_CLI" >/dev/null 2>&1; then
+if ! command -v "${HF_CLI_CMD[0]}" >/dev/null 2>&1; then
   echo "Hugging Face CLI not found: $HF_CLI" >&2
   echo "Install it or set HF_CLI to the path of the hf executable." >&2
   exit 127
@@ -24,7 +24,7 @@ fi
 
 mkdir -p "$DESTINATION_DIR"
 
-"$HF_CLI" download "$HF_REPO_ID" \
+"${HF_CLI_CMD[@]}" download "$HF_REPO_ID" \
   --repo-type dataset \
   --local-dir "$DESTINATION_DIR" \
   "$@"
