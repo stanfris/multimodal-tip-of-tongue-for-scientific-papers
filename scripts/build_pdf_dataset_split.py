@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Write a random per-dataset train/test split for PDFs under data/pdf_datasets."""
+"""Write a random per-dataset train/test PDF split under data/pdf_datasets.
+
+The default five-group corpus contributes 2,000 training documents and 100
+test documents from each of ACL, Biology, Engineering, Medicine, and Physics.
+These are source-document counts; downstream query generation may produce one
+or more queries from each selected document.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +20,7 @@ from typing import Any
 
 DEFAULT_DATASETS = ("ACL", "Biology", "Engineering", "Medicine", "Physics")
 DEFAULT_SEED = 42
-DEFAULT_TRAIN_SIZE_PER_DATASET = 1000
+DEFAULT_TRAIN_SIZE_PER_DATASET = 2000
 DEFAULT_TEST_SIZE_PER_DATASET = 100
 
 
@@ -27,8 +33,18 @@ def parse_args() -> argparse.Namespace:
         default=Path("data/splits/pdf_dataset_split.json"),
         help="Output JSON split index.",
     )
-    parser.add_argument("--train-size-per-dataset", type=int, default=DEFAULT_TRAIN_SIZE_PER_DATASET)
-    parser.add_argument("--test-size-per-dataset", type=int, default=DEFAULT_TEST_SIZE_PER_DATASET)
+    parser.add_argument(
+        "--train-size-per-dataset",
+        type=int,
+        default=DEFAULT_TRAIN_SIZE_PER_DATASET,
+        help="Training PDFs to sample from each dataset folder (default: 2000).",
+    )
+    parser.add_argument(
+        "--test-size-per-dataset",
+        type=int,
+        default=DEFAULT_TEST_SIZE_PER_DATASET,
+        help="Test PDFs to sample from each dataset folder (default: 100).",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
         "--datasets",

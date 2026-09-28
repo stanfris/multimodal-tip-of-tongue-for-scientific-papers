@@ -58,7 +58,7 @@ CALLER_CMD=(
   uv run --no-sync dataset-generation extract-mineru-pdfs
   --input-dir "${INPUT_DIR:-data/pdf_datasets}"
   --split-index "${SPLIT_INDEX:-data/splits/pdf_dataset_split.json}"
-  --split "${SPLIT:-all}"
+  --split "${SPLIT:-train+test}"
   --output-dir "${OUTPUT_DIR:-data/preprocessed}"
   --start-index "$START_INDEX"
   --end-index "$END_INDEX"

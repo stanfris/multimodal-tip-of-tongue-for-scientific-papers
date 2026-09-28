@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from scripts.build_pdf_dataset_split import DEFAULT_DATASETS
+from scripts.build_pdf_dataset_split import DEFAULT_TEST_SIZE_PER_DATASET
+from scripts.build_pdf_dataset_split import DEFAULT_TRAIN_SIZE_PER_DATASET
 from scripts.build_pdf_dataset_split import build_pdf_dataset_split
 
 
@@ -11,6 +13,13 @@ def make_pdf_dataset(root, dataset: str, count: int) -> None:
     dataset_dir.mkdir(parents=True)
     for index in range(count):
         (dataset_dir / f"{dataset.lower()}_{index:03d}.pdf").write_bytes(b"%PDF\n")
+
+
+def test_default_split_sizes_are_per_dataset_group() -> None:
+    assert DEFAULT_TRAIN_SIZE_PER_DATASET == 2000
+    assert DEFAULT_TEST_SIZE_PER_DATASET == 100
+    assert len(DEFAULT_DATASETS) * DEFAULT_TRAIN_SIZE_PER_DATASET == 10_000
+    assert len(DEFAULT_DATASETS) * DEFAULT_TEST_SIZE_PER_DATASET == 500
 
 
 def test_build_pdf_dataset_split_samples_requested_count_per_dataset(tmp_path) -> None:

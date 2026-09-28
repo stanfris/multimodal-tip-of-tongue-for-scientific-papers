@@ -83,7 +83,7 @@ CALLER_CMD=(
   uv run --no-sync dataset-generation extract-mineru-pdfs
   --input-dir data/pdf_datasets
   --split-index data/splits/pdf_dataset_split.json
-  --split all
+  --split train+test
   --output-dir data/preprocessed
   --api-url "$API_URL"
   "${CALLER_ARGS[@]}"

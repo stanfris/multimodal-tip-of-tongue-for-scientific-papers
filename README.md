@@ -416,12 +416,12 @@ uv run python prepare_hf_dataset.py \
 Upload only after validation succeeds:
 
 ```bash
-HF_XET_HIGH_PERFORMANCE=1 \
-uv run python prepare_hf_dataset.py \
-  --output-dir huggingface_dataset \
-  --repo-id kasys/open-source-scientific-documents \
-  --upload-only
+scripts/10_upload_huggingface_dataset.sh huggingface_dataset
 ```
+
+The upload script targets `kasys/open-source-scientific-documents` by default.
+Set `HF_REPO_ID=owner/dataset-name` to use a different dataset repository. Any
+arguments after the dataset directory are forwarded to `prepare_hf_dataset.py`.
 
 Before upload, validation scans the source folders, checks TAR members, and
 recomputes SHA-256 for every source PDF. The command logs each stage, periodic
@@ -445,6 +445,21 @@ Git commits. The same command is also available through:
 uv run dataset-generation prepare-hf-dataset --help
 ```
 
+Download the complete dataset repository into a specific local directory:
+
+```bash
+scripts/11_download_huggingface_dataset.sh data/downloaded_hf_dataset
+```
+
+The downloader uses the same default repository. Override it with
+`HF_REPO_ID=owner/dataset-name`, or set `HF_CLI` when the `hf` executable is not
+on `PATH`. Additional arguments are forwarded to `hf download`, for example:
+
+```bash
+scripts/11_download_huggingface_dataset.sh data/metadata-only \
+  --include "*.parquet" "README.md"
+```
+
 To inspect a single packaged PDF by `document_id`:
 
 ```python
@@ -459,14 +474,20 @@ with tarfile.open("huggingface_dataset/" + row.shard, "r") as tar:
     pdf_bytes = tar.extractfile(row.member_path).read()
 ```
 
-Create a random fixed-seed train/test split from those five PDF folders with
-1,000 train PDFs and 100 test PDFs per dataset:
+Create a random fixed-seed train/test split from those five PDF folders. By
+default, each dataset group contributes 2,000 train PDFs and 100 test PDFs, for
+10,000 train PDFs and 500 test PDFs in total:
 
 ```bash
 uv run python scripts/build_pdf_dataset_split.py \
   --input-dir data/pdf_datasets \
   --output data/splits/pdf_dataset_split.json
 ```
+
+The split contains source documents, not a guaranteed number of generated
+queries: downstream generation can emit one or more queries per selected PDF.
+Use `--train-size-per-dataset` and `--test-size-per-dataset` to override these
+document counts.
 
 The selector/downloader uses `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
@@ -510,6 +531,30 @@ small smoke run, pass normal CLI overrides through the script:
 
 ```bash
 scripts/04_run_mineru_full_extraction.sh --split train --limit 20 --max-in-flight 2
+```
+
+Process only the PDFs listed in both the train and test portions of the
+canonical split index:
+
+```bash
+scripts/04_run_mineru_full_extraction.sh --split train+test
+```
+
+Restrict that split-index run to one or more domain groups:
+
+```bash
+scripts/04_run_mineru_full_extraction.sh \
+  --split train+test \
+  --domains ACL Biology
+```
+
+To process every PDF in selected domain folders, including documents outside
+the train/test split, bypass the split index explicitly:
+
+```bash
+scripts/04_run_mineru_full_extraction.sh \
+  --domains Engineering Physics \
+  --all-domain-pdfs
 ```
 
 To run the router and extraction caller together on one GPU machine, use the

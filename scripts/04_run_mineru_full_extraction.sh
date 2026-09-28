@@ -7,6 +7,6 @@ cd "$ROOT_DIR"
 uv run dataset-generation extract-mineru-pdfs \
   --input-dir data/pdf_datasets \
   --split-index data/splits/pdf_dataset_split.json \
-  --split all \
+  --split train+test \
   --output-dir data/preprocessed \
   "$@"

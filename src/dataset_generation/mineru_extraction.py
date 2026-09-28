@@ -1,4 +1,15 @@
-"""Resumable MinerU API extraction for large PDF corpora."""
+"""Resumable MinerU API extraction for the consolidated PDF corpus.
+
+The production corpus lives under ``data/pdf_datasets`` as one folder per
+source dataset:
+
+    data/pdf_datasets/{ACL,Biology,Engineering,Medicine,Physics}/**/*.pdf
+
+Split indexes store PDF paths relative to that root, for example
+``ACL/2024.acl-long.1.pdf`` or ``Biology/PMC123456.pdf``. MinerU outputs use the
+same relative path to derive stable paper IDs, source dataset labels, and split
+metadata, so duplicate filenames from different datasets do not collide.
+"""
 
 from __future__ import annotations
 
@@ -12,10 +23,10 @@ import shutil
 import subprocess
 import time
 import zipfile
-from io import BytesIO
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -25,8 +36,10 @@ from PIL import Image
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8002"
-DEFAULT_INPUT_DIR = Path("data") / "acl_subset" / "pdfs"
+DEFAULT_PDF_DATASET_NAMES = ("ACL", "Biology", "Engineering", "Medicine", "Physics")
+DEFAULT_INPUT_DIR = Path("data") / "pdf_datasets"
 DEFAULT_OUTPUT_DIR = Path("data") / "processed" / "mineru_pdf_extraction"
+DEFAULT_SPLIT_INDEX = Path("data") / "splits" / "pdf_dataset_split.json"
 FIGURE_TYPES = {"image", "chart"}
 TERMINAL_SUCCESS = {"completed", "complete", "success", "succeeded", "done"}
 TERMINAL_FAILURE = {"failed", "failure", "error", "cancelled", "canceled"}
@@ -110,13 +123,33 @@ def build_extract_parser() -> argparse.ArgumentParser:
         "--split-index",
         type=Path,
         default=None,
-        help="Optional JSON split index with train/test PDF paths relative to --input-dir.",
+        help=(
+            "Optional JSON split index with train/test PDF paths relative to --input-dir. "
+            f"When omitted, {DEFAULT_SPLIT_INDEX} is used automatically for the standard "
+            f"{DEFAULT_INPUT_DIR} corpus if it exists, or whenever --split is train, test, or train+test."
+        ),
     )
     parser.add_argument(
         "--split",
-        choices=["train", "test", "all"],
+        choices=["train", "test", "train+test", "all"],
         default="all",
-        help="Split to process when --split-index is provided.",
+        help=(
+            "Split-index membership to process. 'train+test' is the explicit union; "
+            "'all' is retained as a compatibility alias."
+        ),
+    )
+    parser.add_argument(
+        "--domains",
+        nargs="+",
+        choices=DEFAULT_PDF_DATASET_NAMES,
+        default=None,
+        metavar="DOMAIN",
+        help="Only process the selected top-level dataset groups (for example ACL Biology).",
+    )
+    parser.add_argument(
+        "--all-domain-pdfs",
+        action="store_true",
+        help="Ignore the split index and process every PDF in the selected --domains folders.",
     )
     return parser
 
@@ -189,8 +222,19 @@ def options_from_args(args: argparse.Namespace) -> MinerUOptions:
 
 
 def run_extract(args: argparse.Namespace) -> Path:
+    split_index = resolve_split_index(
+        args.input_dir,
+        args.split_index,
+        args.split,
+        all_domain_pdfs=args.all_domain_pdfs,
+    )
     pdfs = select_pdfs(
-        discover_pdfs(args.input_dir, split_index=args.split_index, split=args.split),
+        discover_pdfs(
+            args.input_dir,
+            split_index=split_index,
+            split=args.split,
+            domains=args.domains,
+        ),
         start_index=args.start_index,
         end_index=args.end_index,
         limit=args.limit,
@@ -223,8 +267,11 @@ def run_extract(args: argparse.Namespace) -> Path:
             "start_index": args.start_index,
             "end_index": args.end_index,
             "limit": args.limit,
-            "split_index": str(args.split_index) if args.split_index else None,
-            "split": args.split if args.split_index else None,
+            "expected_pdf_dataset_names": list(DEFAULT_PDF_DATASET_NAMES),
+            "domains": args.domains or list(DEFAULT_PDF_DATASET_NAMES),
+            "all_domain_pdfs": args.all_domain_pdfs,
+            "split_index": str(split_index) if split_index else None,
+            "split": args.split if split_index else None,
         },
     )
     stats = asyncio.run(extract_many(pdfs, args.output_dir, options_from_args(args)))
@@ -296,6 +343,37 @@ def recommend_benchmark_result(results: list[dict[str, Any]]) -> dict[str, Any] 
         "pages_per_second": best.get("pages_per_second"),
         "note": "Use this as the starting production setting, then confirm on a larger sample.",
     }
+
+
+def resolve_split_index(
+    input_dir: Path,
+    split_index: Path | None,
+    split: str,
+    *,
+    all_domain_pdfs: bool = False,
+) -> Path | None:
+    """Return the effective split index for the standard five-folder corpus.
+
+    Direct CLI users often run ``dataset-generation extract-mineru-pdfs`` without
+    the wrapper script. For the standard ``data/pdf_datasets`` layout, prefer the
+    canonical train/test index when it is available, and require it when the user
+    asks for a specific split. ``--all-domain-pdfs`` deliberately bypasses the
+    index so complete top-level dataset folders can be processed independently.
+    """
+
+    if all_domain_pdfs:
+        return None
+    if split_index is not None:
+        return split_index
+    if split != "all":
+        return DEFAULT_SPLIT_INDEX
+    try:
+        is_standard_corpus = input_dir.resolve() == DEFAULT_INPUT_DIR.resolve()
+    except OSError:
+        is_standard_corpus = input_dir == DEFAULT_INPUT_DIR
+    if is_standard_corpus and DEFAULT_SPLIT_INDEX.is_file():
+        return DEFAULT_SPLIT_INDEX
+    return None
 
 
 def probe_environment() -> dict[str, Any]:
@@ -697,20 +775,44 @@ def estimate_page_count(data: Any) -> int | None:
     return max(pages) + 1 if pages else None
 
 
-def discover_pdfs(input_dir: Path, *, split_index: Path | None = None, split: str = "all") -> list[PDFInput]:
+def discover_pdfs(
+    input_dir: Path,
+    *,
+    split_index: Path | None = None,
+    split: str = "all",
+    domains: Iterable[str] | None = None,
+) -> list[PDFInput]:
+    """Discover PDFs under a corpus root or from a train/test split index.
+
+    For ``data/pdf_datasets``, the first relative path component is the source
+    dataset name (for example ``ACL`` or ``Biology``). That label is propagated
+    into ``paper.json`` as ``source_paper_dataset``.
+    """
+
     splits_by_path: dict[Path, str] | None = None
     if split_index is not None:
-        paths, splits_by_path = discover_split_pdfs(input_dir, split_index, split)
+        paths, splits_by_path = discover_split_pdfs(input_dir, split_index, split, domains=domains)
     elif input_dir.is_file() and input_dir.suffix.lower() == ".pdf":
         paths = [input_dir]
     else:
         paths = sorted(path for path in input_dir.rglob("*.pdf") if path.is_file())
-    return build_pdf_inputs(paths, input_dir, splits_by_path=splits_by_path)
+    pdfs = build_pdf_inputs(paths, input_dir, splits_by_path=splits_by_path)
+    if domains is None:
+        return pdfs
+    selected_domains = set(domains)
+    return [pdf for pdf in pdfs if pdf.source_dataset in selected_domains]
 
 
-def discover_split_pdfs(input_dir: Path, split_index: Path, split: str) -> tuple[list[Path], dict[Path, str]]:
+def discover_split_pdfs(
+    input_dir: Path,
+    split_index: Path,
+    split: str,
+    *,
+    domains: Iterable[str] | None = None,
+) -> tuple[list[Path], dict[Path, str]]:
     index = read_json(split_index)
-    split_names = ["train", "test"] if split == "all" else [split]
+    split_names = ["train", "test"] if split in {"all", "train+test"} else [split]
+    selected_domains = set(domains) if domains is not None else None
     paths: list[Path] = []
     splits_by_path: dict[Path, str] = {}
     for split_name in split_names:
@@ -720,6 +822,11 @@ def discover_split_pdfs(input_dir: Path, split_index: Path, split: str) -> tuple
         for row in rows:
             if not isinstance(row, str):
                 raise ValueError(f"Split index {split_index} has a non-string path in {split_name!r}: {row!r}")
+            relative_path = Path(row)
+            if selected_domains is not None and (
+                not relative_path.parts or relative_path.parts[0] not in selected_domains
+            ):
+                continue
             path = input_dir / row
             paths.append(path)
             splits_by_path[path] = split_name
