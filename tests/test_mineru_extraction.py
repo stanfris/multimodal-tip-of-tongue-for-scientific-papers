@@ -6,6 +6,7 @@ from pathlib import Path
 from extraction.mineru_extraction import build_pdf_inputs
 from extraction.mineru_extraction import build_extract_parser
 from extraction.mineru_extraction import discover_pdfs
+from extraction.mineru_extraction import paper_output_dir
 from extraction.mineru_extraction import resolve_extraction_output_dir
 from extraction.mineru_extraction import resolve_split_index
 
@@ -23,15 +24,21 @@ def test_extract_parser_accepts_explicit_split_union_and_domains() -> None:
     assert args.all_domain_pdfs is False
 
 
-def test_single_domain_extraction_uses_named_output_folder() -> None:
-    assert resolve_extraction_output_dir(Path("data/processed"), ["Engineering"]) == Path(
-        "data/processed/Engineering"
-    )
+def test_single_domain_extraction_keeps_shared_output_root() -> None:
+    assert resolve_extraction_output_dir(Path("data/processed"), ["Engineering"]) == Path("data/processed")
 
 
-def test_named_domain_output_folder_is_not_duplicated() -> None:
-    output_dir = Path("data/processed/Engineering")
-    assert resolve_extraction_output_dir(output_dir, ["Engineering"]) == output_dir
+def test_paper_output_dir_always_includes_source_subset(tmp_path: Path) -> None:
+    input_dir = tmp_path / "pdf_datasets"
+    write_pdf(input_dir / "ACL" / "paper.pdf")
+    write_pdf(input_dir / "Engineering" / "paper.pdf")
+
+    pdfs = discover_pdfs(input_dir)
+
+    assert [paper_output_dir(tmp_path / "processed", pdf) for pdf in pdfs] == [
+        tmp_path / "processed/papers/ACL/ACL_paper",
+        tmp_path / "processed/papers/Engineering/Engineering_paper",
+    ]
 
 
 def test_discover_pdfs_uses_relative_path_ids_for_multi_dataset_roots(tmp_path: Path) -> None:
@@ -44,6 +51,16 @@ def test_discover_pdfs_uses_relative_path_ids_for_multi_dataset_roots(tmp_path: 
     assert [pdf.paper_id for pdf in pdfs] == ["ACL_paper", "Physics_paper"]
     assert [pdf.source_dataset for pdf in pdfs] == ["ACL", "Physics"]
     assert [pdf.relative_path.as_posix() for pdf in pdfs] == ["ACL/paper.pdf", "Physics/paper.pdf"]
+
+
+def test_direct_subset_input_still_uses_subset_output_folder(tmp_path: Path) -> None:
+    input_dir = tmp_path / "pdf_datasets" / "ACL"
+    write_pdf(input_dir / "paper.pdf")
+
+    pdf = discover_pdfs(input_dir)[0]
+
+    assert pdf.source_dataset == "ACL"
+    assert paper_output_dir(tmp_path / "processed", pdf) == tmp_path / "processed/papers/ACL/paper"
 
 
 def test_discover_pdfs_can_follow_train_test_split_index(tmp_path: Path) -> None:

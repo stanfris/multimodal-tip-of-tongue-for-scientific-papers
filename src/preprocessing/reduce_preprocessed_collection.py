@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from preprocessing.preprocessed import iter_preprocessed_paper_dirs
+
 
 EQUATION_TYPES = {"equation", "equation_interline", "equation_inline"}
 IMAGE_LIKE_TYPES = {"image", "chart", "table"}
@@ -31,7 +33,7 @@ def main() -> None:
     skipped = 0
     failures: list[dict[str, str]] = []
 
-    paper_dirs = sorted(path for path in root.iterdir() if path.is_dir())
+    paper_dirs = iter_preprocessed_paper_dirs(root)
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
         futures = [executor.submit(reduce_paper_dir, paper_dir, args.dry_run) for paper_dir in paper_dirs]
         for index, future in enumerate(as_completed(futures), start=1):
