@@ -9,6 +9,7 @@ import pandas as pd
 
 from dataset_packaging.hf_dataset_packaging import SourceSpec
 from dataset_packaging.hf_dataset_packaging import build_parser
+from dataset_packaging.hf_dataset_packaging import hf_cli_command
 from dataset_packaging.hf_dataset_packaging import prepare_dataset
 from dataset_packaging.hf_dataset_packaging import run
 from dataset_packaging.hf_dataset_packaging import shard_size_bytes
@@ -158,3 +159,7 @@ def test_upload_only_can_skip_local_validation(tmp_path, monkeypatch) -> None:
     assert result["validation_skipped"] is True
     assert len(calls) == 1
     assert calls[0]["output_dir"] == output_dir
+
+
+def test_hf_cli_command_accepts_uv_run_hf() -> None:
+    assert hf_cli_command("uv run hf") == ["uv", "run", "hf"]
