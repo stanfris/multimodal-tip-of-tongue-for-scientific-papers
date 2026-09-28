@@ -22,4 +22,5 @@ uv pip install \
   --python "$MINERU_VENV/bin/python" \
   'mineru[all]==3.4.0' \
   'transformers==4.57.3' \
+  'ninja>=1.11,<2' \
   "$@"

@@ -51,3 +51,9 @@ def test_main_and_mineru_environment_switchers_exist() -> None:
     for environment in ("main", "mineru"):
         assert f"{environment})" in activate
         assert f"{environment})" in runner
+
+
+def test_mineru_environment_includes_flashinfer_build_tool() -> None:
+    sync_script = (PROJECT_ROOT / "scripts/environment/sync_mineru_env.sh").read_text(encoding="utf-8")
+
+    assert "ninja>=1.11,<2" in sync_script

@@ -82,8 +82,18 @@ if [[ ! -x "$MINERU_VENV/bin/python" ]]; then
   exit 2
 fi
 
+if [[ "$MINERU_VENV" = /* ]]; then
+  MINERU_VENV_DIR="$MINERU_VENV"
+else
+  MINERU_VENV_DIR="$ROOT_DIR/$MINERU_VENV"
+fi
+export VIRTUAL_ENV="$MINERU_VENV_DIR"
+export PATH="$VIRTUAL_ENV/bin:$PATH"
+
 if ! "$MINERU_VENV/bin/python" - <<'PY'
+import shutil
 from importlib.metadata import PackageNotFoundError, version
+
 from packaging.version import Version
 
 try:
@@ -103,6 +113,8 @@ if not hasattr(config, "reading_order_config"):
     raise SystemExit(
         "Incompatible MinerU runtime: PPDocLayoutV2Config lacks reading_order_config"
     )
+if shutil.which("ninja") is None:
+    raise SystemExit("Missing ninja executable required by vLLM/FlashInfer JIT compilation")
 
 print(f"MinerU runtime OK: mineru={mineru_version} transformers={transformers_version}")
 PY

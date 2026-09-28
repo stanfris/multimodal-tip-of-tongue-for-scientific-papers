@@ -59,6 +59,8 @@ scripts/environment/sync_mineru_env.sh
 `.venv` is the main project environment. `.venv-mineru` is a disposable,
 isolated MinerU 3.4.0 GPU environment pinned to Transformers 4.57.3. Re-running
 its sync script clears and rebuilds it, so incompatible packages cannot linger.
+The MinerU environment also includes Ninja for vLLM/FlashInfer CUDA extension
+compilation.
 Standard wrappers select the correct environment
 automatically. To switch an interactive shell explicitly:
 
