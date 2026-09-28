@@ -496,9 +496,27 @@ Download the complete dataset repository into a specific local directory:
 scripts/packaging/download_huggingface_dataset.sh data/downloaded_hf_dataset
 ```
 
+Restore the downloaded shards to the original `pdf_datasets` layout. The target
+directory will contain source folders such as `ACL`, `Physics`, and `Medicine`:
+
+```bash
+scripts/packaging/restore_pdf_datasets_from_huggingface.sh \
+  /scratch-shared/sfris1 \
+  data/pdf_datasets
+```
+
+The restore command checks every PDF's recorded size and SHA-256 checksum, and
+will not replace existing PDFs unless `--overwrite` is supplied.
+
 The downloader uses the same default repository. Override it with
 `HF_REPO_ID=owner/dataset-name`, or set `HF_CLI` when the `hf` executable is not
-on `PATH`. Additional arguments are forwarded to `hf download`, for example:
+on `PATH`. For the project virtual environment, run:
+
+```bash
+HF_CLI="$PWD/.venv/bin/hf" scripts/packaging/download_huggingface_dataset.sh /scratch-shared/sfris1
+```
+
+Additional arguments are forwarded to `hf download`, for example:
 
 ```bash
 scripts/packaging/download_huggingface_dataset.sh data/metadata-only \

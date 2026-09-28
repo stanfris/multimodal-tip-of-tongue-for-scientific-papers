@@ -6,6 +6,7 @@ import tarfile
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from dataset_packaging.hf_dataset_packaging import SourceSpec
 from dataset_packaging.hf_dataset_packaging import build_parser
@@ -14,6 +15,7 @@ from dataset_packaging.hf_dataset_packaging import prepare_dataset
 from dataset_packaging.hf_dataset_packaging import run
 from dataset_packaging.hf_dataset_packaging import shard_size_bytes
 from dataset_packaging.hf_dataset_packaging import validate_dataset
+from dataset_packaging.restore_hf_dataset import restore_dataset
 
 
 def write_pdf(path: Path, body: bytes) -> None:
@@ -106,6 +108,43 @@ def test_prepare_dataset_records_duplicates_and_can_extract_by_document_id(tmp_p
     located = metadata.loc[metadata["document_id"] == document_id].iloc[0]
     with tarfile.open(output_dir / located["shard"], "r") as tar:
         assert tar.extractfile(located["member_path"]).read().startswith(b"%PDF")
+
+
+def test_restore_dataset_recreates_source_folders_and_nested_paths(tmp_path) -> None:
+    input_root = tmp_path / "pdf_datasets"
+    acl_pdf = input_root / "ACL" / "2023" / "paper.pdf"
+    physics_pdf = input_root / "Physics" / "2609.17126v1.pdf"
+    write_pdf(acl_pdf, b"acl")
+    write_pdf(physics_pdf, b"physics")
+    packaged_dir = tmp_path / "huggingface_dataset"
+    prepare_dataset(
+        sources=[SourceSpec("ACL", input_root / "ACL"), SourceSpec("Physics", input_root / "Physics")],
+        output_dir=packaged_dir,
+        shard_size_bytes=shard_size_bytes(0.001),
+    )
+
+    restored_root = tmp_path / "restored_pdf_datasets"
+    result = restore_dataset(dataset_dir=packaged_dir, target_dir=restored_root)
+
+    assert result["restored_pdf_count"] == 2
+    assert (restored_root / "ACL" / "2023" / "paper.pdf").read_bytes() == acl_pdf.read_bytes()
+    assert (restored_root / "Physics" / "2609.17126v1.pdf").read_bytes() == physics_pdf.read_bytes()
+
+
+def test_restore_dataset_refuses_to_overwrite_existing_pdfs(tmp_path) -> None:
+    input_root = tmp_path / "pdf_datasets"
+    write_pdf(input_root / "ACL" / "paper.pdf", b"source")
+    packaged_dir = tmp_path / "huggingface_dataset"
+    prepare_dataset(
+        sources=[SourceSpec("ACL", input_root / "ACL")],
+        output_dir=packaged_dir,
+        shard_size_bytes=shard_size_bytes(0.001),
+    )
+    restored_root = tmp_path / "restored_pdf_datasets"
+    write_pdf(restored_root / "ACL" / "paper.pdf", b"existing")
+
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        restore_dataset(dataset_dir=packaged_dir, target_dir=restored_root)
 
 
 def test_prepare_dataset_reuses_completed_shards(tmp_path) -> None:
