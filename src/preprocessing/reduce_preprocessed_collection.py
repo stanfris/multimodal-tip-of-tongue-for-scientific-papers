@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
-"""Trim preprocessed MinerU paper outputs and summarize visual/equation blocks."""
+"""Analyze preprocessed MinerU outputs without truncating document content."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 
-REFERENCES_HEADING_RE = re.compile(r"^##\s+(?:\d+(?:\.\d+)*\s+)?references\b", re.IGNORECASE)
-LEVEL_TWO_HEADING_RE = re.compile(r"^##\s+")
 EQUATION_TYPES = {"equation", "equation_interline", "equation_inline"}
 IMAGE_LIKE_TYPES = {"image", "chart", "table"}
 
@@ -36,7 +33,7 @@ def main() -> None:
 
     paper_dirs = sorted(path for path in root.iterdir() if path.is_dir())
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        futures = [executor.submit(reduce_paper_dir, paper_dir, args.max_pages, args.dry_run) for paper_dir in paper_dirs]
+        futures = [executor.submit(reduce_paper_dir, paper_dir, args.dry_run) for paper_dir in paper_dirs]
         for index, future in enumerate(as_completed(futures), start=1):
             try:
                 paper_summary = future.result()
@@ -73,7 +70,6 @@ def main() -> None:
     report = {
         "preprocessed_dir": str(root),
         "dry_run": args.dry_run,
-        "max_pages": args.max_pages,
         "paper_count": processed,
         "skipped_count": skipped,
         "failure_count": len(failures),
@@ -98,7 +94,7 @@ def main() -> None:
         raise SystemExit(1)
 
 
-def reduce_paper_dir(paper_dir: Path, max_pages: int, dry_run: bool) -> dict[str, Any]:
+def reduce_paper_dir(paper_dir: Path, dry_run: bool) -> dict[str, Any]:
     try:
         paper_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
@@ -118,40 +114,26 @@ def reduce_paper_dir(paper_dir: Path, max_pages: int, dry_run: bool) -> dict[str
 
             content = read_json(content_path)
             if is_v2_content_list(content):
-                trimmed, summary, found_equations = trim_v2_content_list(content, max_pages)
+                summary, found_equations = summarize_v2_content_list(content)
             else:
-                trimmed, summary, found_equations = trim_v1_content_list(content, max_pages)
-
-            if not dry_run:
-                write_json(content_path, trimmed)
+                summary, found_equations = summarize_v1_content_list(content)
 
             content_result = {"name": name, "path": str(relpath), **summary}
             content_results.append({"summary": content_result, "equations": found_equations})
 
         markdown = markdown_path.read_text(encoding="utf-8", errors="replace")
-        trimmed_markdown, markdown_summary = trim_markdown_after_references(markdown)
-        if not dry_run and trimmed_markdown != markdown:
-            markdown_path.write_text(trimmed_markdown, encoding="utf-8")
-
-        if figures_path.exists():
-            figures = read_json(figures_path)
-            trimmed_figures = trim_page_indexed_records(figures, max_pages)
-            if not dry_run and trimmed_figures != figures:
-                write_json(figures_path, trimmed_figures)
+        markdown_summary = summarize_markdown(markdown)
+        figures = read_json(figures_path) if figures_path.exists() else []
 
         if not dry_run:
-            paper["num_pages_original"] = paper.get("num_pages_original", paper.get("num_pages"))
-            paper["num_pages"] = min(max_pages, int(paper.get("num_pages") or max_pages))
             paper["markdown_sha256"] = sha256_text(
                 markdown_path.read_text(encoding="utf-8", errors="replace")
             )
-            if isinstance(paper.get("figures"), list):
-                paper["figures"] = trim_page_indexed_records(paper["figures"], max_pages)
-            paper["preprocessed_reduction"] = {
-                "max_pages": max_pages,
-                "markdown_trim_rule": "keep References; remove the first level-2 heading after References and everything after it",
+            paper.pop("preprocessed_reduction", None)
+            paper["preprocessed_analysis"] = {
+                "content_policy": "full_document",
                 "equations_relpath": "equations.json",
-                "report_relpath": "../preprocessed_reduction_report.json",
+                "report_relpath": "../preprocessed_analysis_report.json",
             }
             write_json(paper_path, paper)
             write_json(paper_dir / "equations.json", primary_equations(content_results))
@@ -167,7 +149,8 @@ def reduce_paper_dir(paper_dir: Path, max_pages: int, dry_run: bool) -> dict[str
             "paper_id": paper_id,
             "paper_dir": str(paper_dir),
             "original_num_pages": paper.get("num_pages_original", paper.get("num_pages")),
-            "current_num_pages": min(max_pages, int(paper.get("num_pages") or max_pages)),
+            "current_num_pages": paper.get("num_pages"),
+            "figure_count": len(figures) if isinstance(figures, list) else None,
             "markdown": markdown_summary,
             "block_type_counts": dict(sorted(paper_block_types.items())),
             "image_like_type_counts": dict(sorted(paper_image_types.items())),
@@ -189,15 +172,9 @@ def parse_args() -> argparse.Namespace:
         help="Root directory containing one subdirectory per paper.",
     )
     parser.add_argument(
-        "--max-pages",
-        type=int,
-        default=10,
-        help="Keep pages with zero-based page indexes below this value.",
-    )
-    parser.add_argument(
         "--report",
         type=Path,
-        default=Path("data/preprocessed_reduction_report.json"),
+        default=Path("data/preprocessed_analysis_report.json"),
         help="Report JSON path. The report is printed even when this is set.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report planned changes without writing files.")
@@ -227,24 +204,19 @@ def is_v2_content_list(content: Any) -> bool:
     )
 
 
-def trim_v1_content_list(
-    blocks: list[dict[str, Any]], max_pages: int
-) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-    before = len(blocks)
-    trimmed = [block for block in blocks if page_idx(block) is None or page_idx(block) < max_pages]
-    summary, equations = summarize_blocks(trimmed, source_format="v1")
-    summary.update({"format": "v1", "blocks_before": before, "blocks_after": len(trimmed)})
-    return trimmed, summary, equations
+def summarize_v1_content_list(
+    blocks: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    summary, equations = summarize_blocks(blocks, source_format="v1")
+    summary.update({"format": "v1", "blocks": len(blocks)})
+    return summary, equations
 
 
-def trim_v2_content_list(
-    pages: list[list[dict[str, Any]]], max_pages: int
-) -> tuple[list[list[dict[str, Any]]], dict[str, Any], list[dict[str, Any]]]:
-    before_pages = len(pages)
-    before_blocks = sum(len(page) for page in pages)
-    trimmed = pages[:max_pages]
+def summarize_v2_content_list(
+    pages: list[list[dict[str, Any]]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     flat_blocks: list[dict[str, Any]] = []
-    for index, page in enumerate(trimmed):
+    for index, page in enumerate(pages):
         for block in page:
             copied = dict(block)
             copied.setdefault("page_idx", index)
@@ -253,13 +225,11 @@ def trim_v2_content_list(
     summary.update(
         {
             "format": "v2",
-            "pages_before": before_pages,
-            "pages_after": len(trimmed),
-            "blocks_before": before_blocks,
-            "blocks_after": len(flat_blocks),
+            "pages": len(pages),
+            "blocks": len(flat_blocks),
         }
     )
-    return trimmed, summary, equations
+    return summary, equations
 
 
 def summarize_blocks(blocks: list[dict[str, Any]], source_format: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -300,52 +270,11 @@ def summarize_blocks(blocks: list[dict[str, Any]], source_format: str) -> tuple[
     )
 
 
-def page_idx(record: dict[str, Any]) -> int | None:
-    value = record.get("page_idx", record.get("page"))
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
-
-
-def trim_page_indexed_records(records: Any, max_pages: int) -> Any:
-    if not isinstance(records, list):
-        return records
-    return [record for record in records if not isinstance(record, dict) or page_idx(record) is None or page_idx(record) < max_pages]
-
-
-def trim_markdown_after_references(markdown: str) -> tuple[str, dict[str, Any]]:
-    lines = markdown.splitlines(keepends=True)
-    references_index: int | None = None
-    trim_index: int | None = None
-
-    for index, line in enumerate(lines):
-        if REFERENCES_HEADING_RE.match(line.strip()):
-            references_index = index
-            break
-
-    if references_index is not None:
-        for index in range(references_index + 1, len(lines)):
-            if LEVEL_TWO_HEADING_RE.match(lines[index].strip()):
-                trim_index = index
-                break
-
-    if trim_index is None:
-        return markdown, {
-            "found_references": references_index is not None,
-            "trimmed": False,
-            "lines_before": len(lines),
-            "lines_after": len(lines),
-        }
-
-    trimmed = "".join(lines[:trim_index]).rstrip() + "\n"
-    return trimmed, {
-        "found_references": True,
-        "trimmed": len(trimmed) != len(markdown),
-        "trim_heading": lines[trim_index].strip(),
-        "lines_before": len(lines),
-        "lines_after": len(trimmed.splitlines()),
+def summarize_markdown(markdown: str) -> dict[str, Any]:
+    return {
+        "trimmed": False,
+        "lines": len(markdown.splitlines()),
+        "characters": len(markdown),
     }
 
 

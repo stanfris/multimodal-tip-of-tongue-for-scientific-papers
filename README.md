@@ -25,10 +25,14 @@ src/
 scripts/
   environment/           # Environment setup
   document_downloads/    # Document corpus workflow wrappers
+  pdf_corpus/            # Corpus assembly, domain splitting, and statistics
+  document_splits/       # Extracted-document split generation
   extraction/            # Local and Slurm extraction wrappers
   preprocessing/         # Preprocessing workflow wrappers
-  clues/                 # Clue-generation wrappers
-  queries/               # Query-generation and judgement wrappers
+  clue_generation/       # Clue-generation wrappers
+  query_generation/      # Query-generation and judgement wrappers
+  review/                # Query review application launcher
+  reporting/             # Generated-artifact reporting wrappers
   packaging/             # Hugging Face upload/download wrappers
 ```
 
@@ -55,7 +59,7 @@ uv sync --dev
 Launch the local Streamlit reviewer for generated tip-of-the-tongue query collections:
 
 ```bash
-.venv/bin/python -m streamlit run src/review/review_app.py --server.address 127.0.0.1
+scripts/review/run_review_app.sh
 ```
 
 The reviewer can inspect generated query collections and writes manual
@@ -69,21 +73,25 @@ Run the dataset generation stages individually:
 scripts/environment/sync_env.sh
 scripts/document_downloads/build_acl_subset.sh
 scripts/document_downloads/download_acl_pdfs.sh
+scripts/pdf_corpus/build_pdf_datasets_folder.sh
+scripts/pdf_corpus/build_pdf_dataset_split.sh
+scripts/document_splits/build_document_split.sh
 scripts/extraction/start_mineru_router.sh
 scripts/extraction/run_mineru_full_extraction.sh
 scripts/preprocessing/reduce_and_compact_preprocessed.sh
-scripts/clues/describe_all_figures.sh
-scripts/clues/describe_all_textual_clues.sh
-scripts/queries/generate_queries.sh
-scripts/queries/judge_train_queries.sh
+scripts/clue_generation/describe_all_figures.sh
+scripts/clue_generation/describe_all_textual_clues.sh
+scripts/query_generation/generate_queries.sh
+scripts/query_generation/judge_train_queries.sh
 ```
 
 Run `start_mineru_router.sh` in a separate terminal before
 `run_mineru_full_extraction.sh`. The clue and query stages read directly
 from `data/preprocessed` or `data/preprocessed/papers`.
 
-The bash scripts are intentionally thin wrappers for the standard workflow.
-Use the Python CLIs directly for ad hoc runs.
+The Bash scripts are intentionally thin wrappers for the Python entry points.
+They forward additional command-line arguments, so standard and ad hoc runs
+can use the same launchers.
 
 All source-document PDF downloads are centralized under
 `src/document_downloads/` and exposed through:
@@ -99,7 +107,7 @@ Build a fixed-seed stratified document split before clue/query generation.
 The default split is 1,000 train documents and 200 test documents:
 
 ```bash
-uv run python -m document_splits.build_document_split \
+scripts/document_splits/build_document_split.sh \
   --dataset data/preprocessed \
   --output data/splits/document_split.json
 ```
@@ -114,15 +122,15 @@ managed query settings are intentionally not supported, except for the
 Generate the training set by default, or explicitly select the test set:
 
 ```bash
-scripts/clues/describe_all_figures.sh
-scripts/clues/describe_all_textual_clues.sh
-scripts/queries/generate_queries.sh
-scripts/queries/judge_train_queries.sh
-scripts/clues/describe_all_figures.sh --set test
-scripts/clues/describe_all_textual_clues.sh --set test
-scripts/queries/generate_queries.sh --set test
-scripts/queries/generate_queries.sh --set test --limit 3
-scripts/queries/judge_train_queries.sh --set test
+scripts/clue_generation/describe_all_figures.sh
+scripts/clue_generation/describe_all_textual_clues.sh
+scripts/query_generation/generate_queries.sh
+scripts/query_generation/judge_train_queries.sh
+scripts/clue_generation/describe_all_figures.sh --set test
+scripts/clue_generation/describe_all_textual_clues.sh --set test
+scripts/query_generation/generate_queries.sh --set test
+scripts/query_generation/generate_queries.sh --set test --limit 3
+scripts/query_generation/judge_train_queries.sh --set test
 ```
 
 The split index stores ordered paper IDs. For standard full-run behavior, edit
@@ -364,7 +372,7 @@ To materialize separate Physics and Engineering PDF folders from the combined
 manifest, run:
 
 ```bash
-uv run python -m pdf_corpus.split_arxiv_pdfs_by_domain
+scripts/pdf_corpus/split_arxiv_pdfs_by_domain.sh
 ```
 
 This copies valid source PDFs from `data/arxiv_open_reuse/pdfs/` into
@@ -377,8 +385,8 @@ To build one consolidated five-folder PDF dataset, first make sure arXiv has
 already been split into `pdfs_by_domain/`, then run:
 
 ```bash
-uv run python -m pdf_corpus.build_pdf_datasets_folder --dry-run
-uv run python -m pdf_corpus.build_pdf_datasets_folder
+scripts/pdf_corpus/build_pdf_datasets_folder.sh --dry-run
+scripts/pdf_corpus/build_pdf_datasets_folder.sh
 ```
 
 This creates `data/pdf_datasets/ACL`, `data/pdf_datasets/Physics`,
@@ -390,7 +398,7 @@ Package the five-folder corpus for Hugging Face Datasets as one shared
 retrieval corpus:
 
 ```bash
-uv run python -m dataset_packaging.prepare_hf_dataset \
+scripts/packaging/prepare_huggingface_dataset.sh \
   --input-root data/pdf_datasets \
   --output-dir huggingface_dataset \
   --shard-size-gb 1 \
@@ -422,7 +430,7 @@ members validate. Use `--force-rebuild` to rebuild completed shards.
 Validate an existing prepared folder without uploading:
 
 ```bash
-uv run python -m dataset_packaging.prepare_hf_dataset \
+scripts/packaging/prepare_huggingface_dataset.sh \
   --output-dir huggingface_dataset \
   --validate-only
 ```
@@ -446,17 +454,17 @@ If the prepared dataset has already been validated and has not changed, skip
 the local validation pass on upload:
 
 ```bash
-HF_XET_HIGH_PERFORMANCE=1 uv run python -m dataset_packaging.prepare_hf_dataset \
+HF_XET_HIGH_PERFORMANCE=1 scripts/packaging/prepare_huggingface_dataset.sh \
   --output-dir huggingface_dataset \
   --upload-only --skip-validation
 ```
 
 The upload path uses the current Hugging Face CLI (`hf upload`) and the existing
 authenticated session or `HF_TOKEN`; it does not print tokens or create manual
-Git commits. The same command is also available through:
+Git commits. Inspect the packaging options through the same wrapper:
 
 ```bash
-uv run dataset-generation prepare-hf-dataset --help
+scripts/packaging/prepare_huggingface_dataset.sh --help
 ```
 
 Download the complete dataset repository into a specific local directory:
@@ -493,7 +501,7 @@ default, each dataset group contributes 2,000 train PDFs and 100 test PDFs, for
 10,000 train PDFs and 500 test PDFs in total:
 
 ```bash
-uv run python -m pdf_corpus.build_pdf_dataset_split \
+scripts/pdf_corpus/build_pdf_dataset_split.sh \
   --input-dir data/pdf_datasets \
   --output data/splits/pdf_dataset_split.json
 ```
@@ -520,7 +528,7 @@ depending on MinerU's in-process task IDs.
 First inspect the machine:
 
 ```bash
-uv run dataset-generation probe-mineru-env
+scripts/extraction/probe_mineru_env.sh
 ```
 
 On the DGX, start a persistent router:
@@ -653,10 +661,14 @@ appended to `<output-dir>/failures.jsonl` and do not stop the batch. The latest
 run configuration and summary are saved as `run_config.json` and
 `last_run_summary.json`.
 
+Extraction and automatic postprocessing preserve the complete document; they
+do not impose a page-count limit. Page-count filtering is confined to the
+explicit `--prune` mode of `pdf_corpus.pdf_page_distribution`.
+
 Before a full run, benchmark medium-effort throughput on a small sample:
 
 ```bash
-uv run dataset-generation benchmark-mineru-pdfs \
+scripts/extraction/benchmark_mineru_extraction.sh \
   --input-dir data/acl_subset/pdfs \
   --sample-size 20 \
   --api-url http://127.0.0.1:8002 \
@@ -678,7 +690,7 @@ output in MinerU responses.
 Generate Qwen-VL visual descriptions from preprocessed ACL subset papers:
 
 ```bash
-scripts/clues/describe_all_figures.sh
+scripts/clue_generation/describe_all_figures.sh
 ```
 
 This reads figure image references from
@@ -700,7 +712,7 @@ Use `--clues-dir` to write to a different clue directory.
 Generate semantic memory cues from preprocessed paper markdown:
 
 ```bash
-scripts/clues/describe_all_textual_clues.sh
+scripts/clue_generation/describe_all_textual_clues.sh
 ```
 
 This writes textual clues to `data/clues/<paper_id>/base/textual_clues.jsonl`.
@@ -708,7 +720,8 @@ This writes textual clues to `data/clues/<paper_id>/base/textual_clues.jsonl`.
 Print stored coverage statistics:
 
 ```bash
-uv run dataset-generation stats --dataset data/query_collections/query_generation_train/visual_only
+scripts/reporting/generated_artifact_stats.sh \
+  --dataset data/query_collections/query_generation_train/visual_only
 ```
 
 ## Artifact Structure

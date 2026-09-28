@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+EXPECTED_ENTRYPOINTS = {
+    "scripts/pdf_corpus/build_pdf_dataset_split.sh": "python -m pdf_corpus.build_pdf_dataset_split",
+    "scripts/pdf_corpus/build_pdf_datasets_folder.sh": "python -m pdf_corpus.build_pdf_datasets_folder",
+    "scripts/pdf_corpus/split_arxiv_pdfs_by_domain.sh": "python -m pdf_corpus.split_arxiv_pdfs_by_domain",
+    "scripts/pdf_corpus/pdf_page_distribution.sh": "python -m pdf_corpus.pdf_page_distribution",
+    "scripts/document_splits/build_document_split.sh": "python -m document_splits.build_document_split",
+    "scripts/review/run_review_app.sh": "streamlit run",
+    "scripts/extraction/probe_mineru_env.sh": "dataset-generation probe-mineru-env",
+    "scripts/extraction/benchmark_mineru_extraction.sh": "dataset-generation benchmark-mineru-pdfs",
+    "scripts/preprocessing/parsed_dataset_stats.sh": "dataset-generation parsed-dataset-stats",
+    "scripts/reporting/generated_artifact_stats.sh": "dataset-generation stats",
+    "scripts/packaging/prepare_huggingface_dataset.sh": "dataset-generation prepare-hf-dataset",
+}
+
+
+def test_operational_python_entrypoints_have_bash_wrappers() -> None:
+    for relative_path, command in EXPECTED_ENTRYPOINTS.items():
+        wrapper = PROJECT_ROOT / relative_path
+        assert wrapper.is_file(), f"Missing Bash wrapper: {relative_path}"
+        assert os.access(wrapper, os.X_OK), f"Bash wrapper is not executable: {relative_path}"
+        contents = wrapper.read_text(encoding="utf-8")
+        assert contents.startswith("#!/usr/bin/env bash\n")
+        assert "set -euo pipefail" in contents
+        assert command in contents
+        assert '"$@"' in contents
+
+
+def test_documented_bash_scripts_exist() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    documented_scripts = set(re.findall(r"scripts/[A-Za-z0-9_./-]+\.sh", readme))
+
+    assert documented_scripts
+    for relative_path in documented_scripts:
+        assert (PROJECT_ROOT / relative_path).is_file(), f"README references missing script: {relative_path}"
