@@ -26,11 +26,6 @@ def write_settings(tmp_path: Path) -> Path:
     data_root = tmp_path / "data"
     (data_root / "preprocessed").mkdir(parents=True)
     (data_root / "clues").mkdir()
-    (data_root / "splits").mkdir()
-    (data_root / "splits" / "document_split.json").write_text(
-        '{"train": [], "test": []}',
-        encoding="utf-8",
-    )
     prompts = tmp_path / "prompts"
     prompts.mkdir()
     (prompts / "visual_interpretation.v1.txt").write_text("{image}", encoding="utf-8")
@@ -47,7 +42,6 @@ dataset:
   root: ../data
   preprocessed: preprocessed
   clues_dir: clues
-  split_index: splits/document_split.json
   visual_interpretations:
   textual_interpretations:
 
@@ -171,7 +165,7 @@ def test_managed_settings_select_train_and_test_query_sets(tmp_path: Path) -> No
 
     assert train.dataset == tmp_path / "data" / "preprocessed"
     assert train.clues_dir == tmp_path / "data" / "clues"
-    assert train.split_index == tmp_path / "data" / "splits" / "document_split.json"
+    assert train.split_index is None
     assert train.split_name == "train"
     assert train.collection_id == "managed_train"
     assert train.max_examples == 5
@@ -188,7 +182,7 @@ def test_managed_settings_load_visual_description_stage(tmp_path: Path) -> None:
 
     assert managed.dataset == tmp_path / "data" / "preprocessed"
     assert managed.clues_dir == tmp_path / "data" / "clues"
-    assert managed.split_index == tmp_path / "data" / "splits" / "document_split.json"
+    assert managed.split_index is None
     assert managed.split == "test"
     assert managed.backend == "transformers"
     assert managed.model == "Qwen/Qwen3-VL-4B-Instruct"
@@ -210,7 +204,7 @@ def test_managed_settings_load_textual_description_stage(tmp_path: Path) -> None
 
     assert managed.dataset == tmp_path / "data" / "preprocessed"
     assert managed.clues_dir == tmp_path / "data" / "clues"
-    assert managed.split_index == tmp_path / "data" / "splits" / "document_split.json"
+    assert managed.split_index is None
     assert managed.split == "train"
     assert managed.backend == "transformers"
     assert managed.model == "Qwen/Qwen3-4B"
@@ -231,7 +225,7 @@ def test_managed_settings_load_posthoc_judgement_stage(tmp_path: Path) -> None:
     managed, config = load_managed_judgement_args(args)
 
     assert managed.dataset == tmp_path / "data" / "preprocessed"
-    assert managed.split_index == tmp_path / "data" / "splits" / "document_split.json"
+    assert managed.split_index is None
     assert managed.split == "test"
     assert managed.input_dir == tmp_path / "data" / "query_collections" / "managed_test"
     assert managed.collection_id == "managed_test"
@@ -251,7 +245,7 @@ def test_query_generation_parser_rejects_setting_overrides(flag: str) -> None:
         parser.parse_args([flag, "value"])
 
 
-def test_query_ids_use_original_split_index_after_windowing() -> None:
+def test_query_ids_use_canonical_embedded_split_after_windowing() -> None:
     config = QueryGenerationConfig(
         dataset=Path("dataset"),
         visual_interpretations=None,
@@ -262,12 +256,12 @@ def test_query_ids_use_original_split_index_after_windowing() -> None:
         start_index=3,
         end_index=5,
     )
-    papers = [{"paper_id": f"paper-{index}"} for index in range(8)]
+    papers = [{"paper_id": f"paper-{index}", "split": "train"} for index in range(8)]
 
     selected = _eligible_papers(papers, config)
 
     assert [paper["paper_id"] for _, paper in selected] == ["paper-3", "paper-4"]
     assert [_query_id("visual-only", index, config) for index, _ in selected] == [
-        "visual_only_q00003",
-        "visual_only_q00004",
+        "train_visual_only_q00003",
+        "train_visual_only_q00004",
     ]

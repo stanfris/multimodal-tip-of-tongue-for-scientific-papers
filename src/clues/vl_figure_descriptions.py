@@ -20,6 +20,7 @@ from common.managed_settings import (
     DEFAULT_SETTINGS_PATH,
     load_managed_settings,
     resolve_dataset_path,
+    resolve_optional_dataset_path,
     resolve_path,
     section,
 )
@@ -496,7 +497,7 @@ def load_managed_visual_description_args(args: argparse.Namespace) -> argparse.N
     managed.prompt_id = prompt.get("name", "visual_interpretation")
     managed.prompt_version = prompt.get("version", "v1")
     managed.split = args.set
-    managed.split_index = resolve_dataset_path(dataset, "split_index", config_dir)
+    managed.split_index = resolve_optional_dataset_path(dataset, "split_index", config_dir)
     managed.all = bool(selection.get("all", True))
     managed.limit = selection.get("limit")
     managed.start_index = int(selection.get("start_index", 0))

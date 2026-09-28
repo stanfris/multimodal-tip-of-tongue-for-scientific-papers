@@ -286,7 +286,7 @@ def _generate_mode_examples_from_papers(
             "paper_id": paper_id,
             "split": config.split_name,
             "split_index": str(config.split_index) if config.split_index is not None else None,
-            "split_paper_index": paper_index if config.split_index is not None else None,
+            "split_paper_index": paper_index if config.split_name is not None else None,
             "selected_component_count": len(selected),
             "selected_visual_count": visual_count,
             "selected_text_count": text_count,
@@ -421,7 +421,7 @@ def _eligible_papers(papers: list[dict[str, Any]], config: QueryGenerationConfig
 
 def _query_id(mode: QueryMode, paper_index: int, config: QueryGenerationConfig) -> str:
     prefix = mode.replace("-", "_")
-    if config.split_index is not None and config.split_name:
+    if config.split_name:
         prefix = f"{config.split_name}_{prefix}"
     return f"{prefix}_q{paper_index:05d}"
 

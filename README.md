@@ -14,7 +14,7 @@ src/
   common/                # Shared JSONL, settings, validation, and model helpers
   document_downloads/    # Source metadata builders and PDF download commands
   pdf_corpus/            # PDF corpus assembly, splitting, and statistics
-  document_splits/       # Extracted-document split generation and filtering
+  document_splits/       # Canonical split filtering and legacy index compatibility
   extraction/            # MinerU extraction logic
   preprocessing/         # Preprocessed paper readers and cleanup tools
   clues/                 # Textual and visual clue generation
@@ -26,7 +26,7 @@ scripts/
   environment/           # Environment setup
   document_downloads/    # Document corpus workflow wrappers
   pdf_corpus/            # Corpus assembly, domain splitting, and statistics
-  document_splits/       # Extracted-document split generation
+  document_splits/       # Legacy extracted-document split tooling
   extraction/            # Local and Slurm extraction wrappers
   preprocessing/         # Preprocessing workflow wrappers
   clue_generation/       # Clue-generation wrappers
@@ -98,7 +98,6 @@ scripts/document_downloads/build_acl_subset.sh
 scripts/document_downloads/download_acl_pdfs.sh
 scripts/pdf_corpus/build_pdf_datasets_folder.sh
 scripts/pdf_corpus/build_pdf_dataset_split.sh
-scripts/document_splits/build_document_split.sh
 scripts/extraction/start_mineru_router.sh
 scripts/extraction/run_mineru_full_extraction.sh
 scripts/preprocessing/reduce_and_compact_preprocessed.sh
@@ -126,18 +125,9 @@ uv run dataset-generation download-documents --help
 Thin shell wrappers for each document corpus live under
 `scripts/document_downloads/`.
 
-Build a fixed-seed stratified document split before clue/query generation.
-The default split is 1,000 train documents and 200 test documents:
-
-```bash
-scripts/document_splits/build_document_split.sh \
-  --dataset data/preprocessed \
-  --output data/splits/document_split.json
-```
-
 Figure descriptions, textual clues, query generation, and query judgement are managed by
 `configs/settings.yaml`. That file contains the overall dataset pointer,
-dataset paths, split index, stage-specific prompt/model/generation settings,
+dataset paths, stage-specific prompt/model/generation settings,
 and the standardized train/test query-set definitions. Runtime overrides for
 managed query settings are intentionally not supported, except for the
 `--limit` cap on total queries per mode, including existing queries when resuming.
@@ -156,9 +146,11 @@ scripts/query_generation/generate_queries.sh --set test --limit 3
 scripts/query_generation/judge_train_queries.sh --set test
 ```
 
-The split index stores ordered paper IDs. For standard full-run behavior, edit
+Train/test membership comes from the canonical PDF split and is retained in
+each extracted `paper.json`. For standard full-run behavior, edit
 `visual_descriptions`, `textual_descriptions`, `visual_query`, or
-`visual_query.judgement` in `configs/settings.yaml`.
+`visual_query.judgement` in `configs/settings.yaml`. The legacy
+`document_splits` index generator is no longer required.
 
 The clue-generation scripts write per-paper clue files:
 

@@ -70,7 +70,7 @@ def main() -> int:
         for paper in filter_papers_by_split(
             read_preprocessed_papers(dataset),
             split_index_path=args.split_index,
-            split_name=args.split if args.split_index is not None else None,
+            split_name=args.split,
         )
     }
     if config is None:
