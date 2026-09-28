@@ -6,6 +6,7 @@ from pathlib import Path
 from extraction.mineru_extraction import build_pdf_inputs
 from extraction.mineru_extraction import build_extract_parser
 from extraction.mineru_extraction import discover_pdfs
+from extraction.mineru_extraction import resolve_extraction_output_dir
 from extraction.mineru_extraction import resolve_split_index
 
 
@@ -20,6 +21,17 @@ def test_extract_parser_accepts_explicit_split_union_and_domains() -> None:
     assert args.split == "train+test"
     assert args.domains == ["ACL", "Biology"]
     assert args.all_domain_pdfs is False
+
+
+def test_single_domain_extraction_uses_named_output_folder() -> None:
+    assert resolve_extraction_output_dir(Path("data/processed"), ["Engineering"]) == Path(
+        "data/processed/Engineering"
+    )
+
+
+def test_named_domain_output_folder_is_not_duplicated() -> None:
+    output_dir = Path("data/processed/Engineering")
+    assert resolve_extraction_output_dir(output_dir, ["Engineering"]) == output_dir
 
 
 def test_discover_pdfs_uses_relative_path_ids_for_multi_dataset_roots(tmp_path: Path) -> None:

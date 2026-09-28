@@ -13,7 +13,8 @@ Usage:
 
 Starts one MinerU router/API server in the background, waits for /health, runs
 the existing extract-mineru-pdfs caller against 127.0.0.1, then shuts the server
-down and exits with the caller's status.
+down and exits with the caller's status. Server and extraction progress are
+shown live while also being appended to their separate log files.
 
 Launcher options:
   --port PORT                 MinerU server port (default: $MINERU_PORT or 8002)
@@ -24,12 +25,13 @@ Launcher options:
   -h, --help                  Show this help
 
 Any other arguments are forwarded to:
-  uv run --no-sync dataset-generation extract-mineru-pdfs
+  .venv-mineru/bin/python -m extraction
 EOF
 }
 
 MINERU_PORT="${MINERU_PORT:-8002}"
 MINERU_STARTUP_TIMEOUT="${MINERU_STARTUP_TIMEOUT:-600}"
+MINERU_VENV="${MINERU_VENV:-.venv-mineru}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ).$$}"
 SERVER_LOG="${MINERU_SERVER_LOG:-logs/mineru/local/${RUN_ID}.server.log}"
 CALLER_LOG="${MINERU_CALLER_LOG:-logs/mineru/local/${RUN_ID}.caller.log}"
@@ -74,17 +76,54 @@ while (($#)); do
   esac
 done
 
+if [[ ! -x "$MINERU_VENV/bin/python" ]]; then
+  printf 'Dedicated MinerU environment not found: %s\n' "$MINERU_VENV" >&2
+  printf 'Create it with: scripts/environment/sync_mineru_env.sh\n' >&2
+  exit 2
+fi
+
+if ! "$MINERU_VENV/bin/python" - <<'PY'
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    mineru_version = version("mineru")
+    transformers_version = version("transformers")
+    from transformers import PPDocLayoutV2Config
+
+    config = PPDocLayoutV2Config()
+except (ImportError, PackageNotFoundError) as exc:
+    raise SystemExit(f"MinerU runtime dependency is missing: {exc}") from exc
+
+if not mineru_version.startswith("3."):
+    raise SystemExit(f"Expected MinerU 3.x for the /tasks API, found {mineru_version}")
+if not hasattr(config, "reading_order_config"):
+    raise SystemExit(
+        "Incompatible Transformers runtime: "
+        f"{transformers_version} PPDocLayoutV2Config lacks reading_order_config"
+    )
+
+print(f"MinerU runtime OK: mineru={mineru_version} transformers={transformers_version}")
+PY
+then
+  cat >&2 <<'EOF'
+MinerU cannot start with the current environment.
+Repair the pinned MinerU 3.x runtime, then rerun this command:
+  scripts/environment/sync_mineru_env.sh
+EOF
+  exit 2
+fi
+
 API_URL="http://127.0.0.1:${MINERU_PORT}"
 if [[ -z "$SERVER_CMD" ]]; then
-  SERVER_CMD="uv run --no-sync mineru-router --host 127.0.0.1 --port ${MINERU_PORT}"
+  SERVER_CMD="$MINERU_VENV/bin/mineru-router --host 127.0.0.1 --port ${MINERU_PORT}"
 fi
 
 CALLER_CMD=(
-  uv run --no-sync dataset-generation extract-mineru-pdfs
+  env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction
   --input-dir data/pdf_datasets
   --split-index data/splits/pdf_dataset_split.json
   --split train+test
-  --output-dir data/preprocessed
+  --output-dir data/processed
   --api-url "$API_URL"
   "${CALLER_ARGS[@]}"
 )

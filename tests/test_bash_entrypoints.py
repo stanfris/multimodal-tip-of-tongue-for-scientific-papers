@@ -8,6 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_ENTRYPOINTS = {
+    "scripts/environment/sync_mineru_env.sh": "transformers>=4.57.3,<5",
     "scripts/pdf_corpus/build_pdf_dataset_split.sh": "python -m pdf_corpus.build_pdf_dataset_split",
     "scripts/pdf_corpus/build_pdf_datasets_folder.sh": "python -m pdf_corpus.build_pdf_datasets_folder",
     "scripts/pdf_corpus/split_arxiv_pdfs_by_domain.sh": "python -m pdf_corpus.split_arxiv_pdfs_by_domain",
@@ -41,3 +42,12 @@ def test_documented_bash_scripts_exist() -> None:
     assert documented_scripts
     for relative_path in documented_scripts:
         assert (PROJECT_ROOT / relative_path).is_file(), f"README references missing script: {relative_path}"
+
+
+def test_main_and_mineru_environment_switchers_exist() -> None:
+    activate = (PROJECT_ROOT / "scripts/environment/activate_env.sh").read_text(encoding="utf-8")
+    runner = (PROJECT_ROOT / "scripts/environment/run_in_env.sh").read_text(encoding="utf-8")
+
+    for environment in ("main", "mineru"):
+        assert f"{environment})" in activate
+        assert f"{environment})" in runner

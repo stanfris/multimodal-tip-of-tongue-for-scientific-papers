@@ -48,10 +48,28 @@ data/query_collections/<id>/              # generated query/eval collections
 
 ## Installation
 
-Use `uv` from this directory:
+The repository uses two intentionally separate environments because the main
+pipeline and MinerU 3.x require incompatible Transformers versions:
 
 ```bash
-uv sync --dev
+scripts/environment/sync_env.sh
+scripts/environment/sync_mineru_env.sh
+```
+
+`.venv` is the main project environment. `.venv-mineru` is the isolated MinerU
+3.x GPU environment. Standard wrappers select the correct environment
+automatically. To switch an interactive shell explicitly:
+
+```bash
+source scripts/environment/activate_env.sh main
+source scripts/environment/activate_env.sh mineru
+```
+
+To run one command without changing the current shell:
+
+```bash
+scripts/environment/run_in_env.sh main python --version
+scripts/environment/run_in_env.sh mineru mineru --version
 ```
 
 ## Query Review UI
@@ -71,6 +89,7 @@ Run the dataset generation stages individually:
 
 ```bash
 scripts/environment/sync_env.sh
+scripts/environment/sync_mineru_env.sh
 scripts/document_downloads/build_acl_subset.sh
 scripts/document_downloads/download_acl_pdfs.sh
 scripts/pdf_corpus/build_pdf_datasets_folder.sh
@@ -579,6 +598,10 @@ scripts/extraction/run_mineru_full_extraction.sh \
   --all-domain-pdfs
 ```
 
+A run with exactly one `--domains` value writes beneath that domain name. For
+example, `--domains Engineering` writes papers, failure records, and run
+metadata under `data/processed/Engineering/`.
+
 To run the router and extraction caller together on one GPU machine, use the
 portable launcher. It starts one local MinerU server, waits for the real
 `/health` endpoint on `127.0.0.1`, runs the existing extraction caller, then
@@ -598,14 +621,22 @@ scripts/extraction/run_mineru_full_extraction_gpu.sh \
   --startup-timeout 900 \
   -- \
   --input-dir data/pdf_datasets \
-  --output-dir data/preprocessed \
+  --output-dir data/processed \
   --split all
+```
+
+Before submitting PDFs, the launcher verifies that `.venv-mineru` has MinerU
+3.x and a Transformers 4.x PP-DocLayoutV2 configuration with reading-order
+support. Create or repair that isolated environment with:
+
+```bash
+scripts/environment/sync_mineru_env.sh
 ```
 
 By default the server command is:
 
 ```bash
-uv run --no-sync mineru-router --host 127.0.0.1 --port <PORT>
+.venv-mineru/bin/mineru-router --host 127.0.0.1 --port <PORT>
 ```
 
 If a local MinerU install exposes a different router flag shape, pass the exact

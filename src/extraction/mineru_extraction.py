@@ -38,7 +38,7 @@ from PIL import Image
 DEFAULT_API_URL = "http://127.0.0.1:8002"
 DEFAULT_PDF_DATASET_NAMES = ("ACL", "Biology", "Engineering", "Medicine", "Physics")
 DEFAULT_INPUT_DIR = Path("data") / "pdf_datasets"
-DEFAULT_OUTPUT_DIR = Path("data") / "processed" / "mineru_pdf_extraction"
+DEFAULT_OUTPUT_DIR = Path("data") / "processed"
 DEFAULT_SPLIT_INDEX = Path("data") / "splits" / "pdf_dataset_split.json"
 FIGURE_TYPES = {"image", "chart"}
 TERMINAL_SUCCESS = {"completed", "complete", "success", "succeeded", "done"}
@@ -239,13 +239,15 @@ def run_extract(args: argparse.Namespace) -> Path:
         end_index=args.end_index,
         limit=args.limit,
     )
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = resolve_extraction_output_dir(args.output_dir, args.domains)
+    output_dir.mkdir(parents=True, exist_ok=True)
     write_json(
-        args.output_dir / "run_config.json",
+        output_dir / "run_config.json",
         {
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "input_dir": str(args.input_dir),
-            "output_dir": str(args.output_dir),
+            "output_dir": str(output_dir),
+            "output_base_dir": str(args.output_dir),
             "api_url": args.api_url,
             "backend": args.backend,
             "effort": args.effort,
@@ -274,11 +276,23 @@ def run_extract(args: argparse.Namespace) -> Path:
             "split": args.split if split_index else None,
         },
     )
-    stats = asyncio.run(extract_many(pdfs, args.output_dir, options_from_args(args)))
-    summary = {"output": str(args.output_dir), "stats": stats.snapshot()}
-    write_json(args.output_dir / "last_run_summary.json", summary)
+    stats = asyncio.run(extract_many(pdfs, output_dir, options_from_args(args)))
+    summary = {"output": str(output_dir), "stats": stats.snapshot()}
+    write_json(output_dir / "last_run_summary.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return args.output_dir
+    return output_dir
+
+
+def resolve_extraction_output_dir(output_dir: Path, domains: Iterable[str] | None) -> Path:
+    """Place a single-domain extraction beneath its named domain directory."""
+
+    selected_domains = list(domains or [])
+    if len(selected_domains) != 1:
+        return output_dir
+    domain = selected_domains[0]
+    if output_dir.name.casefold() == domain.casefold():
+        return output_dir
+    return output_dir / domain
 
 
 def run_benchmark(args: argparse.Namespace) -> Path:
@@ -429,6 +443,11 @@ async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOp
                 except ExtractionError as exc:
                     stats.failed += 1
                     append_failure(output_dir, pdf_input, exc.error_type, str(exc), exc.attempts)
+                    print(
+                        f"failure paper_id={pdf_input.paper_id} error_type={exc.error_type} "
+                        f"attempts={exc.attempts} message={exc}",
+                        flush=True,
+                    )
                 else:
                     stats.completed += 1
                     stats.pages += int(record.get("num_pages") or 0)

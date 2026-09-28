@@ -51,12 +51,12 @@ mineru_start_server() {
   local server_log="$2"
 
   mkdir -p "$(dirname "$server_log")"
-  printf '[%s] Starting MinerU server: %s\n' "$(mineru_timestamp)" "$server_cmd" >>"$server_log"
+  printf '[%s] Starting MinerU server: %s\n' "$(mineru_timestamp)" "$server_cmd" | tee -a "$server_log"
 
   if command -v setsid >/dev/null 2>&1; then
-    setsid bash -lc "exec $server_cmd" >>"$server_log" 2>&1 &
+    PYTHONUNBUFFERED=1 setsid bash -lc "exec $server_cmd" > >(tee -a "$server_log") 2>&1 &
   else
-    bash -lc "exec $server_cmd" >>"$server_log" 2>&1 &
+    PYTHONUNBUFFERED=1 bash -lc "exec $server_cmd" > >(tee -a "$server_log") 2>&1 &
   fi
   MINERU_SERVER_PID=$!
   MINERU_SERVER_STARTED=1
@@ -106,7 +106,7 @@ mineru_wait_for_ready() {
       return 1
     fi
     if mineru_health_check "$api_url"; then
-      printf '[%s] MinerU server is ready at %s\n' "$(mineru_timestamp)" "$api_url" >>"$server_log"
+      printf '[%s] MinerU server is ready at %s\n' "$(mineru_timestamp)" "$api_url" | tee -a "$server_log"
       return 0
     fi
     sleep 2
@@ -144,13 +144,15 @@ mineru_run_caller_with_server() {
     return 124
   fi
 
-  printf '[%s] Starting caller: %q' "$(mineru_timestamp)" "${caller_cmd[0]}" >>"$caller_log"
-  printf ' %q' "${caller_cmd[@]:1}" >>"$caller_log"
-  printf '\n' >>"$caller_log"
+  {
+    printf '[%s] Starting caller: %q' "$(mineru_timestamp)" "${caller_cmd[0]}"
+    printf ' %q' "${caller_cmd[@]:1}"
+    printf '\n'
+  } | tee -a "$caller_log"
 
   set +e
-  "${caller_cmd[@]}" >>"$caller_log" 2>&1
-  caller_status=$?
+  PYTHONUNBUFFERED=1 "${caller_cmd[@]}" 2>&1 | tee -a "$caller_log"
+  caller_status=${PIPESTATUS[0]}
   set -e
 
   trap - TERM INT
