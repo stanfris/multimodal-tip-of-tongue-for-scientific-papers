@@ -109,6 +109,9 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     assert "--root-dir)" in script
     assert 'ROOT_DIR="${ROOT_DIR_ARG:-${ROOT_DIR:-$DEFAULT_ROOT_DIR}}"' in script
     assert 'DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"' in script
+    assert 'MINERU_CONCURRENCY="${MINERU_CONCURRENCY:-8}"' in script
+    assert 'export MINERU_API_MAX_CONCURRENT_REQUESTS="$MINERU_CONCURRENCY"' in script
+    assert '--max-in-flight "$MINERU_CONCURRENCY"' in script
     assert 'source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"' in script
     assert 'SERVER_LOG="${MINERU_SERVER_LOG:-scripts/extraction/slurm/${RUN_ID}.server.log}"' in script
     assert 'CALLER_LOG="${MINERU_CALLER_LOG:-scripts/extraction/slurm/${RUN_ID}.caller.log}"' in script
