@@ -506,7 +506,16 @@ scripts/packaging/restore_pdf_datasets_from_huggingface.sh \
 ```
 
 The restore command checks every PDF's recorded size and SHA-256 checksum, and
-will not replace existing PDFs unless `--overwrite` is supplied.
+will not replace existing PDFs unless `--overwrite` is supplied. For faster
+restoration, process independent TAR shards concurrently with `--workers`.
+Use `--skip-checksum` only for trusted archives; size checks still apply:
+
+```bash
+scripts/packaging/restore_pdf_datasets_from_huggingface.sh \
+  /scratch-shared/sfris1 \
+  data/pdf_datasets \
+  --workers 4 --skip-checksum
+```
 
 The downloader uses the same default repository. Override it with
 `HF_REPO_ID=owner/dataset-name`, or set `HF_CLI` when the `hf` executable is not

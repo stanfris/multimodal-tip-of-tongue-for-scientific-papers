@@ -12,6 +12,7 @@ import os
 import tarfile
 import tempfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -51,6 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("dataset_dir", type=Path, help="Downloaded Hugging Face dataset directory.")
     parser.add_argument("target_dir", type=Path, help="Destination directory for source folders such as ACL and Physics.")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing PDFs at their restored paths.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of TAR shards to restore concurrently (default: 1).",
+    )
+    parser.add_argument(
+        "--skip-checksum",
+        action="store_true",
+        help="Skip SHA-256 verification while restoring trusted archives.",
+    )
     return parser
 
 
@@ -61,12 +73,23 @@ def main(argv: list[str] | None = None) -> int:
         dataset_dir=args.dataset_dir,
         target_dir=args.target_dir,
         overwrite=args.overwrite,
+        workers=args.workers,
+        verify_checksum=not args.skip_checksum,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 
-def restore_dataset(*, dataset_dir: Path, target_dir: Path, overwrite: bool = False) -> dict[str, Any]:
+def restore_dataset(
+    *,
+    dataset_dir: Path,
+    target_dir: Path,
+    overwrite: bool = False,
+    workers: int = 1,
+    verify_checksum: bool = True,
+) -> dict[str, Any]:
+    if workers < 1:
+        raise ValueError("workers must be positive")
     dataset_dir = dataset_dir.expanduser().resolve()
     target_dir = target_dir.expanduser().resolve()
     metadata_path = dataset_dir / "metadata.parquet"
@@ -87,17 +110,23 @@ def restore_dataset(*, dataset_dir: Path, target_dir: Path, overwrite: bool = Fa
     for entry in entries:
         by_shard[entry.shard].append(entry)
 
+    shard_jobs = sorted(by_shard.items(), key=lambda item: str(item[0]))
     restored = 0
-    for shard, shard_entries in sorted(by_shard.items(), key=lambda item: str(item[0])):
-        shard_path = path_under_root(dataset_dir, shard, "shard")
-        if not shard_path.is_file():
-            raise FileNotFoundError(f"Missing shard referenced by metadata: {shard_path}")
-        with tarfile.open(shard_path, "r") as archive:
-            for entry in shard_entries:
-                restore_entry(archive, entry, entry.destination(target_dir))
-                restored += 1
-                if restored % 1000 == 0:
-                    LOGGER.info("Restored %s/%s PDFs", restored, len(entries))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(
+                restore_shard,
+                dataset_dir=dataset_dir,
+                target_dir=target_dir,
+                shard=shard,
+                entries=shard_entries,
+                verify_checksum=verify_checksum,
+            )
+            for shard, shard_entries in shard_jobs
+        ]
+        for future in as_completed(futures):
+            restored += future.result()
+            LOGGER.info("Restored %s/%s PDFs", restored, len(entries))
 
     LOGGER.info("Restored %s PDFs into %s", restored, target_dir)
     return {
@@ -105,6 +134,8 @@ def restore_dataset(*, dataset_dir: Path, target_dir: Path, overwrite: bool = Fa
         "target_dir": str(target_dir),
         "restored_pdf_count": restored,
         "sources": sorted({entry.source for entry in entries}),
+        "checksum_verified": verify_checksum,
+        "workers": workers,
     }
 
 
@@ -185,7 +216,35 @@ def path_under_root(root: Path, relative_path: PurePosixPath, label: str) -> Pat
     return path
 
 
-def restore_entry(archive: tarfile.TarFile, entry: RestoreEntry, destination: Path) -> None:
+def restore_shard(
+    *,
+    dataset_dir: Path,
+    target_dir: Path,
+    shard: PurePosixPath,
+    entries: list[RestoreEntry],
+    verify_checksum: bool,
+) -> int:
+    shard_path = path_under_root(dataset_dir, shard, "shard")
+    if not shard_path.is_file():
+        raise FileNotFoundError(f"Missing shard referenced by metadata: {shard_path}")
+    with tarfile.open(shard_path, "r") as archive:
+        for entry in entries:
+            restore_entry(
+                archive,
+                entry,
+                entry.destination(target_dir),
+                verify_checksum=verify_checksum,
+            )
+    return len(entries)
+
+
+def restore_entry(
+    archive: tarfile.TarFile,
+    entry: RestoreEntry,
+    destination: Path,
+    *,
+    verify_checksum: bool,
+) -> None:
     try:
         member = archive.getmember(entry.member_path)
     except KeyError as exc:
@@ -201,17 +260,18 @@ def restore_entry(archive: tarfile.TarFile, entry: RestoreEntry, destination: Pa
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent, delete=False
     ) as temporary:
         temporary_path = Path(temporary.name)
-        hasher = hashlib.sha256()
+        hasher = hashlib.sha256() if verify_checksum else None
         bytes_written = 0
         try:
             while chunk := source.read(COPY_BUFFER_SIZE):
-                hasher.update(chunk)
+                if hasher is not None:
+                    hasher.update(chunk)
                 temporary.write(chunk)
                 bytes_written += len(chunk)
         except Exception:
             temporary_path.unlink(missing_ok=True)
             raise
-    if bytes_written != entry.size_bytes or hasher.hexdigest() != entry.sha256:
+    if bytes_written != entry.size_bytes or (hasher is not None and hasher.hexdigest() != entry.sha256):
         temporary_path.unlink(missing_ok=True)
         raise ValueError(f"Checksum or size mismatch for {entry.member_path}")
     os.replace(temporary_path, destination)

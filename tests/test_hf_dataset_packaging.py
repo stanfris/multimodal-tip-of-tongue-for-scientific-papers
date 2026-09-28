@@ -124,9 +124,10 @@ def test_restore_dataset_recreates_source_folders_and_nested_paths(tmp_path) -> 
     )
 
     restored_root = tmp_path / "restored_pdf_datasets"
-    result = restore_dataset(dataset_dir=packaged_dir, target_dir=restored_root)
+    result = restore_dataset(dataset_dir=packaged_dir, target_dir=restored_root, workers=2)
 
     assert result["restored_pdf_count"] == 2
+    assert result["workers"] == 2
     assert (restored_root / "ACL" / "2023" / "paper.pdf").read_bytes() == acl_pdf.read_bytes()
     assert (restored_root / "Physics" / "2609.17126v1.pdf").read_bytes() == physics_pdf.read_bytes()
 
@@ -145,6 +146,33 @@ def test_restore_dataset_refuses_to_overwrite_existing_pdfs(tmp_path) -> None:
 
     with pytest.raises(FileExistsError, match="Refusing to overwrite"):
         restore_dataset(dataset_dir=packaged_dir, target_dir=restored_root)
+
+
+def test_restore_dataset_can_skip_checksum_verification(tmp_path) -> None:
+    input_root = tmp_path / "pdf_datasets"
+    source_pdf = input_root / "ACL" / "paper.pdf"
+    write_pdf(source_pdf, b"source")
+    packaged_dir = tmp_path / "huggingface_dataset"
+    prepare_dataset(
+        sources=[SourceSpec("ACL", input_root / "ACL")],
+        output_dir=packaged_dir,
+        shard_size_bytes=shard_size_bytes(0.001),
+    )
+    metadata_path = packaged_dir / "metadata.parquet"
+    metadata = pd.read_parquet(metadata_path)
+    metadata.loc[:, "sha256"] = "0" * 64
+    metadata.to_parquet(metadata_path, index=False)
+
+    with pytest.raises(ValueError, match="Checksum or size mismatch"):
+        restore_dataset(dataset_dir=packaged_dir, target_dir=tmp_path / "checked")
+
+    result = restore_dataset(
+        dataset_dir=packaged_dir,
+        target_dir=tmp_path / "unchecked",
+        verify_checksum=False,
+    )
+    assert result["checksum_verified"] is False
+    assert (tmp_path / "unchecked" / "ACL" / "paper.pdf").read_bytes() == source_pdf.read_bytes()
 
 
 def test_prepare_dataset_reuses_completed_shards(tmp_path) -> None:
