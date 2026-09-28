@@ -690,13 +690,14 @@ sbatch scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch
 ```
 
 The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a 30-minute
-time limit. It chooses a localhost port, writes server/caller logs to
-`logs/mineru/slurm/<job>.*.log`, and uses `$SLURM_TMPDIR` for temporary files
-when available. Live extraction progress is written to both the caller log and
-Slurm's `mineru_extract_<job>.out`; MinerU server output remains only in the
-server log. Input, split-index, and output paths default to locations beneath
-`/scratch-shared/sfris1`. Additional arguments after the script path are
-forwarded to `extract-mineru-pdfs`; environment variables such as
+time limit. It chooses a localhost port and writes Slurm stdout/stderr plus the
+server/caller logs to `scripts/extraction/slurm/`. It uses `$SLURM_TMPDIR` for
+temporary files when available. Live extraction progress is written to both
+the caller log and `mineru_extract_<job>.out`; MinerU server output remains only
+in the server log. Input and split-index paths default to locations beneath
+`/scratch-shared/sfris1`, and extracted papers are written to
+`/scratch-shared/sfris1/processed`. Additional arguments after the script path
+are forwarded to `extract-mineru-pdfs`; environment variables such as
 `DATASET_DIR`, `INPUT_DIR`, `SPLIT_INDEX`, `SPLIT`, `OUTPUT_DIR`,
 `MINERU_PORT`, and `MINERU_STARTUP_TIMEOUT` override the defaults.
 

@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --time=00:30:00
-#SBATCH --output=mineru_extract_%j.out
-#SBATCH --error=mineru_extract_%j.err
+#SBATCH --output=scripts/extraction/slurm/mineru_extract_%j.out
+#SBATCH --error=scripts/extraction/slurm/mineru_extract_%j.err
 
 set -euo pipefail
 
@@ -74,20 +74,20 @@ if ! mineru_check_pdftext_compatibility "$MINERU_VENV/bin/python"; then
 fi
 
 SLURM_TMP_BASE="${SLURM_TMPDIR:-/tmp/${USER:-mineru}/mineru_${RUN_ID}}"
-mkdir -p "$SLURM_TMP_BASE" logs/mineru/slurm logs/slurm
+mkdir -p "$SLURM_TMP_BASE" scripts/extraction/slurm
 export TMPDIR="$SLURM_TMP_BASE/tmp"
 mkdir -p "$TMPDIR"
 
-SERVER_LOG="${MINERU_SERVER_LOG:-logs/mineru/slurm/${RUN_ID}.server.log}"
-CALLER_LOG="${MINERU_CALLER_LOG:-logs/mineru/slurm/${RUN_ID}.caller.log}"
-SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV/bin/mineru-router --host 127.0.0.1 --port ${MINERU_PORT}}"
+SERVER_LOG="${MINERU_SERVER_LOG:-scripts/extraction/slurm/${RUN_ID}.server.log}"
+CALLER_LOG="${MINERU_CALLER_LOG:-scripts/extraction/slurm/${RUN_ID}.caller.log}"
+SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV_DIR/bin/mineru-router --host 127.0.0.1 --port ${MINERU_PORT}}"
 
 CALLER_CMD=(
   env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction
   --input-dir "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
   --split-index "${SPLIT_INDEX:-$DATASET_DIR/data/splits/pdf_dataset_split.json}"
   --split "${SPLIT:-train+test}"
-  --output-dir "${OUTPUT_DIR:-$DATASET_DIR/data/processed}"
+  --output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"
   --api-url "$API_URL"
   "$@"
 )
