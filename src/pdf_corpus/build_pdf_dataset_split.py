@@ -20,8 +20,8 @@ from typing import Any
 
 DEFAULT_DATASETS = ("ACL", "Biology", "Engineering", "Medicine", "Physics")
 DEFAULT_SEED = 42
-DEFAULT_TRAIN_SIZE_PER_DATASET = 2000
-DEFAULT_TEST_SIZE_PER_DATASET = 100
+DEFAULT_TRAIN_SIZE_PER_DATASET = 2200
+DEFAULT_TEST_SIZE_PER_DATASET = 110
 DEFAULT_INPUT_DIR = Path("data/pdf_datasets")
 DEFAULT_OUTPUT = Path("data/splits/pdf_dataset_split.json")
 
