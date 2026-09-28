@@ -73,8 +73,10 @@ RUN_ID="$JOB_ID"
 DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"
 MINERU_PORT="${MINERU_PORT:-$(choose_free_port)}"
 MINERU_STARTUP_TIMEOUT="${MINERU_STARTUP_TIMEOUT:-600}"
+MINERU_CONCURRENCY="${MINERU_CONCURRENCY:-8}"
 API_URL="http://127.0.0.1:${MINERU_PORT}"
 MINERU_VENV="${MINERU_VENV:-.venv-mineru}"
+export MINERU_API_MAX_CONCURRENT_REQUESTS="$MINERU_CONCURRENCY"
 
 if [[ ! -x "$MINERU_VENV/bin/python" ]] || [[ ! -x "$MINERU_VENV/bin/mineru-router" ]]; then
   echo "Dedicated MinerU environment not found: $MINERU_VENV" >&2
@@ -117,10 +119,12 @@ CALLER_CMD=(
   --split "${SPLIT:-train+test}"
   --output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"
   --api-url "$API_URL"
+  --max-in-flight "$MINERU_CONCURRENCY"
   "${CALLER_ARGS[@]}"
 )
 
 printf 'Job %s processes the full %s split from %s.\n' "$JOB_ID" "${SPLIT:-train+test}" "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
+printf 'MinerU server and caller concurrency: %s\n' "$MINERU_CONCURRENCY"
 printf 'MinerU server log: %s\n' "$SERVER_LOG"
 printf 'MinerU caller log: %s\n' "$CALLER_LOG"
 printf 'Temporary path: %s\n' "$SLURM_TMP_BASE"

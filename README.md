@@ -712,7 +712,9 @@ in the server log. Input and split-index paths default to locations beneath
 are forwarded to `extract-mineru-pdfs`; `--root-dir` sets the repository
 checkout, and environment variables such as
 `DATASET_DIR`, `INPUT_DIR`, `SPLIT_INDEX`, `SPLIT`, `OUTPUT_DIR`,
-`MINERU_PORT`, and `MINERU_STARTUP_TIMEOUT` override the defaults.
+`MINERU_PORT`, and `MINERU_STARTUP_TIMEOUT` override the defaults. The Slurm
+launcher sets both MinerU's server request limit and the extraction caller's
+in-flight limit from `MINERU_CONCURRENCY`, which defaults to `8`.
 
 Completed papers are skipped on restart. Each successful paper has:
 
