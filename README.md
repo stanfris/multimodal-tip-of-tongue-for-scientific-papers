@@ -719,7 +719,7 @@ in-flight limit from `MINERU_CONCURRENCY`, which defaults to `8`.
 Completed papers are skipped on restart. Each successful paper has:
 
 ```text
-data/preprocessed/papers/<paper_id>/
+data/preprocessed/papers/<subset>/<paper_id>/
   _SUCCESS
   markdown.md
   paper.json
@@ -804,7 +804,7 @@ scripts/reporting/generated_artifact_stats.sh \
 Preprocessing and clue generation write:
 
 ```text
-data/preprocessed/papers/<paper_id>/
+data/preprocessed/papers/<subset>/<paper_id>/
   markdown.md
   paper.json
   figures.json

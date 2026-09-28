@@ -22,7 +22,7 @@ def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR)
         raise FileNotFoundError(f"Preprocessed papers directory does not exist: {root}")
 
     papers = []
-    for paper_dir in sorted(candidate for candidate in root.iterdir() if candidate.is_dir()):
+    for paper_dir in iter_preprocessed_paper_dirs(root):
         paper_json_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
         if not markdown_path.exists():
@@ -40,6 +40,13 @@ def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR)
         paper["figures"] = _resolve_figures(paper_dir, paper.get("figures") or [])
         papers.append(paper)
     return papers
+
+
+def iter_preprocessed_paper_dirs(path: str | Path) -> list[Path]:
+    root = _paper_root(Path(path))
+    if not root.exists():
+        return []
+    return sorted({markdown_path.parent for markdown_path in root.rglob("markdown.md")})
 
 
 def _minimal_paper_record(paper_dir: Path) -> dict[str, Any]:

@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from preprocessing.preprocessed import iter_preprocessed_paper_dirs
+
 
 VISUAL_BLOCK_TYPES = {"chart", "image", "table"}
 
@@ -30,7 +32,7 @@ def main() -> None:
     image_count = 0
     image_type_counts: Counter[str] = Counter()
 
-    paper_dirs = sorted(path for path in preprocessed_dir.iterdir() if path.is_dir())
+    paper_dirs = iter_preprocessed_paper_dirs(preprocessed_dir)
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
         futures = [
             executor.submit(compact_paper_dir, paper_dir, pdf_dir, args.dry_run)
@@ -119,7 +121,8 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
                 }
             )
 
-        source_pdf = pdf_dir / f"{paper_id}.pdf"
+        source_pdf_value = paper.get("source_pdf")
+        source_pdf = Path(str(source_pdf_value)) if source_pdf_value else pdf_dir / f"{paper_id}.pdf"
         if not source_pdf.exists():
             raise RuntimeError(f"Missing ACL subset PDF for {paper_id}: {source_pdf}")
 

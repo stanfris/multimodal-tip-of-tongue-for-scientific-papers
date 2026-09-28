@@ -284,15 +284,9 @@ def run_extract(args: argparse.Namespace) -> Path:
 
 
 def resolve_extraction_output_dir(output_dir: Path, domains: Iterable[str] | None) -> Path:
-    """Place a single-domain extraction beneath its named domain directory."""
+    """Keep one output root; individual papers are grouped by source dataset."""
 
-    selected_domains = list(domains or [])
-    if len(selected_domains) != 1:
-        return output_dir
-    domain = selected_domains[0]
-    if output_dir.name.casefold() == domain.casefold():
-        return output_dir
-    return output_dir / domain
+    return output_dir
 
 
 def run_benchmark(args: argparse.Namespace) -> Path:
@@ -419,7 +413,7 @@ async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOp
     (output_dir / "papers").mkdir(exist_ok=True)
     (output_dir / "_tmp").mkdir(exist_ok=True)
     stats = ExtractionStats(total=len(pdfs))
-    pending = [pdf for pdf in pdfs if not is_complete(output_dir, pdf.paper_id)]
+    pending = [pdf for pdf in pdfs if not is_complete(output_dir, pdf)]
     stats.already_complete = len(pdfs) - len(pending)
     if not pending:
         return stats
@@ -507,8 +501,9 @@ async def extract_one(
         raise ExtractionError("invalid_pdf", f"File does not look like a PDF: {pdf}")
 
     paper_id = pdf_input.paper_id
-    final_dir = output_dir / "papers" / paper_id
-    tmp_dir = output_dir / "_tmp" / f"{paper_id}.{os.getpid()}.{attempt}"
+    subset = paper_subset(pdf_input)
+    final_dir = paper_output_dir(output_dir, pdf_input)
+    tmp_dir = output_dir / "_tmp" / subset / f"{paper_id}.{os.getpid()}.{attempt}"
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
     tmp_dir.mkdir(parents=True)
@@ -868,6 +863,8 @@ def build_pdf_inputs(
     for path in paths:
         relative_path = relative_pdf_path(path, base_dir)
         source_dataset = relative_path.parts[0] if len(relative_path.parts) > 1 else None
+        if source_dataset is None and base_dir.name in DEFAULT_PDF_DATASET_NAMES:
+            source_dataset = base_dir.name
         raw.append(
             (
                 path,
@@ -925,8 +922,16 @@ def paper_id_for_pdf(pdf: Path | PDFInput) -> str:
     return pdf.stem
 
 
-def is_complete(output_dir: Path, paper_id: str) -> bool:
-    paper_dir = output_dir / "papers" / paper_id
+def paper_subset(pdf_input: PDFInput) -> str:
+    return safe_paper_id(pdf_input.source_dataset or "Unknown")
+
+
+def paper_output_dir(output_dir: Path, pdf_input: PDFInput) -> Path:
+    return output_dir / "papers" / paper_subset(pdf_input) / pdf_input.paper_id
+
+
+def is_complete(output_dir: Path, pdf_input: PDFInput) -> bool:
+    paper_dir = paper_output_dir(output_dir, pdf_input)
     if not (paper_dir / "_SUCCESS").exists() or not (paper_dir / "paper.json").exists():
         return False
     try:

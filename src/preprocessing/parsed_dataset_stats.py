@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from common.jsonl import read_jsonl_objects
+from preprocessing.preprocessed import iter_preprocessed_paper_dirs
 
 
 DEFAULT_METADATA_PATH = Path("data") / "acl_subset" / "papers.jsonl"
@@ -103,7 +104,7 @@ def discover_papers(path: str | Path) -> list[PaperInputs]:
     if not root.exists():
         raise FileNotFoundError(f"Preprocessed directory does not exist: {root}")
     papers = []
-    for paper_dir in sorted(candidate for candidate in root.iterdir() if candidate.is_dir()):
+    for paper_dir in iter_preprocessed_paper_dirs(root):
         markdown_path = paper_dir / "markdown.md"
         if markdown_path.exists():
             papers.append(PaperInputs(paper_id=paper_dir.name, paper_dir=paper_dir, markdown_path=markdown_path))
