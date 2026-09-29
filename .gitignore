@@ -22,3 +22,7 @@ archive/
 
 
 huggingface_dataset/
+
+*.err
+*.out
+*.log
