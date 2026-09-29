@@ -22,3 +22,12 @@ archive/
 
 
 huggingface_dataset/
+
+# Generated Slurm and MinerU runtime output
+/mineru_extract_*.out
+/mineru_extract_*.err
+/logs/mineru/slurm/*.log
+/scripts/extraction/slurm/[0-9]*.caller.log
+/scripts/extraction/slurm/[0-9]*.server.log
+/scripts/extraction/slurm/mineru_extract_*.out
+/scripts/extraction/slurm/mineru_extract_*.err
