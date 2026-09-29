@@ -55,6 +55,16 @@ def test_split_selection_resolves_only_extracted_papers(tmp_path: Path) -> None:
     assert selection.expected_count == 2
     assert selection.missing_count == 1
     assert selection.source == str(split_index)
+    assert selection.missing_documents == [
+        {
+            "stage": "extraction",
+            "status": "missing_extraction",
+            "source_pdf_relpath": "Biology/test.pdf",
+            "source_paper_dataset": "Biology",
+            "paper_id": "Biology_test",
+            "candidate_paper_ids": ("Biology_test", "Biology_test.6ee2972bc564"),
+        }
+    ]
 
 
 def test_split_selection_supports_direct_domain_layout(tmp_path: Path) -> None:

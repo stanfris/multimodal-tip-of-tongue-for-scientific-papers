@@ -65,7 +65,7 @@ def test_mineru_server_launchers_expose_environment_build_tools() -> None:
     launchers = (
         PROJECT_ROOT / "scripts/extraction/start_mineru_router.sh",
         PROJECT_ROOT / "scripts/extraction/run_mineru_full_extraction_gpu.sh",
-        PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch",
+        PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.job",
     )
 
     for launcher in launchers:
@@ -98,7 +98,7 @@ def test_mineru_server_output_is_logged_but_only_caller_output_is_teed() -> None
 
 def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     script = (
-        PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch"
+        PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.job"
     ).read_text(encoding="utf-8")
 
     assert "#SBATCH --array" not in script
@@ -110,6 +110,9 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     assert 'ROOT_DIR="${ROOT_DIR_ARG:-${ROOT_DIR:-$DEFAULT_ROOT_DIR}}"' in script
     assert 'DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"' in script
     assert 'MINERU_CONCURRENCY="${MINERU_CONCURRENCY:-8}"' in script
+    assert 'EXTRACTION_SCOPE="${SPLIT:-full}"' in script
+    assert "CALLER_CMD+=(--split all --all-domain-pdfs)" in script
+    assert 'Resume is enabled: completed documents are preserved' in script
     assert 'export MINERU_API_MAX_CONCURRENT_REQUESTS="$MINERU_CONCURRENCY"' in script
     assert '--max-in-flight "$MINERU_CONCURRENCY"' in script
     assert 'source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"' in script

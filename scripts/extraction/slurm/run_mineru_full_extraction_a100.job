@@ -79,6 +79,7 @@ DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"
 MINERU_PORT="${MINERU_PORT:-$(choose_free_port)}"
 MINERU_STARTUP_TIMEOUT="${MINERU_STARTUP_TIMEOUT:-600}"
 MINERU_CONCURRENCY="${MINERU_CONCURRENCY:-8}"
+EXTRACTION_SCOPE="${SPLIT:-full}"
 API_URL="http://127.0.0.1:${MINERU_PORT}"
 MINERU_VENV="${MINERU_VENV:-.venv-mineru}"
 export MINERU_API_MAX_CONCURRENT_REQUESTS="$MINERU_CONCURRENCY"
@@ -120,15 +121,35 @@ SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV_DIR/bin/mineru-router --host 127.0
 CALLER_CMD=(
   env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction
   --input-dir "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
-  --split-index "${SPLIT_INDEX:-$DATASET_DIR/data/splits/pdf_dataset_split.json}"
-  --split "${SPLIT:-train+test}"
   --output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"
   --api-url "$API_URL"
   --max-in-flight "$MINERU_CONCURRENCY"
-  "${CALLER_ARGS[@]}"
 )
 
-printf 'Job %s processes the full %s split from %s.\n' "$JOB_ID" "${SPLIT:-train+test}" "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
+case "$EXTRACTION_SCOPE" in
+  full|all)
+    CALLER_CMD+=(--split all --all-domain-pdfs)
+    SCOPE_DESCRIPTION="the full dataset (every discovered PDF)"
+    ;;
+  train|test|train+test|train-test)
+    if [[ "$EXTRACTION_SCOPE" == "train-test" ]]; then
+      EXTRACTION_SCOPE="train+test"
+    fi
+    CALLER_CMD+=(
+      --split-index "${SPLIT_INDEX:-$DATASET_DIR/data/splits/pdf_dataset_split.json}"
+      --split "$EXTRACTION_SCOPE"
+    )
+    SCOPE_DESCRIPTION="the indexed $EXTRACTION_SCOPE split"
+    ;;
+  *)
+    echo "Unsupported SPLIT value: $EXTRACTION_SCOPE (expected full, train, test, or train+test)." >&2
+    exit 2
+    ;;
+esac
+CALLER_CMD+=("${CALLER_ARGS[@]}")
+
+printf 'Job %s processes %s from %s.\n' "$JOB_ID" "$SCOPE_DESCRIPTION" "${INPUT_DIR:-$DATASET_DIR/pdf_datasets}"
+printf 'Resume is enabled: completed documents are preserved and incomplete documents are queued.\n'
 printf 'MinerU server and caller concurrency: %s\n' "$MINERU_CONCURRENCY"
 printf 'MinerU server log: %s\n' "$SERVER_LOG"
 printf 'MinerU caller log: %s\n' "$CALLER_LOG"

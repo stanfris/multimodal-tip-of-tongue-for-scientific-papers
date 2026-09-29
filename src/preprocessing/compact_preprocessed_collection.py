@@ -8,9 +8,11 @@ import json
 import shutil
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from preprocessing.parse_tracking import write_incomplete_documents
 from preprocessing.preprocessed import select_preprocessed_paper_dirs
 
 
@@ -49,6 +51,7 @@ def main() -> None:
         split=args.split,
     )
     paper_dirs = selection.paper_dirs
+    incomplete_documents: list[dict[str, Any]] = list(selection.missing_documents)
     total_papers = len(paper_dirs)
     print(
         json.dumps(
@@ -65,6 +68,13 @@ def main() -> None:
         flush=True,
     )
     if selection.expected_count and not total_papers:
+        if not args.dry_run:
+            write_incomplete_documents(
+                preprocessed_dir,
+                incomplete_documents,
+                stage="compaction",
+                source=selection.source,
+            )
         raise SystemExit(
             "No completed extraction directories matched the split index beneath "
             f"{preprocessed_dir}. Expected _SUCCESS, paper.json, and markdown.md."
@@ -82,8 +92,13 @@ def main() -> None:
                 image_type_counts.update(result["image_type_counts"])
             elif result["status"] == "skipped":
                 skipped += 1
+                if result.get("reason") != "already_compacted":
+                    incomplete_documents.append(incomplete_document_from_compaction_result(result, "skipped"))
             else:
                 failures.append({"paper_dir": result["paper_dir"], "error": result["error"]})
+                incomplete_documents.append(incomplete_document_from_compaction_result(result, "failed"))
+                if not args.dry_run:
+                    append_compaction_failure(preprocessed_dir, result)
                 if args.fail_fast:
                     raise RuntimeError(f"{result['paper_dir']}: {result['error']}")
 
@@ -112,6 +127,7 @@ def main() -> None:
                 "paper_count": processed,
                 "skipped_count": skipped,
                 "failure_count": len(failures),
+                "incomplete_count": len(incomplete_documents),
                 "failures": failures,
                 "image_count": image_count,
                 "image_type_counts": dict(sorted(image_type_counts.items())),
@@ -120,6 +136,14 @@ def main() -> None:
             sort_keys=True,
         )
     )
+
+    if not args.dry_run:
+        write_incomplete_documents(
+            preprocessed_dir,
+            incomplete_documents,
+            stage="compaction",
+            source=selection.source,
+        )
 
     if failures:
         raise SystemExit(1)
@@ -133,7 +157,12 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
         paper_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
         if not paper_path.exists() or not markdown_path.exists():
-            return {"status": "skipped", "paper_dir": str(paper_dir), "reason": "missing_inputs"}
+            return {
+                "status": "skipped",
+                "paper_id": paper_dir.name,
+                "paper_dir": str(paper_dir),
+                "reason": "missing_inputs",
+            }
 
         paper = json.loads(paper_path.read_text(encoding="utf-8"))
         paper_id = str(paper.get("paper_id") or paper_dir.name)
@@ -200,7 +229,7 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
         staged_dir = paper_dir / ".compact_images_tmp"
         if staged_dir.exists():
             shutil.rmtree(staged_dir)
-        return {"status": "failed", "paper_dir": str(paper_dir), "error": str(exc)}
+        return {"status": "failed", "paper_id": paper_dir.name, "paper_dir": str(paper_dir), "error": str(exc)}
 
 
 def is_compacted_paper_dir(paper_dir: Path) -> bool:
@@ -397,6 +426,29 @@ def update_compacted_metadata(
     updated_paper.pop("structured_outputs", None)
     updated_paper.pop("mineru_raw_relpath", None)
     return updated_paper, updated_figures
+
+
+def incomplete_document_from_compaction_result(result: dict[str, Any], status: str) -> dict[str, Any]:
+    return {
+        "stage": "compaction",
+        "status": status,
+        "paper_id": result.get("paper_id"),
+        "paper_dir": result.get("paper_dir"),
+        "reason": result.get("reason"),
+        "message": result.get("error"),
+    }
+
+
+def append_compaction_failure(output_dir: Path, result: dict[str, Any]) -> None:
+    failure = {
+        "stage": "compaction",
+        "paper_id": result.get("paper_id"),
+        "paper_dir": result.get("paper_dir"),
+        "message": result.get("error"),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    with (output_dir / "compaction_failures.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(failure, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def write_json(path: Path, data: Any) -> None:

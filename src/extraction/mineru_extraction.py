@@ -33,6 +33,9 @@ from typing import Any
 
 import httpx
 from PIL import Image
+from preprocessing.parse_tracking import INCOMPLETE_DOCUMENTS_FILENAME
+from preprocessing.parse_tracking import read_incomplete_documents
+from preprocessing.parse_tracking import write_incomplete_documents
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8002"
@@ -125,8 +128,8 @@ def build_extract_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optional JSON split index with train/test PDF paths relative to --input-dir. "
-            f"When omitted, {DEFAULT_SPLIT_INDEX} is used automatically for the standard "
-            f"{DEFAULT_INPUT_DIR} corpus if it exists, or whenever --split is train, test, or train+test."
+            f"When omitted, {DEFAULT_SPLIT_INDEX} is used automatically only when "
+            "--split is train, test, or train+test."
         ),
     )
     parser.add_argument(
@@ -135,7 +138,7 @@ def build_extract_parser() -> argparse.ArgumentParser:
         default="all",
         help=(
             "Split-index membership to process. 'train+test' is the explicit union; "
-            "'all' is retained as a compatibility alias."
+            "'all' processes every discovered PDF unless --split-index is supplied explicitly."
         ),
     )
     parser.add_argument(
@@ -150,6 +153,14 @@ def build_extract_parser() -> argparse.ArgumentParser:
         "--all-domain-pdfs",
         action="store_true",
         help="Ignore the split index and process every PDF in the selected --domains folders.",
+    )
+    parser.add_argument(
+        "--retry-incomplete-only",
+        action="store_true",
+        help=(
+            "Process only PDFs listed in the output directory's incomplete document manifest "
+            "or failure log. Completed papers are still skipped."
+        ),
     )
     return parser
 
@@ -228,6 +239,7 @@ def run_extract(args: argparse.Namespace) -> Path:
         args.split,
         all_domain_pdfs=args.all_domain_pdfs,
     )
+    output_dir = resolve_extraction_output_dir(args.output_dir, args.domains)
     pdfs = select_pdfs(
         discover_pdfs(
             args.input_dir,
@@ -239,8 +251,26 @@ def run_extract(args: argparse.Namespace) -> Path:
         end_index=args.end_index,
         limit=args.limit,
     )
-    output_dir = resolve_extraction_output_dir(args.output_dir, args.domains)
+    if args.retry_incomplete_only:
+        pdfs = filter_pdfs_for_retry(pdfs, output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    resume_report = build_extraction_resume_report(
+        output_dir,
+        pdfs,
+        retry_incomplete_only=args.retry_incomplete_only,
+    )
+    write_json(output_dir / "resume_report.json", resume_report)
+    write_extraction_incomplete_manifest(output_dir, pdfs)
+    print(
+        "resume "
+        f"mode={resume_report['mode']} selected={resume_report['selected']} "
+        f"preserved_complete={resume_report['preserved_complete']} "
+        f"queued_incomplete={resume_report['queued_incomplete']} "
+        f"prior_failures={resume_report['prior_failures']} "
+        "completed_policy=preserve "
+        "incomplete_policy=replace_after_successful_retry",
+        flush=True,
+    )
     write_json(
         output_dir / "run_config.json",
         {
@@ -272,12 +302,16 @@ def run_extract(args: argparse.Namespace) -> Path:
             "expected_pdf_dataset_names": list(DEFAULT_PDF_DATASET_NAMES),
             "domains": args.domains or list(DEFAULT_PDF_DATASET_NAMES),
             "all_domain_pdfs": args.all_domain_pdfs,
+            "retry_incomplete_only": args.retry_incomplete_only,
+            "resume_mode": resume_report["mode"],
+            "overwrite_completed": False,
+            "incomplete_output_policy": resume_report["incomplete_output_policy"],
             "split_index": str(split_index) if split_index else None,
             "split": args.split if split_index else None,
         },
     )
     stats = asyncio.run(extract_many(pdfs, output_dir, options_from_args(args)))
-    summary = {"output": str(output_dir), "stats": stats.snapshot()}
+    summary = {"output": str(output_dir), "resume": resume_report, "stats": stats.snapshot()}
     write_json(output_dir / "last_run_summary.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return output_dir
@@ -362,11 +396,10 @@ def resolve_split_index(
 ) -> Path | None:
     """Return the effective split index for the standard five-folder corpus.
 
-    Direct CLI users often run ``dataset-generation extract-mineru-pdfs`` without
-    the wrapper script. For the standard ``data/pdf_datasets`` layout, prefer the
-    canonical train/test index when it is available, and require it when the user
-    asks for a specific split. ``--all-domain-pdfs`` deliberately bypasses the
-    index so complete top-level dataset folders can be processed independently.
+    A specific train/test selection uses the canonical index by default. The
+    default ``all`` selection scans the complete input tree. An explicit split
+    index can still be paired with ``all`` as a compatibility alias for the
+    train/test union, while ``--all-domain-pdfs`` always bypasses the index.
     """
 
     if all_domain_pdfs:
@@ -374,12 +407,6 @@ def resolve_split_index(
     if split_index is not None:
         return split_index
     if split != "all":
-        return DEFAULT_SPLIT_INDEX
-    try:
-        is_standard_corpus = input_dir.resolve() == DEFAULT_INPUT_DIR.resolve()
-    except OSError:
-        is_standard_corpus = input_dir == DEFAULT_INPUT_DIR
-    if is_standard_corpus and DEFAULT_SPLIT_INDEX.is_file():
         return DEFAULT_SPLIT_INDEX
     return None
 
@@ -416,6 +443,7 @@ async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOp
     pending = [pdf for pdf in pdfs if not is_complete(output_dir, pdf)]
     stats.already_complete = len(pdfs) - len(pending)
     if not pending:
+        write_extraction_incomplete_manifest(output_dir, pdfs)
         return stats
 
     timeout = httpx.Timeout(options.request_timeout, read=options.request_timeout)
@@ -458,6 +486,7 @@ async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOp
             await queue.put(None)
         await queue.join()
         await asyncio.gather(*workers)
+    write_extraction_incomplete_manifest(output_dir, pdfs)
     return stats
 
 
@@ -953,6 +982,119 @@ def is_complete(output_dir: Path, pdf_input: PDFInput) -> bool:
         if not image_path.exists():
             return False
     return True
+
+
+def build_extraction_resume_report(
+    output_dir: Path,
+    pdfs: list[PDFInput],
+    *,
+    retry_incomplete_only: bool = False,
+) -> dict[str, Any]:
+    latest_failures = load_latest_failures(output_dir / "failures.jsonl")
+    complete = 0
+    prior_failures = 0
+    for pdf in pdfs:
+        if is_complete(output_dir, pdf):
+            complete += 1
+            continue
+        if pdf.paper_id in latest_failures or pdf.relative_path.as_posix() in latest_failures:
+            prior_failures += 1
+    incomplete = len(pdfs) - complete
+    return {
+        "mode": "retry_incomplete_only" if retry_incomplete_only else "continue",
+        "selected": len(pdfs),
+        "preserved_complete": complete,
+        "queued_incomplete": incomplete,
+        "prior_failures": prior_failures,
+        "overwrite_completed": False,
+        "completed_output_policy": "preserve",
+        "incomplete_output_policy": "replace_after_successful_retry",
+    }
+
+
+def filter_pdfs_for_retry(pdfs: list[PDFInput], output_dir: Path) -> list[PDFInput]:
+    retry_keys = retry_document_keys(output_dir)
+    if not retry_keys:
+        return []
+    return [pdf for pdf in pdfs if pdf_retry_keys(pdf) & retry_keys]
+
+
+def retry_document_keys(output_dir: Path) -> set[str]:
+    keys: set[str] = set()
+    manifest_path = output_dir / INCOMPLETE_DOCUMENTS_FILENAME
+    if manifest_path.exists():
+        for document in read_incomplete_documents(manifest_path):
+            add_document_keys(keys, document)
+
+    failures_path = output_dir / "failures.jsonl"
+    if failures_path.exists():
+        with failures_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    add_document_keys(keys, json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return keys
+
+
+def add_document_keys(keys: set[str], document: dict[str, Any]) -> None:
+    for field in ("paper_id", "source_pdf_relpath", "source"):
+        value = document.get(field)
+        if isinstance(value, str) and value:
+            keys.add(value)
+
+
+def pdf_retry_keys(pdf: PDFInput) -> set[str]:
+    return {pdf.paper_id, pdf.relative_path.as_posix(), str(pdf.path.resolve())}
+
+
+def write_extraction_incomplete_manifest(output_dir: Path, pdfs: list[PDFInput]) -> Path:
+    latest_failures = load_latest_failures(output_dir / "failures.jsonl")
+    documents = []
+    for pdf in pdfs:
+        if is_complete(output_dir, pdf):
+            continue
+        failure = latest_failures.get(pdf.paper_id) or latest_failures.get(pdf.relative_path.as_posix())
+        documents.append(
+            {
+                "stage": "extraction",
+                "status": "failed" if failure else "pending",
+                "source": str(pdf.path.resolve()),
+                "source_pdf_relpath": pdf.relative_path.as_posix(),
+                "source_paper_dataset": pdf.source_dataset,
+                "split": pdf.split,
+                "paper_id": pdf.paper_id,
+                "error_type": failure.get("error_type") if failure else None,
+                "message": failure.get("message") if failure else None,
+                "attempts": failure.get("attempts") if failure else None,
+            }
+        )
+    return write_incomplete_documents(output_dir, documents, stage="extraction", source="mineru")
+
+
+def load_latest_failures(path: Path) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    if not path.exists():
+        return latest
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                failure = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            paper_id = failure.get("paper_id")
+            source_pdf_relpath = failure.get("source_pdf_relpath")
+            if isinstance(paper_id, str):
+                latest[paper_id] = failure
+            if isinstance(source_pdf_relpath, str):
+                latest[source_pdf_relpath] = failure
+    return latest
 
 
 def choose_markdown(raw_dir: Path) -> Path:

@@ -623,8 +623,9 @@ scripts/extraction/run_mineru_full_extraction.sh
 ```
 
 Use `uv run dataset-generation extract-mineru-pdfs --help` directly for custom
-extraction settings. The script reads `data/pdf_datasets/{ACL,Physics,Engineering,Biology,Medicine}`
-through `data/splits/pdf_dataset_split.json`, so train/test split membership
+extraction settings. By default, the script reads every PDF under
+`data/pdf_datasets/{ACL,Physics,Engineering,Biology,Medicine}`. A selected
+train/test scope reads `data/splits/pdf_dataset_split.json`, so split membership
 and source dataset names are recorded in each extracted `paper.json`. For a
 small smoke run, pass normal CLI overrides through the script:
 
@@ -707,7 +708,7 @@ On a Slurm cluster with A100 nodes, submit one server plus one caller as a
 single job:
 
 ```bash
-sbatch scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch
+sbatch scripts/extraction/slurm/run_mineru_full_extraction_a100.job
 ```
 
 When submitting from outside the repository root, set the checkout explicitly:
@@ -717,7 +718,7 @@ repo_root=/path/to/repo
 sbatch \
   --output="$repo_root/scripts/extraction/slurm/mineru_extract_%j.out" \
   --error="$repo_root/scripts/extraction/slurm/mineru_extract_%j.err" \
-  "$repo_root/scripts/extraction/slurm/run_mineru_full_extraction_a100.sbatch" \
+  "$repo_root/scripts/extraction/slurm/run_mineru_full_extraction_a100.job" \
   --root-dir "$repo_root"
 ```
 
@@ -735,6 +736,11 @@ checkout, and environment variables such as
 `MINERU_PORT`, and `MINERU_STARTUP_TIMEOUT` override the defaults. The Slurm
 launcher sets both MinerU's server request limit and the extraction caller's
 in-flight limit from `MINERU_CONCURRENCY`, which defaults to `8`.
+
+The A100 job processes every discovered PDF by default (`SPLIT=full`). Set
+`SPLIT=train`, `SPLIT=test`, or `SPLIT=train+test` to use the corresponding
+entries from `SPLIT_INDEX`. Every launch reports its selected scope and resume
+behavior before starting the MinerU server.
 
 Completed papers are skipped on restart. Each successful paper has:
 
@@ -754,7 +760,15 @@ Markdown path, page count if available, and normalized `image`/`chart` figure
 records with page, bounding box, caption, footnote, and image paths. Failed PDFs are
 appended to `<output-dir>/failures.jsonl` and do not stop the batch. The latest
 run configuration and summary are saved as `run_config.json` and
-`last_run_summary.json`.
+`last_run_summary.json`. Each run also rewrites
+`<output-dir>/incomplete_documents.json` with the current complement of the
+successful outputs: selected PDFs that are still pending, partial, or failed.
+At startup, `resume_report.json` records how many selected documents are being
+preserved as complete, queued as incomplete, and retried after prior failures.
+Completed paper directories are never replaced. An incomplete directory is
+replaced only after its retry has produced and validated a complete result.
+Use `--retry-incomplete-only` to process only the PDFs named by that manifest or
+the failure log; completed papers are still skipped.
 
 Extraction and automatic postprocessing preserve the complete document; they
 do not impose a page-count limit. Page-count filtering is confined to the
@@ -779,6 +793,11 @@ recommended `max_in_flight` starting point.
 The extraction client requests only production outputs: Markdown, images, and
 content list JSON. It explicitly skips the original PDF, middle JSON, and model
 output in MinerU responses.
+
+Compaction writes the same `incomplete_documents.json` shape under the
+preprocessed root. It records split-index PDFs with no completed extraction,
+paper directories missing required compaction inputs, and compaction failures;
+failures are also appended to `compaction_failures.jsonl`.
 
 ## Figure Descriptions
 
