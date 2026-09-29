@@ -120,9 +120,9 @@ scripts/preprocessing/reduce_and_compact_preprocessed.sh \
 ```
 
 This reads MinerU outputs from `/path/to/corpus-root/processed` and source PDFs
-from `/path/to/corpus-root/pdf_datasets`. The processed tree may either contain
-`papers/<domain>/<paper_id>` or direct domain folders such as
-`ACL/<paper_id>`, `Biology/<paper_id>`, and so on.
+from `/path/to/corpus-root/pdf_datasets`. Supported processed layouts include
+`papers/<domain>/<paper_id>`, `<domain>/papers/<paper_id>`, and direct domain
+folders such as `ACL/<paper_id>`.
 When `ROOT/data/splits/pdf_dataset_split.json` exists, preprocessing iterates
 its train/test entries directly instead of recursively scanning the processed
 tree. Missing extraction outputs are counted as `not_extracted`; available

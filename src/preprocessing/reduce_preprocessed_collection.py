@@ -65,6 +65,11 @@ def main() -> None:
         ),
         flush=True,
     )
+    if selection.expected_count and not total_papers:
+        raise SystemExit(
+            "No completed extraction directories matched the split index beneath "
+            f"{root}. Expected _SUCCESS, paper.json, and markdown.md."
+        )
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
         futures = [executor.submit(reduce_paper_dir, paper_dir, args.dry_run) for paper_dir in paper_dirs]
         for index, future in enumerate(as_completed(futures), start=1):

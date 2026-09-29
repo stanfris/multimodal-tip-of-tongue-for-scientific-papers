@@ -73,3 +73,20 @@ def test_split_selection_supports_direct_domain_layout(tmp_path: Path) -> None:
     )
 
     assert selection.paper_dirs == [direct_dir]
+
+
+def test_split_selection_supports_domain_then_papers_layout(tmp_path: Path) -> None:
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(json.dumps({"train": ["Physics/2112.05988.pdf"], "test": []}), encoding="utf-8")
+    nested_dir = write_paper(tmp_path / "staging", "Physics", "Physics_2112.05988")
+    paper_dir = tmp_path / "processed" / "Physics" / "papers" / "Physics_2112.05988"
+    paper_dir.parent.mkdir(parents=True)
+    nested_dir.rename(paper_dir)
+
+    selection = select_preprocessed_paper_dirs(
+        tmp_path / "processed",
+        split_index=split_index,
+        split="train",
+    )
+
+    assert selection.paper_dirs == [paper_dir]

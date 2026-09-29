@@ -27,7 +27,7 @@ class PreprocessedPaperSelection:
 
 
 def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR) -> list[dict[str, Any]]:
-    root = _paper_root(Path(path))
+    root = Path(path)
     if not root.exists():
         raise FileNotFoundError(f"Preprocessed papers directory does not exist: {root}")
 
@@ -88,14 +88,19 @@ def _is_completed_extraction(paper_dir: Path) -> bool:
 
 
 def _completed_candidate(root: Path, subset: str, paper_ids: tuple[str, ...]) -> Path | None:
-    return next(
-        (
-            root / subset / paper_id
-            for paper_id in paper_ids
-            if _is_completed_extraction(root / subset / paper_id)
-        ),
-        None,
-    )
+    candidates = []
+    for paper_id in paper_ids:
+        candidates.extend(
+            (
+                root / "papers" / subset / paper_id,
+                root / subset / "papers" / paper_id,
+                root / subset / "papers" / subset / paper_id,
+                root / subset / paper_id,
+            )
+        )
+        if root.name == "papers":
+            candidates.append(root / subset / paper_id)
+    return next((candidate for candidate in candidates if _is_completed_extraction(candidate)), None)
 
 
 def _split_paper_candidates(split_index: Path, split: str) -> list[tuple[str, tuple[str, ...]]]:
