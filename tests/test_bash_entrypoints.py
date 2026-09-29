@@ -182,3 +182,66 @@ mineru_run_caller_with_server() {
     assert "<--split> <train+test>" in result.stdout
     assert "<--domains> <ACL>" in result.stdout
     assert "<--all-domain-pdfs>" not in result.stdout
+
+
+def test_slurm_preprocessing_launcher_uses_rome_cpu_resources() -> None:
+    script = (
+        PROJECT_ROOT / "scripts/preprocessing/slurm/reduce_and_compact_preprocessed_rome.job"
+    ).read_text(encoding="utf-8")
+
+    assert "#SBATCH --partition=rome" in script
+    assert "#SBATCH --cpus-per-task=16" in script
+    assert "#SBATCH --mem=28G" in script
+    assert "#SBATCH --gres" not in script
+    assert "gpu:" not in script.lower()
+    assert "--repo-dir)" in script
+    assert 'CORPUS_ROOT="${CORPUS_ROOT_ARG:-${DATASET_DIR:-/scratch-shared/sfris1}}"' in script
+    assert "--workers \"$WORKERS\"" in script
+
+
+def test_slurm_preprocessing_launcher_builds_compaction_command(tmp_path: Path) -> None:
+    scripts_dir = tmp_path / "scripts/preprocessing"
+    scripts_dir.mkdir(parents=True)
+    wrapper = scripts_dir / "reduce_and_compact_preprocessed.sh"
+    wrapper.write_text(
+        """#!/usr/bin/env bash
+printf 'PREPROCESS'
+printf ' <%s>' "$@"
+printf '\\n'
+""",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+    bash_env = tmp_path / "bash_env"
+    bash_env.write_text("module() { return 0; }\n", encoding="utf-8")
+
+    job = PROJECT_ROOT / "scripts/preprocessing/slurm/reduce_and_compact_preprocessed_rome.job"
+    env = {
+        **os.environ,
+        "BASH_ENV": str(bash_env),
+        "SLURM_JOB_ID": "test-job",
+        "SLURM_SUBMIT_DIR": str(tmp_path),
+        "SLURM_CPUS_PER_TASK": "16",
+    }
+    result = subprocess.run(
+        [
+            "bash",
+            str(job),
+            "--repo-dir",
+            str(tmp_path),
+            "--root-dir",
+            "/scratch/test-corpus",
+            "--split",
+            "train",
+        ],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert "GPU request: none" in result.stdout
+    assert "PREPROCESS <--root-dir> </scratch/test-corpus>" in result.stdout
+    assert "<--workers> <16>" in result.stdout
+    assert "<--split> <train>" in result.stdout
