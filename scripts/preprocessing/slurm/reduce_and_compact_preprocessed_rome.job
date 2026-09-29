@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=compact_preproc
+#SBATCH --partition=rome
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=28G
+#SBATCH --time=03:00:00
+#SBATCH --output=scripts/preprocessing/slurm/compact_preproc_%j.out
+#SBATCH --error=scripts/preprocessing/slurm/compact_preproc_%j.err
+
+set -euo pipefail
+
+module purge
+module load 2024
+
+REPO_DIR_ARG=""
+CORPUS_ROOT_ARG=""
+CALLER_ARGS=()
+
+while (($#)); do
+  case "$1" in
+    --repo-dir)
+      if (($# < 2)); then
+        echo "--repo-dir requires a path." >&2
+        exit 2
+      fi
+      REPO_DIR_ARG="$2"
+      shift 2
+      ;;
+    --repo-dir=*)
+      REPO_DIR_ARG="${1#*=}"
+      shift
+      ;;
+    --root-dir)
+      if (($# < 2)); then
+        echo "--root-dir requires a corpus root path." >&2
+        exit 2
+      fi
+      CORPUS_ROOT_ARG="$2"
+      shift 2
+      ;;
+    --root-dir=*)
+      CORPUS_ROOT_ARG="${1#*=}"
+      shift
+      ;;
+    --)
+      shift
+      CALLER_ARGS+=("$@")
+      break
+      ;;
+    *)
+      CALLER_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  DEFAULT_REPO_DIR="$SLURM_SUBMIT_DIR"
+else
+  DEFAULT_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+fi
+
+REPO_DIR="${REPO_DIR_ARG:-${REPO_DIR:-$DEFAULT_REPO_DIR}}"
+CORPUS_ROOT="${CORPUS_ROOT_ARG:-${DATASET_DIR:-/scratch-shared/sfris1}}"
+WORKERS="${WORKERS:-${SLURM_CPUS_PER_TASK:-16}}"
+JOB_ID="${SLURM_JOB_ID:-manual}"
+
+cd "$REPO_DIR"
+
+if [[ ! -f "$REPO_DIR/scripts/preprocessing/reduce_and_compact_preprocessed.sh" ]]; then
+  echo "Repository root not found at: $REPO_DIR" >&2
+  echo "Submit this job from the repository root or set --repo-dir explicitly." >&2
+  exit 2
+fi
+
+mkdir -p scripts/preprocessing/slurm
+
+PREPROCESS_CMD=(
+  "$REPO_DIR/scripts/preprocessing/reduce_and_compact_preprocessed.sh"
+  --root-dir "$CORPUS_ROOT"
+  --workers "$WORKERS"
+  "${CALLER_ARGS[@]}"
+)
+
+printf 'Job %s reduces and compacts preprocessed papers under %s.\n' "$JOB_ID" "$CORPUS_ROOT"
+printf 'Repository checkout: %s\n' "$REPO_DIR"
+printf 'Workers: %s\n' "$WORKERS"
+printf 'GPU request: none\n'
+printf 'Command:'
+printf ' %q' "${PREPROCESS_CMD[@]}"
+printf '\n'
+
+"${PREPROCESS_CMD[@]}"
