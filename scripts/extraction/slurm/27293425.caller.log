@@ -1,0 +1,187 @@
+[2026-09-28T10:09:52Z] Starting caller: env PYTHONPATH=/gpfs/home5/sfris1/multimodal-tip-of-tongue-for-scientific-papers/src .venv-mineru/bin/python -m extraction --input-dir /scratch-shared/sfris1/pdf_datasets --split-index /scratch-shared/sfris1/data/splits/pdf_dataset_split.json --split train+test --output-dir /scratch-shared/sfris1/processed --api-url http://127.0.0.1:37065 --max-in-flight 8
+{
+  "mineru_health": {
+    "completed_tasks": 0,
+    "failed_tasks": 0,
+    "max_concurrent_requests": 8,
+    "processing_tasks": 0,
+    "processing_window_size": 64,
+    "protocol_version": 2,
+    "queued_tasks": 0,
+    "servers": [
+      {
+        "base_url": "http://127.0.0.1:47591",
+        "completed_tasks": 0,
+        "failed_tasks": 0,
+        "gpu": "0",
+        "healthy": true,
+        "last_checked_at": "2026-09-28T10:09:52.506022+00:00",
+        "last_error": null,
+        "max_concurrent_requests": 8,
+        "processing_tasks": 0,
+        "processing_window_size": 64,
+        "queued_tasks": 0,
+        "server_id": "local-gpu-0",
+        "source": "local"
+      }
+    ],
+    "status": "healthy",
+    "version": "3.4.0"
+  }
+}
+progress completed=1 failed=0 in_flight=7 remaining=11423 papers/s=0.0115 pages/s=0.115
+progress completed=2 failed=0 in_flight=7 remaining=11422 papers/s=0.0229 pages/s=0.2295
+progress completed=3 failed=0 in_flight=7 remaining=11421 papers/s=0.0344 pages/s=0.3436
+progress completed=4 failed=0 in_flight=7 remaining=11420 papers/s=0.0458 pages/s=0.4575
+progress completed=5 failed=0 in_flight=7 remaining=11419 papers/s=0.0571 pages/s=0.5706
+progress completed=6 failed=0 in_flight=7 remaining=11418 papers/s=0.0684 pages/s=0.6843
+progress completed=7 failed=0 in_flight=7 remaining=11417 papers/s=0.0728 pages/s=0.7283
+progress completed=8 failed=0 in_flight=7 remaining=11416 papers/s=0.0832 pages/s=0.8318
+progress completed=9 failed=0 in_flight=7 remaining=11415 papers/s=0.0736 pages/s=0.7355
+progress completed=10 failed=0 in_flight=7 remaining=11414 papers/s=0.0817 pages/s=0.7841
+progress completed=11 failed=0 in_flight=7 remaining=11413 papers/s=0.0898 pages/s=0.8651
+progress completed=12 failed=0 in_flight=7 remaining=11412 papers/s=0.0944 pages/s=0.9127
+progress completed=13 failed=0 in_flight=7 remaining=11411 papers/s=0.1021 pages/s=0.99
+progress completed=14 failed=0 in_flight=7 remaining=11410 papers/s=0.1099 pages/s=1.0679
+progress completed=15 failed=0 in_flight=7 remaining=11409 papers/s=0.1113 pages/s=1.0833
+progress completed=16 failed=0 in_flight=7 remaining=11408 papers/s=0.1166 pages/s=1.1369
+progress completed=17 failed=0 in_flight=7 remaining=11407 papers/s=0.1128 pages/s=1.1012
+progress completed=18 failed=0 in_flight=7 remaining=11406 papers/s=0.1069 pages/s=1.0457
+progress completed=19 failed=0 in_flight=7 remaining=11405 papers/s=0.1129 pages/s=1.1048
+progress completed=20 failed=0 in_flight=7 remaining=11404 papers/s=0.1186 pages/s=1.1564
+progress completed=21 failed=0 in_flight=7 remaining=11403 papers/s=0.1244 pages/s=1.2142
+progress completed=22 failed=0 in_flight=7 remaining=11402 papers/s=0.13 pages/s=1.2706
+progress completed=23 failed=0 in_flight=7 remaining=11401 papers/s=0.1328 pages/s=1.2989
+progress completed=24 failed=0 in_flight=7 remaining=11400 papers/s=0.1385 pages/s=1.3562
+progress completed=25 failed=0 in_flight=7 remaining=11399 papers/s=0.1392 pages/s=1.3642
+progress completed=26 failed=0 in_flight=7 remaining=11398 papers/s=0.1411 pages/s=1.3675
+progress completed=27 failed=0 in_flight=7 remaining=11397 papers/s=0.1412 pages/s=1.37
+progress completed=28 failed=0 in_flight=7 remaining=11396 papers/s=0.1432 pages/s=1.391
+progress completed=29 failed=0 in_flight=7 remaining=11395 papers/s=0.1415 pages/s=1.3755
+progress completed=30 failed=0 in_flight=7 remaining=11394 papers/s=0.1463 pages/s=1.4236
+progress completed=31 failed=0 in_flight=7 remaining=11393 papers/s=0.1481 pages/s=1.4428
+progress completed=32 failed=0 in_flight=7 remaining=11392 papers/s=0.1439 pages/s=1.4028
+progress completed=33 failed=0 in_flight=7 remaining=11391 papers/s=0.1483 pages/s=1.4475
+progress completed=34 failed=0 in_flight=7 remaining=11390 papers/s=0.1528 pages/s=1.492
+progress completed=35 failed=0 in_flight=7 remaining=11389 papers/s=0.1572 pages/s=1.5365
+progress completed=36 failed=0 in_flight=7 remaining=11388 papers/s=0.1583 pages/s=1.5474
+progress completed=37 failed=0 in_flight=7 remaining=11387 papers/s=0.1561 pages/s=1.5271
+progress completed=38 failed=0 in_flight=7 remaining=11386 papers/s=0.1603 pages/s=1.569
+progress completed=39 failed=0 in_flight=7 remaining=11385 papers/s=0.1509 pages/s=1.4779
+progress completed=40 failed=0 in_flight=7 remaining=11384 papers/s=0.1547 pages/s=1.516
+progress completed=41 failed=0 in_flight=7 remaining=11383 papers/s=0.1584 pages/s=1.5532
+progress completed=42 failed=0 in_flight=7 remaining=11382 papers/s=0.1621 pages/s=1.5906
+progress completed=43 failed=0 in_flight=7 remaining=11381 papers/s=0.166 pages/s=1.6288
+progress completed=44 failed=0 in_flight=7 remaining=11380 papers/s=0.1669 pages/s=1.6387
+progress completed=45 failed=0 in_flight=7 remaining=11379 papers/s=0.1631 pages/s=1.6019
+progress completed=46 failed=0 in_flight=7 remaining=11378 papers/s=0.1567 pages/s=1.5394
+progress completed=47 failed=0 in_flight=7 remaining=11377 papers/s=0.16 pages/s=1.573
+progress completed=48 failed=0 in_flight=7 remaining=11376 papers/s=0.1626 pages/s=1.599
+progress completed=49 failed=0 in_flight=7 remaining=11375 papers/s=0.166 pages/s=1.6325
+progress completed=50 failed=0 in_flight=7 remaining=11374 papers/s=0.1692 pages/s=1.6654
+progress completed=51 failed=0 in_flight=7 remaining=11373 papers/s=0.1725 pages/s=1.6983
+progress completed=52 failed=0 in_flight=7 remaining=11372 papers/s=0.1759 pages/s=1.7318
+progress completed=53 failed=0 in_flight=7 remaining=11371 papers/s=0.1735 pages/s=1.7084
+progress completed=54 failed=0 in_flight=7 remaining=11370 papers/s=0.1628 pages/s=1.6034
+progress completed=55 failed=0 in_flight=7 remaining=11369 papers/s=0.1657 pages/s=1.6329
+progress completed=56 failed=0 in_flight=7 remaining=11368 papers/s=0.1686 pages/s=1.6621
+progress completed=57 failed=0 in_flight=7 remaining=11367 papers/s=0.171 pages/s=1.686
+progress completed=58 failed=0 in_flight=7 remaining=11366 papers/s=0.1738 pages/s=1.7141
+progress completed=59 failed=0 in_flight=7 remaining=11365 papers/s=0.1762 pages/s=1.7384
+progress completed=60 failed=0 in_flight=7 remaining=11364 papers/s=0.1774 pages/s=1.7501
+progress completed=61 failed=0 in_flight=7 remaining=11363 papers/s=0.1773 pages/s=1.7497
+progress completed=62 failed=0 in_flight=7 remaining=11362 papers/s=0.1673 pages/s=1.6517
+progress completed=63 failed=0 in_flight=7 remaining=11361 papers/s=0.17 pages/s=1.678
+progress completed=64 failed=0 in_flight=7 remaining=11360 papers/s=0.1726 pages/s=1.7046
+progress completed=65 failed=0 in_flight=7 remaining=11359 papers/s=0.1753 pages/s=1.7311
+progress completed=66 failed=0 in_flight=7 remaining=11358 papers/s=0.1779 pages/s=1.7551
+progress completed=67 failed=0 in_flight=7 remaining=11357 papers/s=0.1786 pages/s=1.7621
+progress completed=68 failed=0 in_flight=7 remaining=11356 papers/s=0.1797 pages/s=1.7729
+progress completed=69 failed=0 in_flight=7 remaining=11355 papers/s=0.1813 pages/s=1.7894
+progress completed=70 failed=0 in_flight=7 remaining=11354 papers/s=0.1728 pages/s=1.7055
+progress completed=71 failed=0 in_flight=7 remaining=11353 papers/s=0.1752 pages/s=1.7293
+progress completed=72 failed=0 in_flight=7 remaining=11352 papers/s=0.1776 pages/s=1.7535
+progress completed=73 failed=0 in_flight=7 remaining=11351 papers/s=0.18 pages/s=1.7779
+progress completed=74 failed=0 in_flight=7 remaining=11350 papers/s=0.1782 pages/s=1.7607
+progress completed=75 failed=0 in_flight=7 remaining=11349 papers/s=0.1806 pages/s=1.7846
+progress completed=76 failed=0 in_flight=7 remaining=11348 papers/s=0.183 pages/s=1.8083
+progress completed=77 failed=0 in_flight=7 remaining=11347 papers/s=0.1841 pages/s=1.8199
+progress completed=78 failed=0 in_flight=7 remaining=11346 papers/s=0.1797 pages/s=1.7765
+progress completed=79 failed=0 in_flight=7 remaining=11345 papers/s=0.182 pages/s=1.7992
+progress completed=80 failed=0 in_flight=7 remaining=11344 papers/s=0.1843 pages/s=1.822
+progress completed=81 failed=0 in_flight=7 remaining=11343 papers/s=0.18 pages/s=1.7796
+progress completed=82 failed=0 in_flight=7 remaining=11342 papers/s=0.1817 pages/s=1.7971
+progress completed=83 failed=0 in_flight=7 remaining=11341 papers/s=0.1839 pages/s=1.819
+progress completed=84 failed=0 in_flight=7 remaining=11340 papers/s=0.1861 pages/s=1.8408
+progress completed=85 failed=0 in_flight=7 remaining=11339 papers/s=0.1883 pages/s=1.8626
+progress completed=86 failed=0 in_flight=7 remaining=11338 papers/s=0.1837 pages/s=1.8182
+progress completed=87 failed=0 in_flight=7 remaining=11337 papers/s=0.1858 pages/s=1.8391
+progress completed=88 failed=0 in_flight=7 remaining=11336 papers/s=0.1818 pages/s=1.7991
+progress completed=89 failed=0 in_flight=7 remaining=11335 papers/s=0.1837 pages/s=1.8186
+progress completed=90 failed=0 in_flight=7 remaining=11334 papers/s=0.1857 pages/s=1.8389
+progress completed=91 failed=0 in_flight=7 remaining=11333 papers/s=0.1878 pages/s=1.8591
+progress completed=92 failed=0 in_flight=7 remaining=11332 papers/s=0.1883 pages/s=1.8645
+progress completed=93 failed=0 in_flight=7 remaining=11331 papers/s=0.1903 pages/s=1.8845
+progress completed=94 failed=0 in_flight=7 remaining=11330 papers/s=0.1893 pages/s=1.8725
+progress completed=95 failed=0 in_flight=7 remaining=11329 papers/s=0.1899 pages/s=1.8794
+progress completed=96 failed=0 in_flight=7 remaining=11328 papers/s=0.1858 pages/s=1.8386
+progress completed=97 failed=0 in_flight=7 remaining=11327 papers/s=0.1877 pages/s=1.8577
+progress completed=98 failed=0 in_flight=7 remaining=11326 papers/s=0.1872 pages/s=1.8526
+progress completed=99 failed=0 in_flight=7 remaining=11325 papers/s=0.189 pages/s=1.8714
+progress completed=100 failed=0 in_flight=7 remaining=11324 papers/s=0.1909 pages/s=1.89
+progress completed=101 failed=0 in_flight=7 remaining=11323 papers/s=0.1906 pages/s=1.8872
+progress completed=102 failed=0 in_flight=7 remaining=11322 papers/s=0.1924 pages/s=1.9049
+progress completed=103 failed=0 in_flight=7 remaining=11321 papers/s=0.1923 pages/s=1.9045
+progress completed=104 failed=0 in_flight=7 remaining=11320 papers/s=0.1894 pages/s=1.8754
+progress completed=105 failed=0 in_flight=7 remaining=11319 papers/s=0.1911 pages/s=1.893
+progress completed=106 failed=0 in_flight=7 remaining=11318 papers/s=0.1924 pages/s=1.9062
+progress completed=107 failed=0 in_flight=7 remaining=11317 papers/s=0.1904 pages/s=1.8862
+progress completed=108 failed=0 in_flight=7 remaining=11316 papers/s=0.1921 pages/s=1.9033
+progress completed=109 failed=0 in_flight=7 remaining=11315 papers/s=0.1934 pages/s=1.9166
+progress completed=110 failed=0 in_flight=7 remaining=11314 papers/s=0.1945 pages/s=1.9271
+progress completed=111 failed=0 in_flight=7 remaining=11313 papers/s=0.1927 pages/s=1.9098
+progress completed=112 failed=0 in_flight=7 remaining=11312 papers/s=0.1944 pages/s=1.927
+progress completed=113 failed=0 in_flight=7 remaining=11311 papers/s=0.1954 pages/s=1.9369
+progress completed=114 failed=0 in_flight=7 remaining=11310 papers/s=0.1936 pages/s=1.9191
+progress completed=115 failed=0 in_flight=7 remaining=11309 papers/s=0.1888 pages/s=1.8713
+progress completed=116 failed=0 in_flight=7 remaining=11308 papers/s=0.1904 pages/s=1.8876
+progress completed=117 failed=0 in_flight=7 remaining=11307 papers/s=0.1915 pages/s=1.8988
+progress completed=118 failed=0 in_flight=7 remaining=11306 papers/s=0.1931 pages/s=1.9149
+progress completed=119 failed=0 in_flight=7 remaining=11305 papers/s=0.1947 pages/s=1.9307
+progress completed=120 failed=0 in_flight=7 remaining=11304 papers/s=0.1963 pages/s=1.9469
+progress completed=121 failed=0 in_flight=7 remaining=11303 papers/s=0.1979 pages/s=1.9631
+progress completed=122 failed=0 in_flight=7 remaining=11302 papers/s=0.1963 pages/s=1.9471
+progress completed=123 failed=0 in_flight=7 remaining=11301 papers/s=0.1949 pages/s=1.9287
+progress completed=124 failed=0 in_flight=7 remaining=11300 papers/s=0.1904 pages/s=1.884
+progress completed=125 failed=0 in_flight=7 remaining=11299 papers/s=0.1919 pages/s=1.8991
+progress completed=126 failed=0 in_flight=7 remaining=11298 papers/s=0.1934 pages/s=1.9143
+progress completed=127 failed=0 in_flight=7 remaining=11297 papers/s=0.1942 pages/s=1.9221
+progress completed=128 failed=0 in_flight=7 remaining=11296 papers/s=0.1957 pages/s=1.9371
+progress completed=129 failed=0 in_flight=7 remaining=11295 papers/s=0.1972 pages/s=1.9518
+progress completed=130 failed=0 in_flight=7 remaining=11294 papers/s=0.1987 pages/s=1.9669
+progress completed=131 failed=0 in_flight=7 remaining=11293 papers/s=0.1961 pages/s=1.9411
+progress completed=132 failed=0 in_flight=7 remaining=11292 papers/s=0.1931 pages/s=1.9094
+progress completed=133 failed=0 in_flight=7 remaining=11291 papers/s=0.1946 pages/s=1.9237
+progress completed=134 failed=0 in_flight=7 remaining=11290 papers/s=0.196 pages/s=1.9382
+progress completed=135 failed=0 in_flight=7 remaining=11289 papers/s=0.1969 pages/s=1.9409
+progress completed=136 failed=0 in_flight=7 remaining=11288 papers/s=0.1983 pages/s=1.955
+progress completed=137 failed=0 in_flight=7 remaining=11287 papers/s=0.1997 pages/s=1.9691
+progress completed=138 failed=0 in_flight=7 remaining=11286 papers/s=0.2011 pages/s=1.9835
+progress completed=139 failed=0 in_flight=7 remaining=11285 papers/s=0.1994 pages/s=1.9669
+progress completed=140 failed=0 in_flight=7 remaining=11284 papers/s=0.1982 pages/s=1.9549
+progress completed=141 failed=0 in_flight=7 remaining=11283 papers/s=0.1937 pages/s=1.9111
+progress completed=142 failed=0 in_flight=7 remaining=11282 papers/s=0.1951 pages/s=1.9246
+progress completed=143 failed=0 in_flight=7 remaining=11281 papers/s=0.1964 pages/s=1.9378
+progress completed=144 failed=0 in_flight=7 remaining=11280 papers/s=0.1973 pages/s=1.9473
+progress completed=145 failed=0 in_flight=7 remaining=11279 papers/s=0.1986 pages/s=1.9604
+progress completed=146 failed=0 in_flight=7 remaining=11278 papers/s=0.2 pages/s=1.9737
+progress completed=147 failed=0 in_flight=7 remaining=11277 papers/s=0.2013 pages/s=1.9872
+progress completed=148 failed=0 in_flight=7 remaining=11276 papers/s=0.1999 pages/s=1.973
+progress completed=149 failed=0 in_flight=7 remaining=11275 papers/s=0.1937 pages/s=1.9118
+progress completed=150 failed=0 in_flight=7 remaining=11274 papers/s=0.1949 pages/s=1.9242
+progress completed=151 failed=0 in_flight=7 remaining=11273 papers/s=0.1962 pages/s=1.937
+progress completed=152 failed=0 in_flight=7 remaining=11272 papers/s=0.1973 pages/s=1.9483
+progress completed=153 failed=0 in_flight=7 remaining=11271 papers/s=0.1986 pages/s=1.961
+progress completed=154 failed=0 in_flight=7 remaining=11270 papers/s=0.1992 pages/s=1.967
+progress completed=155 failed=0 in_flight=7 remaining=11269 papers/s=0.2004 pages/s=1.9796
+progress completed=156 failed=0 in_flight=7 remaining=11268 papers/s=0.2017 pages/s=1.9923

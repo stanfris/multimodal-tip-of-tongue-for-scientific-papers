@@ -1,0 +1,4 @@
+[2026-09-28T13:26:05.016] error: *** JOB 27295074 ON gcn12 CANCELLED AT 2026-09-28T13:26:05 DUE TO TIME LIMIT ***
+[2026-09-28T13:26:35.288] error: namespace_p_join: open failed for /slurm/27295074/.ns: No such file or directory
+[2026-09-28T13:26:35.288] error: namespace_g_join(JobId=27295074 SLUID=s8FXM3KRSNEY00): No such file or directory
+[2026-09-28T13:26:35.304] error: Detected 1 oom_kill event in StepId=27295074.batch. Some of the step tasks have been OOM Killed.
