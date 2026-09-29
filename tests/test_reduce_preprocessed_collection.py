@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from preprocessing.reduce_preprocessed_collection import parse_args, reduce_paper_dir
+from preprocessing.reduce_preprocessed_collection import parse_args, reduce_paper_dir, should_report_progress
 
 
 def write_json(path: Path, value: object) -> None:
@@ -70,3 +70,11 @@ def test_reduce_skips_already_compacted_paper(tmp_path: Path) -> None:
         "reason": "already_compacted",
     }
     assert not (paper_dir / "equations.json").exists()
+
+
+def test_progress_reports_first_interval_and_last() -> None:
+    assert should_report_progress(1, 250, 100)
+    assert should_report_progress(100, 250, 100)
+    assert should_report_progress(250, 250, 100)
+    assert not should_report_progress(99, 250, 100)
+    assert not should_report_progress(250, 250, 0)
