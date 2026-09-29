@@ -52,3 +52,21 @@ def test_parser_has_no_page_limit(monkeypatch) -> None:
     args = parse_args()
 
     assert not hasattr(args, "max_pages")
+
+
+def test_reduce_skips_already_compacted_paper(tmp_path: Path) -> None:
+    paper_dir = tmp_path / "paper-1"
+    (paper_dir / "images").mkdir(parents=True)
+    write_json(paper_dir / "paper.json", {"paper_id": "paper-1", "split": "train", "figures": []})
+    write_json(paper_dir / "figures.json", [])
+    (paper_dir / "markdown.md").write_text("# Paper\n", encoding="utf-8")
+    (paper_dir / "paper.pdf").write_bytes(b"%PDF-1.7\n")
+
+    result = reduce_paper_dir(paper_dir, dry_run=False)
+
+    assert result == {
+        "status": "skipped",
+        "paper_dir": str(paper_dir),
+        "reason": "already_compacted",
+    }
+    assert not (paper_dir / "equations.json").exists()

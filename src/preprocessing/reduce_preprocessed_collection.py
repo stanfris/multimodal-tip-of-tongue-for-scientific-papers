@@ -98,6 +98,9 @@ def main() -> None:
 
 def reduce_paper_dir(paper_dir: Path, dry_run: bool) -> dict[str, Any]:
     try:
+        if is_compacted_paper_dir(paper_dir):
+            return {"status": "skipped", "paper_dir": str(paper_dir), "reason": "already_compacted"}
+
         paper_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
         figures_path = paper_dir / "figures.json"
@@ -163,6 +166,23 @@ def reduce_paper_dir(paper_dir: Path, dry_run: bool) -> dict[str, Any]:
         return paper_summary
     except Exception as exc:
         return {"status": "failed", "paper_dir": str(paper_dir), "error": str(exc)}
+
+
+def is_compacted_paper_dir(paper_dir: Path) -> bool:
+    required = (
+        paper_dir / "paper.json",
+        paper_dir / "figures.json",
+        paper_dir / "markdown.md",
+        paper_dir / "images",
+    )
+    if not all(path.exists() for path in required):
+        return False
+    if len(list(paper_dir.glob("*.pdf"))) != 1:
+        return False
+    allowed = {"paper.json", "figures.json", "markdown.md", "images", "_SUCCESS"} | {
+        path.name for path in paper_dir.glob("*.pdf")
+    }
+    return all(child.name in allowed for child in paper_dir.iterdir())
 
 
 def parse_args() -> argparse.Namespace:
