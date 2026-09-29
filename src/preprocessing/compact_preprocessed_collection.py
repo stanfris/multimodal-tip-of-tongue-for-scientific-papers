@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from preprocessing.preprocessed import iter_preprocessed_paper_dirs
+from preprocessing.preprocessed import select_preprocessed_paper_dirs
 
 
 VISUAL_BLOCK_TYPES = {"chart", "image", "table"}
@@ -32,10 +32,36 @@ def main() -> None:
     image_count = 0
     image_type_counts: Counter[str] = Counter()
 
-    paper_dirs = iter_preprocessed_paper_dirs(preprocessed_dir)
+    print(
+        json.dumps(
+            {
+                "stage": "compact",
+                "status": "selecting",
+                "source": str(args.split_index) if args.split_index else "recursive_scan",
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    selection = select_preprocessed_paper_dirs(
+        preprocessed_dir,
+        split_index=args.split_index,
+        split=args.split,
+    )
+    paper_dirs = selection.paper_dirs
     total_papers = len(paper_dirs)
     print(
-        json.dumps({"stage": "compact", "status": "started", "total": total_papers}, sort_keys=True),
+        json.dumps(
+            {
+                "stage": "compact",
+                "status": "started",
+                "total": total_papers,
+                "expected": selection.expected_count,
+                "not_extracted": selection.missing_count,
+                "selection_source": selection.source,
+            },
+            sort_keys=True,
+        ),
         flush=True,
     )
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
@@ -208,6 +234,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory containing source PDFs. Defaults to ROOT/pdf_datasets with --root-dir, otherwise data/pdf_datasets.",
     )
+    parser.add_argument("--split-index", type=Path, default=None, help="Canonical train/test PDF split index.")
+    parser.add_argument("--split", choices=["train", "test", "train+test", "all"], default="train+test")
     parser.add_argument("--dry-run", action="store_true", help="Print the planned compaction without writing.")
     parser.add_argument("--workers", type=int, default=1, help="Number of paper directories to process concurrently.")
     parser.add_argument("--fail-fast", action="store_true", help="Stop on the first failed paper.")

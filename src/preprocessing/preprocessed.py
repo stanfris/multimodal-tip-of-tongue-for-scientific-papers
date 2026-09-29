@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,14 @@ DEFAULT_DATA_DIR = Path("data")
 DEFAULT_PREPROCESSED_PAPERS_DIR = DEFAULT_DATA_DIR / "preprocessed"
 DEFAULT_CLUES_DIR = DEFAULT_DATA_DIR / "clues"
 IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+
+
+@dataclass(frozen=True)
+class PreprocessedPaperSelection:
+    paper_dirs: list[Path]
+    expected_count: int
+    missing_count: int
+    source: str
 
 
 def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR) -> list[dict[str, Any]]:
@@ -47,6 +57,65 @@ def iter_preprocessed_paper_dirs(path: str | Path) -> list[Path]:
     if not root.exists():
         return []
     return sorted({markdown_path.parent for markdown_path in root.rglob("markdown.md")})
+
+
+def select_preprocessed_paper_dirs(
+    path: str | Path,
+    *,
+    split_index: Path | None = None,
+    split: str = "train+test",
+) -> PreprocessedPaperSelection:
+    if split_index is None:
+        paper_dirs = iter_preprocessed_paper_dirs(path)
+        return PreprocessedPaperSelection(paper_dirs, len(paper_dirs), 0, "recursive_scan")
+    root = _paper_root(Path(path))
+    expected = _split_paper_candidates(split_index, split)
+    paper_dirs = [
+        paper_dir
+        for subset, paper_ids in expected
+        if (paper_dir := _completed_candidate(root, subset, paper_ids))
+    ]
+    return PreprocessedPaperSelection(
+        paper_dirs=paper_dirs,
+        expected_count=len(expected),
+        missing_count=len(expected) - len(paper_dirs),
+        source=str(split_index),
+    )
+
+
+def _is_completed_extraction(paper_dir: Path) -> bool:
+    return all((paper_dir / name).exists() for name in ("_SUCCESS", "paper.json", "markdown.md"))
+
+
+def _completed_candidate(root: Path, subset: str, paper_ids: tuple[str, ...]) -> Path | None:
+    return next(
+        (
+            root / subset / paper_id
+            for paper_id in paper_ids
+            if _is_completed_extraction(root / subset / paper_id)
+        ),
+        None,
+    )
+
+
+def _split_paper_candidates(split_index: Path, split: str) -> list[tuple[str, tuple[str, ...]]]:
+    index = json.loads(split_index.read_text(encoding="utf-8"))
+    split_names = ("train", "test") if split in {"all", "train+test"} else (split,)
+    relative_paths: list[Path] = []
+    for split_name in split_names:
+        rows = index.get(split_name)
+        if not isinstance(rows, list) or not all(isinstance(row, str) for row in rows):
+            raise ValueError(f"Split index {split_index} does not contain a string list for {split_name!r}")
+        relative_paths.extend(Path(row) for row in rows)
+
+    candidates = []
+    for path in relative_paths:
+        paper_id = safe_path_name(path.with_suffix("").as_posix())
+        collision_id = f"{paper_id}.{sha256(path.as_posix().encode()).hexdigest()[:12]}"
+        candidates.append(
+            (safe_path_name(path.parts[0] if len(path.parts) > 1 else "Unknown"), (paper_id, collision_id))
+        )
+    return candidates
 
 
 def _minimal_paper_record(paper_dir: Path) -> dict[str, Any]:

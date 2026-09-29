@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from preprocessing.preprocessed import iter_preprocessed_paper_dirs
+from preprocessing.preprocessed import select_preprocessed_paper_dirs
 
 
 EQUATION_TYPES = {"equation", "equation_interline", "equation_inline"}
@@ -33,10 +33,36 @@ def main() -> None:
     skipped = 0
     failures: list[dict[str, str]] = []
 
-    paper_dirs = iter_preprocessed_paper_dirs(root)
+    print(
+        json.dumps(
+            {
+                "stage": "reduce",
+                "status": "selecting",
+                "source": str(args.split_index) if args.split_index else "recursive_scan",
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    selection = select_preprocessed_paper_dirs(
+        root,
+        split_index=args.split_index,
+        split=args.split,
+    )
+    paper_dirs = selection.paper_dirs
     total_papers = len(paper_dirs)
     print(
-        json.dumps({"stage": "reduce", "status": "started", "total": total_papers}, sort_keys=True),
+        json.dumps(
+            {
+                "stage": "reduce",
+                "status": "started",
+                "total": total_papers,
+                "expected": selection.expected_count,
+                "not_extracted": selection.missing_count,
+                "selection_source": selection.source,
+            },
+            sort_keys=True,
+        ),
         flush=True,
     )
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
@@ -219,6 +245,8 @@ def parse_args() -> argparse.Namespace:
         default=Path("data/preprocessed_analysis_report.json"),
         help="Report JSON path. The report is printed even when this is set.",
     )
+    parser.add_argument("--split-index", type=Path, default=None, help="Canonical train/test PDF split index.")
+    parser.add_argument("--split", choices=["train", "test", "train+test", "all"], default="train+test")
     parser.add_argument("--dry-run", action="store_true", help="Report planned changes without writing files.")
     parser.add_argument("--workers", type=int, default=1, help="Number of paper directories to process concurrently.")
     parser.add_argument("--fail-fast", action="store_true", help="Stop on the first failed paper.")

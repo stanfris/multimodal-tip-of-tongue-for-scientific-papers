@@ -123,6 +123,10 @@ This reads MinerU outputs from `/path/to/corpus-root/processed` and source PDFs
 from `/path/to/corpus-root/pdf_datasets`. The processed tree may either contain
 `papers/<domain>/<paper_id>` or direct domain folders such as
 `ACL/<paper_id>`, `Biology/<paper_id>`, and so on.
+When `ROOT/data/splits/pdf_dataset_split.json` exists, preprocessing iterates
+its train/test entries directly instead of recursively scanning the processed
+tree. Missing extraction outputs are counted as `not_extracted`; available
+papers are processed. Pass `--split train` or `--split test` to select one side.
 Both stages print discovered-paper totals and periodic progress records. Use
 `--progress-every 1` for per-paper updates or `--progress-every 0` to disable
 progress after the initial discovery record.
