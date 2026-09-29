@@ -559,8 +559,8 @@ with tarfile.open("huggingface_dataset/" + row.shard, "r") as tar:
 ```
 
 Create a random fixed-seed train/test split from those five PDF folders. By
-default, each dataset group contributes 2,000 train PDFs and 100 test PDFs, for
-10,000 train PDFs and 500 test PDFs in total:
+default, each dataset group contributes 2,200 train PDFs and 110 test PDFs, for
+11,000 train PDFs and 550 test PDFs in total:
 
 ```bash
 scripts/pdf_corpus/build_pdf_dataset_split.sh \
@@ -737,9 +737,10 @@ checkout, and environment variables such as
 launcher sets both MinerU's server request limit and the extraction caller's
 in-flight limit from `MINERU_CONCURRENCY`, which defaults to `8`.
 
-The A100 job processes every discovered PDF by default (`SPLIT=full`). Set
-`SPLIT=train`, `SPLIT=test`, or `SPLIT=train+test` to use the corresponding
-entries from `SPLIT_INDEX`. Every launch reports its selected scope and resume
+The A100 job processes every discovered PDF by default. Pass `--split train`,
+`--split test`, or `--split train+test` after the `.job` path to use the
+corresponding entries from the split index. Override its location with
+`--split-index PATH`. Every launch reports its selected scope and resume
 behavior before starting the MinerU server.
 
 Completed papers are skipped on restart. Each successful paper has:

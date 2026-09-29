@@ -16,10 +16,10 @@ def make_pdf_dataset(root, dataset: str, count: int) -> None:
 
 
 def test_default_split_sizes_are_per_dataset_group() -> None:
-    assert DEFAULT_TRAIN_SIZE_PER_DATASET == 2000
-    assert DEFAULT_TEST_SIZE_PER_DATASET == 100
-    assert len(DEFAULT_DATASETS) * DEFAULT_TRAIN_SIZE_PER_DATASET == 10_000
-    assert len(DEFAULT_DATASETS) * DEFAULT_TEST_SIZE_PER_DATASET == 500
+    assert DEFAULT_TRAIN_SIZE_PER_DATASET == 2200
+    assert DEFAULT_TEST_SIZE_PER_DATASET == 110
+    assert len(DEFAULT_DATASETS) * DEFAULT_TRAIN_SIZE_PER_DATASET == 11_000
+    assert len(DEFAULT_DATASETS) * DEFAULT_TEST_SIZE_PER_DATASET == 550
 
 
 def test_root_dir_sets_scratch_layout_defaults(tmp_path) -> None:
