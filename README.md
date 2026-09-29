@@ -111,6 +111,19 @@ Run `start_mineru_router.sh` in a separate terminal before
 `run_mineru_full_extraction.sh`. The clue and query stages read directly
 from `data/preprocessed` or `data/preprocessed/papers`.
 
+For an external corpus root, pass the root once and let the preprocessing
+wrapper derive the expected folders:
+
+```bash
+scripts/preprocessing/reduce_and_compact_preprocessed.sh \
+  --root-dir /path/to/corpus-root
+```
+
+This reads MinerU outputs from `/path/to/corpus-root/processed` and source PDFs
+from `/path/to/corpus-root/pdf_datasets`. The processed tree may either contain
+`papers/<domain>/<paper_id>` or direct domain folders such as
+`ACL/<paper_id>`, `Biology/<paper_id>`, and so on.
+
 The Bash scripts are intentionally thin wrappers for the Python entry points.
 They forward additional command-line arguments, so standard and ad hoc runs
 can use the same launchers.
@@ -762,7 +775,7 @@ output in MinerU responses.
 
 ## Figure Descriptions
 
-Generate Qwen-VL visual descriptions from preprocessed ACL subset papers:
+Generate Qwen-VL visual descriptions from preprocessed papers:
 
 ```bash
 scripts/clue_generation/describe_all_figures.sh

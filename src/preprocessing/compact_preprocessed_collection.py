@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compact preprocessed paper directories to markdown, source PDF, and visual crops."""
+"""Compact preprocessed paper directories to metadata, markdown, source PDF, and visual crops."""
 
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ VISUAL_BLOCK_TYPES = {"chart", "image", "table"}
 def main() -> None:
     args = parse_args()
     preprocessed_dir = args.preprocessed_dir
-    pdf_dir = args.pdf_dir
+    pdf_dir = args.pdf_dir or (args.root_dir / "pdf_datasets" if args.root_dir is not None else Path("data/pdf_datasets"))
     if not preprocessed_dir.exists():
         raise SystemExit(f"Preprocessed directory does not exist: {preprocessed_dir}")
     if not pdf_dir.exists():
-        raise SystemExit(f"ACL subset PDF directory does not exist: {pdf_dir}")
+        raise SystemExit(f"PDF dataset directory does not exist: {pdf_dir}")
 
     processed = 0
     skipped = 0
@@ -96,7 +96,9 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
         if not v2_path:
             raise RuntimeError(f"No v2 content list found for {paper_id}")
 
-        visual_sources = collect_visual_sources(v2_path)
+        visual_sources = collect_visual_sources_from_figures(paper_dir, paper)
+        if not visual_sources:
+            visual_sources = collect_visual_sources(v2_path)
         staged_dir = paper_dir / ".compact_images_tmp"
         if staged_dir.exists():
             shutil.rmtree(staged_dir)
@@ -104,11 +106,13 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
             staged_dir.mkdir()
 
         copied_images: list[dict[str, Any]] = []
+        used_destination_names: set[str] = set()
         for source in visual_sources:
-            source_path = resolve_source_image(v2_path.parent, source["source"])
+            source_path = resolve_source_image(Path(source.get("base_dir", v2_path.parent)), source["source"])
             if not source_path.exists():
                 raise RuntimeError(f"Missing source image for {paper_id}: {source_path}")
-            destination_name = destination_image_name(source_path)
+            destination_name = destination_image_name(source_path, used_destination_names)
+            used_destination_names.add(destination_name)
             destination_path = staged_dir / destination_name
             if not dry_run:
                 shutil.copy2(source_path, destination_path)
@@ -116,15 +120,15 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
                 {
                     "type": source["type"],
                     "page_idx": source["page_idx"],
+                    "figure_id": source.get("figure_id"),
                     "source": source["source"],
                     "destination": f"images/{destination_name}",
                 }
             )
 
-        source_pdf_value = paper.get("source_pdf")
-        source_pdf = Path(str(source_pdf_value)) if source_pdf_value else pdf_dir / f"{paper_id}.pdf"
+        source_pdf = resolve_source_pdf(paper, pdf_dir, paper_id)
         if not source_pdf.exists():
-            raise RuntimeError(f"Missing ACL subset PDF for {paper_id}: {source_pdf}")
+            raise RuntimeError(f"Missing source PDF for {paper_id}: {source_pdf}")
 
         if not dry_run:
             final_images_dir = paper_dir / "images"
@@ -132,7 +136,13 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
                 shutil.rmtree(final_images_dir)
             staged_dir.rename(final_images_dir)
             shutil.copy2(source_pdf, paper_dir / source_pdf.name)
-            remove_unwanted_files(paper_dir, keep={markdown_path.name, source_pdf.name, "images"})
+            updated_paper, updated_figures = update_compacted_metadata(paper, copied_images, source_pdf.name)
+            write_json(paper_path, updated_paper)
+            write_json(paper_dir / "figures.json", updated_figures)
+            remove_unwanted_files(
+                paper_dir,
+                keep={markdown_path.name, source_pdf.name, "images", "paper.json", "figures.json", "_SUCCESS"},
+            )
 
         return {
             "status": "processed",
@@ -149,11 +159,18 @@ def compact_paper_dir(paper_dir: Path, pdf_dir: Path, dry_run: bool) -> dict[str
 
 
 def is_compacted_paper_dir(paper_dir: Path) -> bool:
-    if not (paper_dir / "markdown.md").exists() or not (paper_dir / "images").is_dir():
+    if (
+        not (paper_dir / "markdown.md").exists()
+        or not (paper_dir / "paper.json").exists()
+        or not (paper_dir / "figures.json").exists()
+        or not (paper_dir / "images").is_dir()
+    ):
         return False
     if len(list(paper_dir.glob("*.pdf"))) != 1:
         return False
-    allowed = {"markdown.md", "images"} | {path.name for path in paper_dir.glob("*.pdf")}
+    allowed = {"markdown.md", "paper.json", "figures.json", "images", "_SUCCESS"} | {
+        path.name for path in paper_dir.glob("*.pdf")
+    }
     return all(child.name in allowed for child in paper_dir.iterdir())
 
 
@@ -166,10 +183,16 @@ def parse_args() -> argparse.Namespace:
         help="Root directory containing one subdirectory per paper.",
     )
     parser.add_argument(
+        "--root-dir",
+        type=Path,
+        default=None,
+        help="Corpus root containing pdf_datasets/. Used to derive --pdf-dir when --pdf-dir is omitted.",
+    )
+    parser.add_argument(
         "--pdf-dir",
         type=Path,
-        default=Path("data/acl_subset/pdfs"),
-        help="Directory containing ACL subset PDFs named <paper_id>.pdf.",
+        default=None,
+        help="Directory containing source PDFs. Defaults to ROOT/pdf_datasets with --root-dir, otherwise data/pdf_datasets.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the planned compaction without writing.")
     parser.add_argument("--workers", type=int, default=1, help="Number of paper directories to process concurrently.")
@@ -207,6 +230,37 @@ def collect_visual_sources(v2_path: Path) -> list[dict[str, Any]]:
     return visual_sources
 
 
+def collect_visual_sources_from_figures(paper_dir: Path, paper: dict[str, Any]) -> list[dict[str, Any]]:
+    visual_sources = []
+    for figure in paper.get("figures") or []:
+        source = image_source_from_figure(figure)
+        if not source:
+            continue
+        source_path = Path(source)
+        if source_path.is_absolute():
+            relative_source = str(source_path)
+        else:
+            relative_source = str((paper_dir / source_path).relative_to(paper_dir))
+        visual_sources.append(
+            {
+                "type": str(figure.get("type") or "image"),
+                "page_idx": figure.get("page_idx"),
+                "figure_id": figure.get("figure_id"),
+                "source": relative_source,
+                "base_dir": str(paper_dir),
+            }
+        )
+    return visual_sources
+
+
+def image_source_from_figure(figure: dict[str, Any]) -> str | None:
+    for key in ("image_relpath", "image_path", "path"):
+        value = figure.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def image_source_from_block(block: dict[str, Any]) -> str | None:
     for key in ("img_path", "image_path", "path"):
         value = block.get(key)
@@ -233,8 +287,73 @@ def resolve_source_image(base_dir: Path, source: str) -> Path:
     return base_dir / path
 
 
-def destination_image_name(source_path: Path) -> str:
-    return source_path.name
+def destination_image_name(source_path: Path, used_names: set[str]) -> str:
+    candidate = source_path.name
+    if candidate not in used_names:
+        return candidate
+    stem = source_path.stem or "image"
+    suffix = source_path.suffix
+    index = 2
+    while True:
+        candidate = f"{stem}-{index}{suffix}"
+        if candidate not in used_names:
+            return candidate
+        index += 1
+
+
+def resolve_source_pdf(paper: dict[str, Any], pdf_dir: Path, paper_id: str) -> Path:
+    candidates = []
+    source_pdf_value = paper.get("source_pdf")
+    if source_pdf_value:
+        candidates.append(Path(str(source_pdf_value)).expanduser())
+    source_pdf_relpath = paper.get("source_pdf_relpath")
+    if source_pdf_relpath:
+        candidates.append(pdf_dir / str(source_pdf_relpath))
+    candidates.append(pdf_dir / f"{paper_id}.pdf")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def update_compacted_metadata(
+    paper: dict[str, Any],
+    copied_images: list[dict[str, Any]],
+    source_pdf_name: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    by_figure_id = {
+        str(image["figure_id"]): image
+        for image in copied_images
+        if image.get("figure_id") is not None
+    }
+    by_source = {str(image["source"]): image for image in copied_images}
+
+    updated_figures = []
+    for figure in paper.get("figures") or []:
+        updated = dict(figure)
+        copied = None
+        figure_id = updated.get("figure_id")
+        if figure_id is not None:
+            copied = by_figure_id.get(str(figure_id))
+        copied = copied or by_source.get(str(image_source_from_figure(updated)))
+        if copied is not None:
+            updated["image_relpath"] = copied["destination"]
+            updated["image_path"] = copied["destination"]
+            updated["filename"] = Path(str(copied["destination"])).name
+        updated_figures.append(updated)
+
+    updated_paper = dict(paper)
+    updated_paper["pdf_relpath"] = source_pdf_name
+    updated_paper["source_pdf_copy_relpath"] = source_pdf_name
+    updated_paper["figures"] = updated_figures
+    updated_paper.pop("structured_outputs", None)
+    updated_paper.pop("mineru_raw_relpath", None)
+    return updated_paper, updated_figures
+
+
+def write_json(path: Path, data: Any) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def remove_unwanted_files(paper_dir: Path, keep: set[str]) -> None:
