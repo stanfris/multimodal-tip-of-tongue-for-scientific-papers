@@ -34,6 +34,11 @@ def main() -> None:
     failures: list[dict[str, str]] = []
 
     paper_dirs = iter_preprocessed_paper_dirs(root)
+    total_papers = len(paper_dirs)
+    print(
+        json.dumps({"stage": "reduce", "status": "started", "total": total_papers}, sort_keys=True),
+        flush=True,
+    )
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
         futures = [executor.submit(reduce_paper_dir, paper_dir, args.dry_run) for paper_dir in paper_dirs]
         for index, future in enumerate(as_completed(futures), start=1):
@@ -60,10 +65,19 @@ def main() -> None:
             aggregate_image_extensions.update(paper_summary["image_extensions"])
             aggregate_equation_types.update(paper_summary["equation_type_counts"])
             equation_count += paper_summary["equation_count"]
-            if args.progress_every and index % args.progress_every == 0:
+            if should_report_progress(index, total_papers, args.progress_every):
                 print(
                     json.dumps(
-                        {"stage": "reduce", "seen": index, "processed": processed, "skipped": skipped, "failures": len(failures)},
+                        {
+                            "stage": "reduce",
+                            "status": "running" if index < total_papers else "complete",
+                            "seen": index,
+                            "total": total_papers,
+                            "percent": round((index / total_papers) * 100, 1) if total_papers else 100.0,
+                            "processed": processed,
+                            "skipped": skipped,
+                            "failures": len(failures),
+                        },
                         sort_keys=True,
                     ),
                     flush=True,
@@ -183,6 +197,12 @@ def is_compacted_paper_dir(paper_dir: Path) -> bool:
         path.name for path in paper_dir.glob("*.pdf")
     }
     return all(child.name in allowed for child in paper_dir.iterdir())
+
+
+def should_report_progress(index: int, total: int, progress_every: int) -> bool:
+    if progress_every <= 0:
+        return False
+    return index == 1 or index == total or index % progress_every == 0
 
 
 def parse_args() -> argparse.Namespace:

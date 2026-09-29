@@ -123,6 +123,9 @@ This reads MinerU outputs from `/path/to/corpus-root/processed` and source PDFs
 from `/path/to/corpus-root/pdf_datasets`. The processed tree may either contain
 `papers/<domain>/<paper_id>` or direct domain folders such as
 `ACL/<paper_id>`, `Biology/<paper_id>`, and so on.
+Both stages print discovered-paper totals and periodic progress records. Use
+`--progress-every 1` for per-paper updates or `--progress-every 0` to disable
+progress after the initial discovery record.
 
 The Bash scripts are intentionally thin wrappers for the Python entry points.
 They forward additional command-line arguments, so standard and ad hoc runs

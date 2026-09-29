@@ -33,6 +33,11 @@ def main() -> None:
     image_type_counts: Counter[str] = Counter()
 
     paper_dirs = iter_preprocessed_paper_dirs(preprocessed_dir)
+    total_papers = len(paper_dirs)
+    print(
+        json.dumps({"stage": "compact", "status": "started", "total": total_papers}, sort_keys=True),
+        flush=True,
+    )
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
         futures = [
             executor.submit(compact_paper_dir, paper_dir, pdf_dir, args.dry_run)
@@ -51,10 +56,19 @@ def main() -> None:
                 if args.fail_fast:
                     raise RuntimeError(f"{result['paper_dir']}: {result['error']}")
 
-            if args.progress_every and index % args.progress_every == 0:
+            if should_report_progress(index, total_papers, args.progress_every):
                 print(
                     json.dumps(
-                        {"stage": "compact", "seen": index, "processed": processed, "skipped": skipped, "failures": len(failures)},
+                        {
+                            "stage": "compact",
+                            "status": "running" if index < total_papers else "complete",
+                            "seen": index,
+                            "total": total_papers,
+                            "percent": round((index / total_papers) * 100, 1) if total_papers else 100.0,
+                            "processed": processed,
+                            "skipped": skipped,
+                            "failures": len(failures),
+                        },
                         sort_keys=True,
                     ),
                     flush=True,
@@ -371,6 +385,12 @@ def count_by_type(images: list[dict[str, Any]]) -> dict[str, int]:
     for image in images:
         counts[str(image["type"])] += 1
     return {key: value for key, value in counts.items() if value}
+
+
+def should_report_progress(index: int, total: int, progress_every: int) -> bool:
+    if progress_every <= 0:
+        return False
+    return index == 1 or index == total or index % progress_every == 0
 
 
 if __name__ == "__main__":
