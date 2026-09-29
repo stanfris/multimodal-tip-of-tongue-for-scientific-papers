@@ -104,8 +104,8 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
 
     assert "#SBATCH --array" not in script
     assert "SLURM_ARRAY_TASK_ID" not in script
-    assert "#SBATCH --output=scripts/extraction/slurm/mineru_extract_%j.out" in script
-    assert "#SBATCH --error=scripts/extraction/slurm/mineru_extract_%j.err" in script
+    assert "#SBATCH --output=logs/extraction/slurm/mineru_extract_%j.out" in script
+    assert "#SBATCH --error=logs/extraction/slurm/mineru_extract_%j.err" in script
     assert 'DEFAULT_ROOT_DIR="$SLURM_SUBMIT_DIR"' in script
     assert "--root-dir)" in script
     assert 'ROOT_DIR="${ROOT_DIR_ARG:-${ROOT_DIR:-$DEFAULT_ROOT_DIR}}"' in script
@@ -121,8 +121,8 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     assert 'export MINERU_API_MAX_CONCURRENT_REQUESTS="$MINERU_CONCURRENCY"' in script
     assert '--max-in-flight "$MINERU_CONCURRENCY"' in script
     assert 'source "$ROOT_DIR/scripts/extraction/mineru_server_launcher.sh"' in script
-    assert 'SERVER_LOG="${MINERU_SERVER_LOG:-scripts/extraction/slurm/${RUN_ID}.server.log}"' in script
-    assert 'CALLER_LOG="${MINERU_CALLER_LOG:-scripts/extraction/slurm/${RUN_ID}.caller.log}"' in script
+    assert 'SERVER_LOG="${MINERU_SERVER_LOG:-logs/extraction/slurm/${RUN_ID}.server.log}"' in script
+    assert 'CALLER_LOG="${MINERU_CALLER_LOG:-logs/extraction/slurm/${RUN_ID}.caller.log}"' in script
     assert 'SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV_DIR/bin/mineru-router' in script
     assert '--output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"' in script
     assert "mineru_run_caller_with_server" in script

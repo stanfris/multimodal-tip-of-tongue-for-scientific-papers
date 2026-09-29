@@ -9,11 +9,24 @@ import yaml
 
 
 ManagedSet = Literal["train", "test"]
-DEFAULT_SETTINGS_PATH = Path("configs/settings.yaml")
+DEFAULT_SETTINGS_PATH = Path("config/config.yaml")
+HYDRA_SETTINGS_PATH = Path(__file__).resolve().parents[2] / DEFAULT_SETTINGS_PATH
 
 
 def load_managed_settings(path: Path) -> tuple[dict[str, Any], Path]:
     settings_path = path.expanduser().resolve()
+    if settings_path == HYDRA_SETTINGS_PATH:
+        from hydra import compose, initialize_config_dir
+        from omegaconf import OmegaConf
+
+        from hydra_run import absolute, managed_settings
+
+        with initialize_config_dir(config_dir=str(settings_path.parent), version_base="1.3"):
+            config = OmegaConf.to_container(compose(config_name="config"), resolve=True)
+        assert isinstance(config, dict)
+        repo_root = settings_path.parent.parent
+        data_root = absolute(config["dataset"]["root"], repo_root)
+        return managed_settings(config, data_root, repo_root), settings_path
     raw = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"Managed settings must be a mapping: {settings_path}")

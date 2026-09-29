@@ -1,0 +1,6 @@
+name: acl_visual_tip_of_the_tongue
+root: ${launcher.base_dir}
+preprocessed: preprocessed
+clues_dir: clues
+visual_interpretations: null
+textual_interpretations: null

@@ -22,6 +22,18 @@ archive/
 
 
 huggingface_dataset/
+runs/
+/logs/*
+!/logs/extraction/
+!/logs/preprocessing/
+/logs/extraction/*
+!/logs/extraction/slurm/
+/logs/extraction/slurm/*
+!/logs/extraction/slurm/.gitkeep
+/logs/preprocessing/*
+!/logs/preprocessing/slurm/
+/logs/preprocessing/slurm/*
+!/logs/preprocessing/slurm/.gitkeep
 
 # Generated Slurm and MinerU runtime output
 /mineru_extract_*.out

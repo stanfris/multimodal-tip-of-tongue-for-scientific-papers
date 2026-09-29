@@ -1,12 +1,10 @@
-# ACL Set Dataset Generation
+# Multimodal Tip-of-the-Tongue Retrieval for Scientific Papers
 
-This repository builds a persisted research dataset from a curated ACL
-Anthology subset. The current path starts from official ACL Anthology XML
-metadata, downloads the selected PDFs, extracts markdown and figures with
-MinerU, then generates clue and query artifacts directly from the preprocessed
-paper directories.
+This repository is part of the paper `Multimodal Tip-of-the-Tongue Retrieval for Scientific Papers`. Here, we provide all of the code necessary to generate all components of our dataset, in order to provide a basis for future work in generating queries and documents. We also provide instructions to simply download our dataset, such that you can use it directly. 
 
 ## Repository Layout
+This repository contains code for each step, and source files, scripts, and results are all organized by these steps. The core steps include the downloading of the raw documents, extraction of figures and text, the generation of clues, generation of queries, and the judging of queries. 
+
 
 ```text
 src/
@@ -34,6 +32,9 @@ scripts/
   review/                # Query review application launcher
   reporting/             # Generated-artifact reporting wrappers
   packaging/             # Hugging Face upload/download wrappers
+
+config/                   # Hydra launcher, task, dataset, and generation groups
+logs/                     # Runtime logs grouped by script folder
 ```
 
 Generated data is intentionally ignored by Git:
@@ -75,6 +76,80 @@ To run one command without changing the current shell:
 scripts/environment/run_in_env.sh main python --version
 scripts/environment/run_in_env.sh mineru mineru --version
 ```
+
+## Hydra Configuration and Launching
+
+Run the managed clue, query, and preprocessing stages through `hydra_entry`
+from the repository root. Install the main environment with
+`scripts/environment/sync_env.sh` first. The `config/` tree is the source of
+truth for these settings:
+
+| File or group | Settings |
+| --- | --- |
+| `config/config.yaml` | Defaults, dry-run flag, and log root |
+| `config/dataset/default.yaml` | Dataset name, base directory, and artifact folders |
+| `config/visual_descriptions/default.yaml` | Figure prompt, model, selection, and generation |
+| `config/textual_descriptions/default.yaml` | Textual clue prompt, model, selection, and generation |
+| `config/visual_query/default.yaml` | Query and judgement prompts, models, selection, output, and train/test sets |
+| `config/task/*.yaml` | CLI command, set, extra arguments, and script log folder |
+| `config/launcher/*.yaml` | Base directory, Python, scheduler resources, and model device settings |
+
+Select a task and change only `launcher=...` to run it on another machine:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m hydra_entry -m task=describe_figures launcher=local_gpu
+PYTHONPATH=src .venv/bin/python -m hydra_entry -m task=describe_figures launcher=slurm_a100
+PYTHONPATH=src .venv/bin/python -m hydra_entry -m task=describe_figures launcher=slurm_cpu
+PYTHONPATH=src .venv/bin/python -m hydra_entry -m task=describe_figures launcher=pbs_rt_hg
+PYTHONPATH=src .venv/bin/python -m hydra_entry -m task=describe_figures launcher=pbs_rt_hc
+```
+
+| Launcher | Execution | Default data root | Resources |
+| --- | --- | --- | --- |
+| `local_gpu` | Local Hydra basic launcher | `./data` | 1 GPU, 8 CPUs, 32 GB |
+| `slurm_a100` | Submitit Slurm, `gpu_a100` | `/scratch-shared/sfris1` | 1 GPU, 16 CPUs, 32 GB, 3 hours |
+| `slurm_cpu` | Submitit Slurm, `rome` | `/scratch-shared/sfris1` | 0 GPUs, 16 CPUs, 28 GB, 3 hours |
+| `pbs_rt_hg` | PBS `qsub`, `rt_HG` | `$HOME/visual_tip_of_the_tongue_data` | 1 GPU, 16 CPUs, 32 GB, 3 hours |
+| `pbs_rt_hc` | PBS `qsub`, `rt_HC` | `$HOME/visual_tip_of_the_tongue_data` | 0 GPUs, 16 CPUs, 32 GB, 3 hours |
+
+Available tasks are `describe_figures`, `describe_textual_clues`,
+`generate_queries`, `judge_queries`, and `preprocess`. For example:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m hydra_entry -m task=generate_queries launcher=local_gpu task.set=test
+PYTHONPATH=src .venv/bin/python -m hydra_entry -m task=generate_queries launcher=local_gpu 'task.args=[--limit,20]'
+```
+
+Override a managed setting directly, such as
+`visual_query.model.max_tokens=400`. Set `VTT_DATA_ROOT` for a different data
+base directory, `VTT_RUN_ROOT` for run metadata, or `VTT_LOG_ROOT` for logs.
+`VTT_PYTHON` overrides the worker interpreter for local and PBS runs. Relative
+paths resolve from the repository root. Each launcher also selects the matching
+GPU or CPU model settings.
+
+The Slurm profiles use `hydra-submitit-launcher` and define module setup under
+`hydra.launcher.setup`. The A100 profile purges modules, loads `2023` and
+`CUDA/12.4.0`, then activates the main `.venv` through
+`scripts/environment/activate_env.sh main`. The CPU profile uses the same
+activation after loading `2023`. This setup is only in the Slurm profiles;
+local and PBS invoke the configured Python directly. The checkout and `.venv`
+must be visible to compute nodes at the same path. If a Slurm installation
+needs another module stack or interpreter, update that profile's `setup` and
+`launcher.python` together.
+
+For local and PBS, add `dry_run=true` to print the execution plan without
+running or submitting it. To inspect Slurm resources without submitting a job,
+omit `-m` and use `--cfg hydra -p hydra.launcher --resolve`. Slurm launches
+need `-m` so Hydra invokes Submitit.
+
+Each run writes `plan.json` and an absolute-path settings snapshot under
+`runs/<task>/<timestamp>/`; PBS also writes `job.sh` there. Hydra, Submitit,
+PBS, and worker logs are grouped under
+`logs/<script-folder>/<task>/<timestamp>/`: clue tasks use
+`clue_generation`, query tasks use `query_generation`, and preprocessing uses
+`preprocessing`. Existing direct wrappers still work and compose the local
+Hydra defaults for managed settings. Download, MinerU extraction, reporting,
+and packaging retain their direct script and CLI entry points.
 
 ## Query Review UI
 
@@ -145,12 +220,14 @@ uv run dataset-generation download-documents --help
 Thin shell wrappers for each document corpus live under
 `scripts/document_downloads/`.
 
-Figure descriptions, textual clues, query generation, and query judgement are managed by
-`configs/settings.yaml`. That file contains the overall dataset pointer,
-dataset paths, stage-specific prompt/model/generation settings,
-and the standardized train/test query-set definitions. Runtime overrides for
-managed query settings are intentionally not supported, except for the
-`--limit` cap on total queries per mode, including existing queries when resuming.
+Figure descriptions, textual clues, query generation, and query judgement are
+managed by the Hydra groups under `config/`. The `dataset`,
+`visual_descriptions`, `textual_descriptions`, and `visual_query` groups contain
+dataset paths, prompt/model/generation settings, and train/test query-set
+definitions. Direct CLI commands compose the local Hydra defaults. Hydra
+launches can override any value, for example
+`visual_query.model.max_tokens=400` or
+`visual_descriptions.selection.limit=10`.
 
 Generate the training set by default, or explicitly select the test set:
 
@@ -167,9 +244,8 @@ scripts/query_generation/judge_train_queries.sh --set test
 ```
 
 Train/test membership comes from the canonical PDF split and is retained in
-each extracted `paper.json`. For standard full-run behavior, edit
-`visual_descriptions`, `textual_descriptions`, `visual_query`, or
-`visual_query.judgement` in `configs/settings.yaml`. The legacy
+each extracted `paper.json`. For standard full-run behavior, edit the
+corresponding YAML files under `config/`. The legacy
 `document_splits` index generator is no longer required.
 
 The clue-generation scripts write per-paper clue files:
@@ -672,7 +748,7 @@ scripts/extraction/run_mineru_full_extraction_gpu.sh --split train --limit 20 --
 
 The launcher defaults to port `8002` and writes separate server/caller logs.
 Server output stays in the server log, while extraction progress is both shown
-live and appended to the caller log under `logs/mineru/local/`. Override
+live and appended to the caller log under `logs/extraction/local/`. Override
 launcher settings before normal caller arguments:
 
 ```bash
@@ -716,15 +792,15 @@ When submitting from outside the repository root, set the checkout explicitly:
 ```bash
 repo_root=/path/to/repo
 sbatch \
-  --output="$repo_root/scripts/extraction/slurm/mineru_extract_%j.out" \
-  --error="$repo_root/scripts/extraction/slurm/mineru_extract_%j.err" \
+  --output="$repo_root/logs/extraction/slurm/mineru_extract_%j.out" \
+  --error="$repo_root/logs/extraction/slurm/mineru_extract_%j.err" \
   "$repo_root/scripts/extraction/slurm/run_mineru_full_extraction_a100.job" \
   --root-dir "$repo_root"
 ```
 
-The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a 30-minute
+The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a three-hour
 time limit. It chooses a localhost port and writes Slurm stdout/stderr plus the
-server/caller logs to `scripts/extraction/slurm/`. It uses `$SLURM_TMPDIR` for
+server/caller logs to `logs/extraction/slurm/`. It uses `$SLURM_TMPDIR` for
 temporary files when available. Live extraction progress is written to both
 the caller log and `mineru_extract_<job>.out`; MinerU server output remains only
 in the server log. Input and split-index paths default to locations beneath
@@ -889,5 +965,5 @@ The current implementation is deterministic and template-based. It deliberately 
 Run fixture-based tests without downloading full datasets:
 
 ```bash
-uv run pytest
+.venv/bin/python -m pytest
 ```

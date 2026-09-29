@@ -4,4 +4,4 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
-uv run python -m queries.judge_queries --settings configs/settings.yaml "$@"
+uv run python -m queries.judge_queries "$@"

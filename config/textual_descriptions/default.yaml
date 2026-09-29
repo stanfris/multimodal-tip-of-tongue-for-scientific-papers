@@ -1,0 +1,26 @@
+name: qwen3_textual_clue_description
+prompt:
+  name: textual_interpretation
+  version: v1
+  template: prompts/textual_interpretation.v1.txt
+  variables:
+  - paper_text
+model:
+  provider: transformers
+  name: Qwen/Qwen3-4B
+selection:
+  all: true
+  start_index: 0
+  end_index: null
+  limit: null
+  resume: true
+  overwrite: false
+generation:
+  max_tokens: 600
+  max_markdown_chars: 12000
+  temperature: 0.0
+  thinking: false
+  batch_size: 8
+  device_map: ${launcher.device_map}
+  dtype: ${launcher.dtype}
+  attn_implementation: ${launcher.attn_implementation}

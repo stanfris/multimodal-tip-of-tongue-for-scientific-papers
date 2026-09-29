@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - override /hydra/launcher: basic
+dataset_dir: ${oc.env:VTT_DATA_ROOT,${oc.env:HOME}/visual_tip_of_the_tongue_data}
+launcher:
+  kind: pbs
+  base_dir: ${dataset_dir}
+  run_dir: ${oc.env:VTT_RUN_ROOT,./runs}
+  python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
+  queue: rt_HG
+  gpus: 1
+  cpus: 16
+  memory: 32gb
+  walltime: 03:00:00
+  device_map: auto
+  dtype: bfloat16
+  attn_implementation: sdpa

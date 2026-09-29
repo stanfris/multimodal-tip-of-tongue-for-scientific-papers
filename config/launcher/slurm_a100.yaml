@@ -1,0 +1,31 @@
+# @package _global_
+
+defaults:
+  - override /hydra/launcher: submitit_slurm
+dataset_dir: ${oc.env:VTT_DATA_ROOT,/scratch-shared/sfris1}
+launcher:
+  kind: slurm
+  base_dir: ${dataset_dir}
+  run_dir: ${oc.env:VTT_RUN_ROOT,./runs}
+  python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
+  partition: gpu_a100
+  gpus: 1
+  cpus: 16
+  memory: 32G
+  walltime: 03:00:00
+  device_map: auto
+  dtype: bfloat16
+  attn_implementation: sdpa
+hydra:
+  launcher:
+    timeout_min: 180
+    cpus_per_task: 16
+    gpus_per_node: 1
+    mem_gb: 32
+    partition: gpu_a100
+    array_parallelism: 1000
+    setup:
+      - module purge
+      - module load 2023
+      - module load CUDA/12.4.0
+      - source scripts/environment/activate_env.sh main

@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=28G
 #SBATCH --time=03:00:00
-#SBATCH --output=scripts/preprocessing/slurm/compact_preproc_%j.out
-#SBATCH --error=scripts/preprocessing/slurm/compact_preproc_%j.err
+#SBATCH --output=logs/preprocessing/slurm/compact_preproc_%j.out
+#SBATCH --error=logs/preprocessing/slurm/compact_preproc_%j.err
 
 set -euo pipefail
 
@@ -75,7 +75,7 @@ if [[ ! -f "$REPO_DIR/scripts/preprocessing/reduce_and_compact_preprocessed.sh" 
   exit 2
 fi
 
-mkdir -p scripts/preprocessing/slurm
+mkdir -p logs/preprocessing/slurm
 
 PREPROCESS_CMD=(
   "$REPO_DIR/scripts/preprocessing/reduce_and_compact_preprocessed.sh"

@@ -1,0 +1,16 @@
+# @package _global_
+
+task:
+  name: judge_queries
+  command: judge-queries
+  set: train
+  args: []
+  script_folder: query_generation
+hydra:
+  job:
+    name: judge_queries
+  run:
+    dir: ${oc.env:VTT_LOG_ROOT,./logs}/query_generation/judge_queries/${now:%Y%m%dT%H%M%S}
+  sweep:
+    dir: ${oc.env:VTT_LOG_ROOT,./logs}/query_generation/judge_queries/${now:%Y%m%dT%H%M%S}
+    subdir: ${hydra.job.num}

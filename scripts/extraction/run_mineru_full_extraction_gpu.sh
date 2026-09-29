@@ -33,8 +33,8 @@ MINERU_PORT="${MINERU_PORT:-8002}"
 MINERU_STARTUP_TIMEOUT="${MINERU_STARTUP_TIMEOUT:-600}"
 MINERU_VENV="${MINERU_VENV:-.venv-mineru}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ).$$}"
-SERVER_LOG="${MINERU_SERVER_LOG:-logs/mineru/local/${RUN_ID}.server.log}"
-CALLER_LOG="${MINERU_CALLER_LOG:-logs/mineru/local/${RUN_ID}.caller.log}"
+SERVER_LOG="${MINERU_SERVER_LOG:-logs/extraction/local/${RUN_ID}.server.log}"
+CALLER_LOG="${MINERU_CALLER_LOG:-logs/extraction/local/${RUN_ID}.caller.log}"
 SERVER_CMD="${MINERU_SERVER_CMD:-}"
 CALLER_ARGS=()
 
