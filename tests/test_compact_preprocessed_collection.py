@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from preprocessing.compact_preprocessed_collection import compact_paper_dir
+from preprocessing.compact_preprocessed_collection import main
 from preprocessing.compact_preprocessed_collection import parse_args
 
 
@@ -80,3 +83,38 @@ def test_compact_parser_derives_pdf_dir_from_root(monkeypatch, tmp_path: Path) -
     args = parse_args()
     assert args.root_dir == tmp_path
     assert args.pdf_dir is None
+
+
+def test_compact_writes_incomplete_manifest_when_split_has_no_extractions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preprocessed_dir = tmp_path / "processed"
+    preprocessed_dir.mkdir()
+    pdf_dir = tmp_path / "pdf_datasets"
+    pdf_dir.mkdir()
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(json.dumps({"train": ["ACL/missing.pdf"], "test": []}), encoding="utf-8")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "compact_preprocessed_collection",
+            "--preprocessed-dir",
+            str(preprocessed_dir),
+            "--pdf-dir",
+            str(pdf_dir),
+            "--split-index",
+            str(split_index),
+            "--split",
+            "train",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+    payload = json.loads((preprocessed_dir / "incomplete_documents.json").read_text(encoding="utf-8"))
+    assert payload["stage"] == "compaction"
+    assert payload["incomplete_count"] == 1
+    assert payload["documents"][0]["status"] == "missing_extraction"
+    assert payload["documents"][0]["source_pdf_relpath"] == "ACL/missing.pdf"

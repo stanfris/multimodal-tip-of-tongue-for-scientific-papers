@@ -24,6 +24,7 @@ class PreprocessedPaperSelection:
     expected_count: int
     missing_count: int
     source: str
+    missing_documents: list[dict[str, Any]]
 
 
 def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR) -> list[dict[str, Any]]:
@@ -67,19 +68,32 @@ def select_preprocessed_paper_dirs(
 ) -> PreprocessedPaperSelection:
     if split_index is None:
         paper_dirs = iter_preprocessed_paper_dirs(path)
-        return PreprocessedPaperSelection(paper_dirs, len(paper_dirs), 0, "recursive_scan")
+        return PreprocessedPaperSelection(paper_dirs, len(paper_dirs), 0, "recursive_scan", [])
     root = _paper_root(Path(path))
     expected = _split_paper_candidates(split_index, split)
-    paper_dirs = [
-        paper_dir
-        for subset, paper_ids in expected
-        if (paper_dir := _completed_candidate(root, subset, paper_ids))
-    ]
+    paper_dirs = []
+    missing_documents = []
+    for candidate in expected:
+        paper_dir = _completed_candidate(root, candidate["subset"], tuple(candidate["paper_ids"]))
+        if paper_dir is not None:
+            paper_dirs.append(paper_dir)
+        else:
+            missing_documents.append(
+                {
+                    "stage": "extraction",
+                    "status": "missing_extraction",
+                    "source_pdf_relpath": candidate["source_pdf_relpath"],
+                    "source_paper_dataset": candidate["subset"],
+                    "paper_id": candidate["paper_ids"][0],
+                    "candidate_paper_ids": candidate["paper_ids"],
+                }
+            )
     return PreprocessedPaperSelection(
         paper_dirs=paper_dirs,
         expected_count=len(expected),
         missing_count=len(expected) - len(paper_dirs),
         source=str(split_index),
+        missing_documents=missing_documents,
     )
 
 
@@ -103,7 +117,7 @@ def _completed_candidate(root: Path, subset: str, paper_ids: tuple[str, ...]) ->
     return next((candidate for candidate in candidates if _is_completed_extraction(candidate)), None)
 
 
-def _split_paper_candidates(split_index: Path, split: str) -> list[tuple[str, tuple[str, ...]]]:
+def _split_paper_candidates(split_index: Path, split: str) -> list[dict[str, Any]]:
     index = json.loads(split_index.read_text(encoding="utf-8"))
     split_names = ("train", "test") if split in {"all", "train+test"} else (split,)
     relative_paths: list[Path] = []
@@ -118,7 +132,11 @@ def _split_paper_candidates(split_index: Path, split: str) -> list[tuple[str, tu
         paper_id = safe_path_name(path.with_suffix("").as_posix())
         collision_id = f"{paper_id}.{sha256(path.as_posix().encode()).hexdigest()[:12]}"
         candidates.append(
-            (safe_path_name(path.parts[0] if len(path.parts) > 1 else "Unknown"), (paper_id, collision_id))
+            {
+                "source_pdf_relpath": path.as_posix(),
+                "subset": safe_path_name(path.parts[0] if len(path.parts) > 1 else "Unknown"),
+                "paper_ids": (paper_id, collision_id),
+            }
         )
     return candidates
 
