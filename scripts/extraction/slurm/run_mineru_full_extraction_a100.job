@@ -18,6 +18,8 @@ module load CUDA/12.6.0
 
 
 ROOT_DIR_ARG=""
+SPLIT_ARG=""
+SPLIT_INDEX_ARG=""
 CALLER_ARGS=()
 while (($#)); do
   case "$1" in
@@ -31,6 +33,30 @@ while (($#)); do
       ;;
     --root-dir=*)
       ROOT_DIR_ARG="${1#*=}"
+      shift
+      ;;
+    --split)
+      if (($# < 2)); then
+        echo "--split requires one of: full, train, test, train+test." >&2
+        exit 2
+      fi
+      SPLIT_ARG="$2"
+      shift 2
+      ;;
+    --split=*)
+      SPLIT_ARG="${1#*=}"
+      shift
+      ;;
+    --split-index)
+      if (($# < 2)); then
+        echo "--split-index requires a path." >&2
+        exit 2
+      fi
+      SPLIT_INDEX_ARG="$2"
+      shift 2
+      ;;
+    --split-index=*)
+      SPLIT_INDEX_ARG="${1#*=}"
       shift
       ;;
     --)
@@ -79,7 +105,7 @@ DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"
 MINERU_PORT="${MINERU_PORT:-$(choose_free_port)}"
 MINERU_STARTUP_TIMEOUT="${MINERU_STARTUP_TIMEOUT:-600}"
 MINERU_CONCURRENCY="${MINERU_CONCURRENCY:-8}"
-EXTRACTION_SCOPE="${SPLIT:-full}"
+EXTRACTION_SCOPE="${SPLIT_ARG:-${SPLIT:-full}}"
 API_URL="http://127.0.0.1:${MINERU_PORT}"
 MINERU_VENV="${MINERU_VENV:-.venv-mineru}"
 export MINERU_API_MAX_CONCURRENT_REQUESTS="$MINERU_CONCURRENCY"
@@ -136,7 +162,7 @@ case "$EXTRACTION_SCOPE" in
       EXTRACTION_SCOPE="train+test"
     fi
     CALLER_CMD+=(
-      --split-index "${SPLIT_INDEX:-$DATASET_DIR/data/splits/pdf_dataset_split.json}"
+      --split-index "${SPLIT_INDEX_ARG:-${SPLIT_INDEX:-$DATASET_DIR/data/splits/pdf_dataset_split.json}}"
       --split "$EXTRACTION_SCOPE"
     )
     SCOPE_DESCRIPTION="the indexed $EXTRACTION_SCOPE split"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write a random per-dataset train/test PDF split under data/pdf_datasets.
 
-The default five-group corpus contributes 2,000 training documents and 100
+The default five-group corpus contributes 2,200 training documents and 110
 test documents from each of ACL, Biology, Engineering, Medicine, and Physics.
 These are source-document counts; downstream query generation may produce one
 or more queries from each selected document.
@@ -46,13 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--train-size-per-dataset",
         type=int,
         default=DEFAULT_TRAIN_SIZE_PER_DATASET,
-        help="Training PDFs to sample from each dataset folder (default: 2000).",
+        help="Training PDFs to sample from each dataset folder (default: 2200).",
     )
     parser.add_argument(
         "--test-size-per-dataset",
         type=int,
         default=DEFAULT_TEST_SIZE_PER_DATASET,
-        help="Test PDFs to sample from each dataset folder (default: 100).",
+        help="Test PDFs to sample from each dataset folder (default: 110).",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(

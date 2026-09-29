@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -110,8 +111,12 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     assert 'ROOT_DIR="${ROOT_DIR_ARG:-${ROOT_DIR:-$DEFAULT_ROOT_DIR}}"' in script
     assert 'DATASET_DIR="${DATASET_DIR:-/scratch-shared/sfris1}"' in script
     assert 'MINERU_CONCURRENCY="${MINERU_CONCURRENCY:-8}"' in script
-    assert 'EXTRACTION_SCOPE="${SPLIT:-full}"' in script
+    assert "--split)" in script
+    assert "--split=*)" in script
+    assert 'SPLIT_ARG="$2"' in script
+    assert 'EXTRACTION_SCOPE="${SPLIT_ARG:-${SPLIT:-full}}"' in script
     assert "CALLER_CMD+=(--split all --all-domain-pdfs)" in script
+    assert '--split "$EXTRACTION_SCOPE"' in script
     assert 'Resume is enabled: completed documents are preserved' in script
     assert 'export MINERU_API_MAX_CONCURRENT_REQUESTS="$MINERU_CONCURRENCY"' in script
     assert '--max-in-flight "$MINERU_CONCURRENCY"' in script
@@ -121,3 +126,59 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     assert 'SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV_DIR/bin/mineru-router' in script
     assert '--output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"' in script
     assert "mineru_run_caller_with_server" in script
+
+
+def test_slurm_mineru_launcher_builds_indexed_split_command(tmp_path: Path) -> None:
+    scripts_dir = tmp_path / "scripts/extraction"
+    scripts_dir.mkdir(parents=True)
+    launcher = scripts_dir / "mineru_server_launcher.sh"
+    launcher.write_text(
+        """mineru_python() { printf '%s\\n' \"$ROOT_DIR/.venv-mineru/bin/python\"; }
+mineru_check_pdftext_compatibility() { return 0; }
+mineru_run_caller_with_server() {
+  shift 5
+  printf 'CALLER'
+  printf ' <%s>' \"$@\"
+  printf '\\n'
+}
+""",
+        encoding="utf-8",
+    )
+
+    venv_bin = tmp_path / ".venv-mineru/bin"
+    venv_bin.mkdir(parents=True)
+    fake_python = venv_bin / "python"
+    fake_python.write_text("#!/usr/bin/env bash\nprintf '43123\\n'\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    fake_router = venv_bin / "mineru-router"
+    fake_router.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    fake_router.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_ninja = fake_bin / "ninja"
+    fake_ninja.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    fake_ninja.chmod(0o755)
+    bash_env = tmp_path / "bash_env"
+    bash_env.write_text("module() { return 0; }\n", encoding="utf-8")
+
+    job = PROJECT_ROOT / "scripts/extraction/slurm/run_mineru_full_extraction_a100.job"
+    env = {
+        **os.environ,
+        "BASH_ENV": str(bash_env),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "test-job",
+        "SLURM_SUBMIT_DIR": str(tmp_path),
+    }
+    result = subprocess.run(
+        ["bash", str(job), "--root-dir", str(tmp_path), "--split", "train+test", "--domains", "ACL"],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert "processes the indexed train+test split" in result.stdout
+    assert "<--split> <train+test>" in result.stdout
+    assert "<--domains> <ACL>" in result.stdout
+    assert "<--all-domain-pdfs>" not in result.stdout
