@@ -298,6 +298,10 @@ class _Tee:
     def isatty(self) -> bool:
         return self.original.isatty()
 
+    def fileno(self) -> int:
+        """Expose the real stream descriptor to libraries using os.dup2."""
+        return self.original.fileno()
+
 
 @contextlib.contextmanager
 def stage_log(run_dir: str | Path, stage_name: str):

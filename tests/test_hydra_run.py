@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import contextlib
 import os
 import subprocess
 import sys
@@ -276,6 +277,14 @@ def test_stage_log_is_written_before_stage_finishes(tmp_path: Path) -> None:
     with stage_log(tmp_path, "generate_queries"):
         print("first query complete")
         assert "first query complete" in log_path.read_text()
+
+
+def test_stage_log_exposes_stdout_file_descriptor(tmp_path: Path) -> None:
+    """vLLM's worker uses sys.stdout.fileno() while initializing NCCL."""
+    with (tmp_path / "stdout.txt").open("w") as original:
+        with contextlib.redirect_stdout(original), stage_log(tmp_path, "describe_figures"):
+            assert sys.stdout.fileno() == original.fileno()
+            assert os.fstat(sys.stdout.fileno()) == os.fstat(original.fileno())
 
 
 def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:
