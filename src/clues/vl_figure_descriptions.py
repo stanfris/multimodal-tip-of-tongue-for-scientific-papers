@@ -177,6 +177,7 @@ def iter_samples_from_preprocessed_dataset(
                         "source_entity": "figure",
                         "figure_index": figure_index,
                         "paper_id": paper["paper_id"],
+                        "source_paper_dataset": paper.get("source_paper_dataset"),
                         "resolved_paper_id": paper["paper_id"],
                         "figure_id": figure["figure_id"],
                         "filename": figure.get("filename"),
@@ -435,6 +436,7 @@ def run(args: argparse.Namespace) -> Path:
                 output_path,
                 str(sample.metadata["paper_id"]),
                 str(sample.metadata["figure_id"]),
+                sample.metadata.get("source_paper_dataset"),
             )
             clue_path = _append_visual_clue(
                 record,
@@ -517,7 +519,7 @@ def load_managed_visual_description_args(args: argparse.Namespace) -> argparse.N
 def _append_visual_clue(record: InterpretationRecord, clues_dir: str | Path, *, overwrite: bool = False) -> Path:
     paper_id = str(record.metadata.get("paper_id") or record.metadata.get("resolved_paper_id"))
     figure_id = str(record.metadata.get("figure_id") or record.record_id)
-    clue_path = visual_clue_path(clues_dir, paper_id, figure_id)
+    clue_path = visual_clue_path(clues_dir, paper_id, figure_id, record.metadata.get("source_paper_dataset"))
     row = {
         "paper_id": paper_id,
         "figure_id": figure_id,
@@ -544,7 +546,7 @@ def _completed_visual_keys_from_clues(
         paper_id = str(paper["paper_id"])
         for figure in paper.get("figures", []):
             figure_id = str(figure["figure_id"])
-            for clue in read_clue_rows(visual_clue_path(clues_dir, paper_id, figure_id)):
+            for clue in read_clue_rows(visual_clue_path(clues_dir, paper_id, figure_id, paper.get("source_paper_dataset"))):
                 if (
                     clue.get("kind") == "visual"
                     and clue.get("model") == model

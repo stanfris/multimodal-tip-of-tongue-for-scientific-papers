@@ -227,7 +227,7 @@ def test_managed_settings_load_posthoc_judgement_stage(tmp_path: Path) -> None:
     assert managed.dataset == tmp_path / "data" / "preprocessed"
     assert managed.split_index is None
     assert managed.split == "test"
-    assert managed.input_dir == tmp_path / "data" / "query_collections" / "managed_test"
+    assert managed.input_dir == tmp_path / "data" / "query_collections"
     assert managed.collection_id == "managed_test"
     assert managed.mode == ["visual-only"]
     assert managed.prompt == tmp_path / "prompts" / "query_judgement.v1.txt"

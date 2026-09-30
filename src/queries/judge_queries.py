@@ -13,7 +13,7 @@ from document_splits.document_splits import filter_papers_by_split
 from common.generation_utils import progress
 from common.jsonl import append_jsonl_object, read_jsonl_objects
 from common.managed_settings import DEFAULT_SETTINGS_PATH, load_managed_settings, section
-from preprocessing.preprocessed import DEFAULT_DATA_DIR, read_preprocessed_papers
+from preprocessing.preprocessed import DEFAULT_DATA_DIR, clue_domain_dir, read_preprocessed_papers
 from queries.query_generation import (
     DEFAULT_JUDGEMENT_MODEL,
     DEFAULT_JUDGEMENT_PROMPT,
@@ -63,7 +63,7 @@ def main(args: argparse.Namespace | None = None) -> int:
     else:
         config = None
     dataset = args.dataset or (args.data_dir / "preprocessed")
-    input_dir = args.input_dir or (args.data_dir / "query_collections" / (args.collection_id or f"query_generation_{args.split}"))
+    input_dir = args.input_dir or (args.data_dir / "query_collections")
     modes = args.mode or ["visual-only", "visual-and-text"]
     papers = {
         str(paper["paper_id"]): paper
@@ -73,13 +73,22 @@ def main(args: argparse.Namespace | None = None) -> int:
             split_name=args.split,
         )
     }
+    if config is not None or args.input_dir is None:
+        domains = {
+            clue_domain_dir(args.data_dir / "clues", paper_id, paper.get("source_paper_dataset")).name
+            for paper_id, paper in papers.items()
+        }
+        collection_id = config.collection_id if config is not None else (args.collection_id or f"query_generation_{args.split}")
+        input_dirs = [input_dir / domain / collection_id for domain in sorted(domains)]
+    else:
+        input_dirs = [input_dir]
     if config is None:
         config = QueryGenerationConfig(
             dataset=dataset,
             visual_interpretations=None,
             textual_interpretations=None,
             clues_dir=args.data_dir / "clues",
-            output_dir=input_dir.parent,
+            output_dir=input_dir if args.input_dir is None else input_dir.parent,
             judge_queries=True,
             judgement_prompt=args.prompt,
             judgement_prompt_id=args.prompt_id,
@@ -95,10 +104,14 @@ def main(args: argparse.Namespace | None = None) -> int:
     processed = 0
     skipped = 0
     missing = 0
-    for mode in modes:
-        query_path = input_dir / MODE_DIRS[mode] / "queries.jsonl"
+    found_queries = False
+    for collection_dir, mode in ((directory, mode) for directory in input_dirs for mode in modes):
+        query_path = collection_dir / MODE_DIRS[mode] / "queries.jsonl"
         if not query_path.exists():
+            if config is not None or args.input_dir is None:
+                continue
             raise FileNotFoundError(f"Query file does not exist: {query_path}")
+        found_queries = True
         judgement_path = query_path.with_name("query_judgements.jsonl")
         if args.overwrite:
             judgement_path.unlink(missing_ok=True)
@@ -146,6 +159,8 @@ def main(args: argparse.Namespace | None = None) -> int:
             )
             completed_query_ids.add(query_id)
             processed += 1
+    if not found_queries:
+        raise FileNotFoundError(f"No domain query files found under {input_dir}")
     print(json.dumps({"processed": processed, "skipped": skipped, "missing_papers": missing}, indent=2, sort_keys=True))
     return 0
 
@@ -164,7 +179,7 @@ def load_managed_judgement_args(args: argparse.Namespace) -> tuple[argparse.Name
     managed.dataset = query_config.dataset
     managed.split_index = query_config.split_index
     managed.split = query_config.split_name or args.set
-    managed.input_dir = query_config.output_dir / query_config.collection_id
+    managed.input_dir = query_config.output_dir
     managed.collection_id = query_config.collection_id
     managed.mode = list(run.get("modes", query_config.modes))
     managed.prompt = query_config.judgement_prompt

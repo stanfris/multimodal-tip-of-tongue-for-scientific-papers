@@ -195,11 +195,11 @@ and the optional `dataset.split_index`; it writes `preprocessed_analysis_report.
 beside the preprocessed root, and
 `incomplete_documents.json` and `compaction_failures.jsonl` within it. Figure
 and textual stages read those papers and write
-`<dataset.root>/clues/<paper_id>/images/<figure_id>.jsonl` and
-`<dataset.root>/clues/<paper_id>/base/textual_clues.jsonl`. Query generation
-writes `<dataset.query_output>/query_generation_train/` (or
-`query_generation_test/`) and `<dataset.root>/clues/queries.jsonl`;
-judging updates the selected query collection. Each Hydra run writes
+`<dataset.root>/clues/<domain>/<paper_id>/images/<figure_id>.jsonl` and
+`<dataset.root>/clues/<domain>/<paper_id>/base/textual_clues.jsonl`. Query generation
+writes `<dataset.query_output>/<domain>/query_generation_train/` (or
+`query_generation_test/`) and `<dataset.root>/clues/<domain>/queries.jsonl`;
+judging writes beside the queries in each domain collection. Each Hydra run writes
 `plan.json`, `.hydra/`, and for model stages `settings.yaml` in
 `<launcher.log_root>/<stage family>/<stage>/<timestamp>/` (Slurm multiruns
 add `/0`). Reduction writes `preprocessing.log` there; figure, textual, query,

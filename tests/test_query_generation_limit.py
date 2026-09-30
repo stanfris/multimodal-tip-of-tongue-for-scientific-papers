@@ -38,9 +38,10 @@ def test_limit_applies_to_each_mode_and_visual_text_runs_first(tmp_path: Path, m
     )
     calls = []
 
-    monkeypatch.setattr(query_generation, "read_preprocessed_papers", lambda dataset: [])
+    papers = [{"paper_id": "ACL_paper", "source_paper_dataset": "ACL"}]
+    monkeypatch.setattr(query_generation, "read_preprocessed_papers", lambda dataset: papers)
     monkeypatch.setattr(query_generation, "_components_by_paper", lambda *args, **kwargs: {})
-    monkeypatch.setattr(query_generation, "_eligible_papers", lambda papers, config: [])
+    monkeypatch.setattr(query_generation, "_eligible_papers", lambda papers, config: list(enumerate(papers)))
     monkeypatch.setattr(query_generation, "_read_existing_query_keys", lambda path: set())
     monkeypatch.setattr(query_generation, "write_test_collection", lambda collection, path: None)
     monkeypatch.setattr(query_generation, "_write_collection_metadata", lambda *args: None)

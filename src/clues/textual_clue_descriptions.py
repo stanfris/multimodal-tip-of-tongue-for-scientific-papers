@@ -176,6 +176,7 @@ def iter_samples_from_preprocessed_dataset(
                     "source_entity": "paper",
                     "paper_index": paper_index,
                     "paper_id": paper["paper_id"],
+                    "source_paper_dataset": paper.get("source_paper_dataset"),
                     "resolved_paper_id": paper["paper_id"],
                     "paper_dir": paper["paper_dir"],
                     "markdown_path": paper["markdown_path"],
@@ -556,7 +557,7 @@ def run(args: argparse.Namespace) -> Path:
                     "thinking": args.thinking,
                 },
             )
-            target_clue_path = textual_clue_path(output_path, str(sample.metadata["paper_id"]))
+            target_clue_path = textual_clue_path(output_path, str(sample.metadata["paper_id"]), sample.metadata.get("source_paper_dataset"))
             clue_path = _append_textual_clue(
                 record,
                 output_path,
@@ -638,7 +639,7 @@ def load_managed_textual_description_args(args: argparse.Namespace) -> argparse.
 
 
 def _append_textual_clue(record: InterpretationRecord, clues_dir: str | Path, *, overwrite: bool = False) -> Path:
-    clue_path = textual_clue_path(clues_dir, record.record_id)
+    clue_path = textual_clue_path(clues_dir, record.record_id, record.metadata.get("source_paper_dataset"))
     row = {
         "paper_id": record.record_id,
         "kind": record.kind,
@@ -662,7 +663,7 @@ def _completed_textual_keys_from_clues(
     completed: set[tuple[str, str, str, str, str]] = set()
     for paper in papers:
         paper_id = str(paper["paper_id"])
-        for clue in read_clue_rows(textual_clue_path(clues_dir, paper_id)):
+        for clue in read_clue_rows(textual_clue_path(clues_dir, paper_id, paper.get("source_paper_dataset"))):
             if (
                 clue.get("kind") == "textual"
                 and clue.get("model") == model
