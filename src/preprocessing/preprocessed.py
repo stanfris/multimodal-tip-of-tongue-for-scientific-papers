@@ -47,6 +47,9 @@ def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR)
             continue
         paper["paper_id"] = paper_id
         paper["paper_dir"] = str(paper_dir)
+        paper["source_paper_dataset"] = paper.get("source_paper_dataset") or (
+            paper_dir.parent.parent.name if paper_dir.parent.name == "papers" else paper_dir.parent.name
+        )
         paper["markdown_path"] = str(markdown_path)
         figures = paper.get("figures") or _figures_from_images(paper_dir)
         paper["figures"] = _resolve_figures(paper_dir, figures)
@@ -206,16 +209,21 @@ def clues_root(path: str | Path | None = None) -> Path:
     return Path(path) if path is not None else DEFAULT_CLUES_DIR
 
 
-def paper_clue_dir(root: str | Path, paper_id: str) -> Path:
-    return Path(root) / safe_path_name(paper_id)
+def clue_domain_dir(root: str | Path, paper_id: str, source_dataset: str | None = None) -> Path:
+    domain = source_dataset or (paper_id.partition("_")[0] if "_" in paper_id else "Unknown")
+    return Path(root) / safe_path_name(domain)
 
 
-def textual_clue_path(root: str | Path, paper_id: str) -> Path:
-    return paper_clue_dir(root, paper_id) / "base" / "textual_clues.jsonl"
+def paper_clue_dir(root: str | Path, paper_id: str, source_dataset: str | None = None) -> Path:
+    return clue_domain_dir(root, paper_id, source_dataset) / safe_path_name(paper_id)
 
 
-def visual_clue_path(root: str | Path, paper_id: str, figure_id: str) -> Path:
-    return paper_clue_dir(root, paper_id) / "images" / f"{safe_path_name(figure_id)}.jsonl"
+def textual_clue_path(root: str | Path, paper_id: str, source_dataset: str | None = None) -> Path:
+    return paper_clue_dir(root, paper_id, source_dataset) / "base" / "textual_clues.jsonl"
+
+
+def visual_clue_path(root: str | Path, paper_id: str, figure_id: str, source_dataset: str | None = None) -> Path:
+    return paper_clue_dir(root, paper_id, source_dataset) / "images" / f"{safe_path_name(figure_id)}.jsonl"
 
 
 def read_clue_rows(path: str | Path) -> list[dict[str, Any]]:

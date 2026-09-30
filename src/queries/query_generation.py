@@ -25,6 +25,7 @@ from common.managed_settings import (
 )
 from common.model_output import parse_json_object
 from preprocessing.preprocessed import (
+    clue_domain_dir,
     read_clue_rows,
     read_preprocessed_markdown,
     read_preprocessed_papers,
@@ -180,43 +181,53 @@ def _generate_query_collections_from_preprocessed(
         textual_clues_path=config.textual_interpretations,
     )
     selected_papers = _eligible_papers(papers, config)
-    root = config.output_dir / config.collection_id
-    root.mkdir(parents=True, exist_ok=True)
-    root_query_path = config.clues_dir / "queries.jsonl"
-    query_keys = _read_existing_query_keys(root_query_path)
-    for mode in sorted(config.modes, key=lambda value: value != "visual-and-text"):
-        collection_dir = root / mode.replace("-", "_")
-        collection_dir.mkdir(parents=True, exist_ok=True)
-        collection_query_path = collection_dir / "queries.jsonl"
-        if not config.resume:
-            collection_query_path.unlink(missing_ok=True)
-        existing = _read_existing_query_state(collection_query_path, mode) if config.resume else None
-        mode_config = config
-        if limit is not None:
-            max_examples = limit
-            if config.max_examples is not None:
-                max_examples = min(max_examples, config.max_examples)
-            mode_config = replace(config, max_examples=max_examples)
-        collection_query_keys = _read_existing_query_keys(collection_query_path)
-        examples = _generate_mode_examples_from_papers(
-            mode,
-            selected_papers,
-            components_by_paper,
-            mode_config,
-            prompt_text,
-            loaded_generator,
-            loaded_judge,
-            existing=existing,
-            query_keys=query_keys,
-            root_query_path=root_query_path,
-            collection_query_keys=collection_query_keys,
-            collection_query_path=collection_query_path,
-        )
-        collection = (existing.examples if existing is not None else []) + examples
-        write_test_collection(collection, collection_dir)
-        _write_collection_metadata(collection_dir, mode, config, prompt_sha256, len(collection))
-    _write_root_metadata(root, config, prompt_sha256)
-    return root
+    papers_by_domain: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for paper_index, paper in selected_papers:
+        domain = clue_domain_dir(config.clues_dir, str(paper["paper_id"]), paper.get("source_paper_dataset")).name
+        papers_by_domain.setdefault(domain, []).append((paper_index, paper))
+    target = config.max_examples
+    if limit is not None:
+        target = min(limit, target) if target is not None else limit
+    totals_by_mode = {mode: 0 for mode in config.modes}
+    for domain, domain_papers in sorted(papers_by_domain.items()):
+        root = config.output_dir / domain / config.collection_id
+        root.mkdir(parents=True, exist_ok=True)
+        root_query_path = config.clues_dir / domain / "queries.jsonl"
+        query_keys = _read_existing_query_keys(root_query_path)
+        for mode in sorted(config.modes, key=lambda value: value != "visual-and-text"):
+            collection_dir = root / mode.replace("-", "_")
+            collection_dir.mkdir(parents=True, exist_ok=True)
+            collection_query_path = collection_dir / "queries.jsonl"
+            if not config.resume:
+                collection_query_path.unlink(missing_ok=True)
+            existing = _read_existing_query_state(collection_query_path, mode) if config.resume else None
+            mode_config = replace(config, max_examples=max(0, target - totals_by_mode[mode])) if target is not None else config
+            collection_query_keys = _read_existing_query_keys(collection_query_path)
+            examples = _generate_mode_examples_from_papers(
+                mode,
+                domain_papers,
+                components_by_paper,
+                mode_config,
+                prompt_text,
+                loaded_generator,
+                loaded_judge,
+                existing=existing,
+                query_keys=query_keys,
+                root_query_path=root_query_path,
+                collection_query_keys=collection_query_keys,
+                collection_query_path=collection_query_path,
+                require_target=False,
+            )
+            collection = (existing.examples if existing is not None else []) + examples
+            totals_by_mode[mode] += len(collection)
+            write_test_collection(collection, collection_dir)
+            _write_collection_metadata(collection_dir, mode, config, prompt_sha256, len(collection))
+        _write_root_metadata(root, config, prompt_sha256)
+    if target is not None:
+        for mode, total in totals_by_mode.items():
+            if total < target:
+                raise RuntimeError(f"Only have {total} {mode} queries across domains, but {target} were requested.")
+    return config.output_dir
 
 
 def _generate_mode_examples_from_papers(
@@ -233,6 +244,7 @@ def _generate_mode_examples_from_papers(
     root_query_path: Path | None = None,
     collection_query_keys: set[str] | None = None,
     collection_query_path: Path | None = None,
+    require_target: bool = True,
 ) -> list[TestCollectionExample]:
     examples: list[TestCollectionExample] = []
     existing_count = len(existing.examples) if existing is not None else 0
@@ -284,6 +296,7 @@ def _generate_mode_examples_from_papers(
             "model": config.model,
             "seed": config.seed,
             "paper_id": paper_id,
+            "source_paper_dataset": paper.get("source_paper_dataset"),
             "split": config.split_name,
             "split_index": str(config.split_index) if config.split_index is not None else None,
             "split_paper_index": paper_index if config.split_name is not None else None,
@@ -316,7 +329,7 @@ def _generate_mode_examples_from_papers(
             break
     progress.close()
     final_count = existing_count + len(examples)
-    if config.max_examples is not None and final_count < config.max_examples:
+    if require_target and config.max_examples is not None and final_count < config.max_examples:
         raise RuntimeError(
             f"Only have {final_count} {mode} queries, but {config.max_examples} were requested. "
             f"Generated {len(examples)} new queries and resumed {existing_count} existing queries. "
@@ -456,17 +469,24 @@ def _components_by_paper(
     else:
         textual_rows = [
             clue
-            for paper_id in sorted(paper_ids)
-            for clue in read_clue_rows(textual_clue_path(clues_dir, paper_id))
+            for paper in papers
+            for clue in read_clue_rows(textual_clue_path(clues_dir, str(paper["paper_id"]), paper.get("source_paper_dataset")))
         ]
     if visual_clues_path is not None and visual_clues_path.is_file():
         visual_rows = read_clue_rows(visual_clues_path)
     else:
         visual_rows = [
             clue
-            for paper_id, figure_ids in sorted(figure_ids_by_paper.items())
-            for figure_id in sorted(figure_ids)
-            for clue in read_clue_rows(visual_clue_path(clues_dir, paper_id, figure_id))
+            for paper in papers
+            for figure in paper.get("figures", [])
+            for clue in read_clue_rows(
+                visual_clue_path(
+                    clues_dir,
+                    str(paper["paper_id"]),
+                    str(figure["figure_id"]),
+                    paper.get("source_paper_dataset"),
+                )
+            )
         ]
     for clue in textual_rows:
         if clue.get("kind") != "textual":
