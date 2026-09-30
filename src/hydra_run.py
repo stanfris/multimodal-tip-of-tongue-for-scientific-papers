@@ -107,9 +107,17 @@ def scheduler_command(plan: dict[str, Any], script: Path, log_dir: Path) -> list
     select = f"select=1:ncpus={cpus}:mem={launcher['memory']}"
     if gpus:
         select += f":ngpus={gpus}"
-    return ["qsub", "-N", plan["stage"]["name"], "-q", launcher["queue"],
-            "-l", select, "-l", f"walltime={launcher['walltime']}",
-            "-o", str(log_dir), "-e", str(log_dir), str(script)]
+    return [
+        "qsub",
+        "-N", plan["stage"]["name"],
+        "-P", launcher["project"],
+        "-q", launcher["queue"],
+        "-l", select,
+        "-l", f"walltime={launcher['walltime']}",
+        "-o", str(log_dir),
+        "-e", str(log_dir),
+        str(script),
+    ]
 
 
 def job_script(plan_path: Path, plan: dict[str, Any]) -> str:
