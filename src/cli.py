@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+
+from hydra_entry import main as hydra_main
 from pathlib import Path
 
 from extraction.mineru_extraction import build_benchmark_parser as build_mineru_benchmark_parser
@@ -23,12 +25,6 @@ from document_downloads.pmc_oa_subset import run as run_pmc_oa_subset
 from dataset_packaging.hf_dataset_packaging import build_parser as build_hf_dataset_parser
 from dataset_packaging.hf_dataset_packaging import run as run_hf_dataset
 from dataset_packaging.storage import read_stats
-from queries.query_generation import build_parser as build_generate_queries_parser
-from queries.query_generation import run as run_generate_queries
-from clues.textual_clue_descriptions import build_parser as build_describe_text_parser
-from clues.textual_clue_descriptions import run as run_describe_text
-from clues.vl_figure_descriptions import build_parser as build_describe_figures_parser
-from clues.vl_figure_descriptions import run as run_describe_figures
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,25 +69,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Package, validate, and upload the shared PDF corpus to Hugging Face.",
     )
 
-    describe = subparsers.add_parser(
-        "describe-figures",
-        parents=[build_describe_figures_parser()],
-        add_help=False,
-        help="Generate Qwen-VL visual descriptions for ACL set figure images.",
-    )
-    describe_text = subparsers.add_parser(
-        "describe-textual-clues",
-        parents=[build_describe_text_parser()],
-        add_help=False,
-        help="Generate textual memory cues from ACL set paper markdown.",
-    )
-    generate_queries = subparsers.add_parser(
-        "generate-queries",
-        parents=[build_generate_queries_parser()],
-        add_help=False,
-        help="Generate visual-only and visual-and-text query collections from clue sidecars.",
-    )
-
     stats = subparsers.add_parser("stats", help="Print stats for a generated artifact.")
     stats.add_argument("--dataset", required=True, help="Generated artifact directory.")
 
@@ -105,24 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def legacy_main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-
-    if args.command == "describe-figures":
-        output_path = run_describe_figures(args)
-        print(json.dumps({"output": str(Path(output_path))}, indent=2, sort_keys=True))
-        return 0
-
-    if args.command == "describe-textual-clues":
-        output_path = run_describe_text(args)
-        print(json.dumps({"output": str(Path(output_path))}, indent=2, sort_keys=True))
-        return 0
-
-    if args.command == "generate-queries":
-        output_path = run_generate_queries(args)
-        print(json.dumps({"output": str(Path(output_path))}, indent=2, sort_keys=True))
-        return 0
 
     if args.command == "probe-mineru-env":
         print(json.dumps(probe_mineru_environment(), indent=2, sort_keys=True))
@@ -164,5 +126,17 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def main() -> None:
+    """Hydra owns pipeline stages; operational utilities keep their own CLI."""
+    legacy_utilities = {
+        "probe-mineru-env", "extract-mineru-pdfs", "benchmark-mineru-pdfs",
+        "build-arxiv-open-reuse", "build-pmc-oa-subset", "download-documents",
+        "prepare-hf-dataset", "stats", "parsed-dataset-stats",
+    }
+    if len(sys.argv) > 1 and sys.argv[1] in legacy_utilities:
+        raise SystemExit(legacy_main())
+    hydra_main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

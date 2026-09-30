@@ -1,0 +1,5 @@
+provider: transformers
+name: google/gemma-3-27b-it
+device_map: ${launcher.device_map}
+dtype: ${launcher.dtype}
+attn_implementation: ${launcher.attn_implementation}

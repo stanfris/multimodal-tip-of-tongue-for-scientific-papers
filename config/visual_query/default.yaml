@@ -7,8 +7,8 @@ prompt:
   variables:
   - selected_cues
 model:
-  provider: transformers
-  name: microsoft/phi-4
+  provider: ${model.provider}
+  name: ${model.name}
   temperature: 0.2
   max_tokens: 300
   device_map: ${launcher.device_map}
@@ -31,7 +31,7 @@ judgement:
     modes:
     - visual-only
     - visual-and-text
-    limit: null
+    limit: ${stage.limit}
     overwrite: false
 selection:
   modes:
@@ -45,7 +45,7 @@ selection:
   max_examples: null
   resume: true
 output:
-  dir: ${dataset.root}/query_collections_test
+  dir: ${dataset.query_output}
 query_sets:
   train:
     split_name: train

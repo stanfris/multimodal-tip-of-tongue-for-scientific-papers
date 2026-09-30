@@ -1,205 +1,193 @@
-"""Hydra front door for local, Slurm, and PBS dataset jobs.
-
-The scheduler only transports a frozen plan. Existing dataset-generation
-commands still own the actual work and managed generation settings.
-"""
+"""Execute resolved Hydra dataset stages and preserve a domain settings snapshot."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 
-MANAGED_COMMANDS = {"describe-figures", "describe-textual-clues", "generate-queries", "judge-queries"}
-SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+STAGES = {
+    "describe_figures", "describe_textual_clues", "generate_queries",
+    "judge_queries", "reduce_and_compact", "extract_mineru",
+}
 
 
-def absolute(path: str, root: Path, *, follow_symlinks: bool = True) -> Path:
+def absolute(path: str, root: Path) -> Path:
     candidate = Path(path).expanduser()
-    candidate = candidate if candidate.is_absolute() else root / candidate
-    return candidate.resolve() if follow_symlinks else Path(os.path.abspath(candidate))
+    return (candidate if candidate.is_absolute() else root / candidate).resolve()
 
 
 def managed_settings(config: dict[str, Any], data_root: Path, repo_root: Path) -> dict[str, Any]:
-    """Materialize Hydra's managed sections for the existing CLI boundary."""
-    settings = {key: config[key] for key in ("dataset", "visual_descriptions", "textual_descriptions", "visual_query")}
+    """Adapt the resolved config to the existing generation functions."""
+    import copy
+    settings = copy.deepcopy({key: config[key] for key in (
+        "dataset", "visual_descriptions", "textual_descriptions", "visual_query",
+    )})
     settings["dataset"]["root"] = str(data_root)
-    for section_name in ("visual_descriptions", "textual_descriptions", "visual_query"):
-        section = settings[section_name]
-        section["prompt"]["template"] = str(absolute(section["prompt"]["template"], repo_root))
-    judgement = settings["visual_query"]["judgement"]
-    judgement["template"] = str(absolute(judgement["template"], repo_root))
+    settings["dataset"]["preprocessed"] = str(absolute(config["dataset"]["processed_root"], repo_root))
+    for section in ("visual_descriptions", "textual_descriptions", "visual_query"):
+        settings[section]["prompt"]["template"] = str(absolute(settings[section]["prompt"]["template"], repo_root))
+    settings["visual_query"]["judgement"]["template"] = str(absolute(settings["visual_query"]["judgement"]["template"], repo_root))
     settings["visual_query"]["output"]["dir"] = str(absolute(settings["visual_query"]["output"]["dir"], repo_root))
     return settings
 
 
-def build_plan(config: dict[str, Any], repo_root: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = None) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    stage = config["stage"]
+    name = stage["name"]
+    if name not in STAGES:
+        raise ValueError(f"Unsupported stage: {name}")
+    split = config["split"]["name"]
+    if split not in {"train", "test", "train+test"}:
+        raise ValueError(f"Unsupported split: {split}")
+    if name not in {"reduce_and_compact", "extract_mineru"} and split == "train+test":
+        raise ValueError("Generation stages require split=train or split=test")
     launcher = config["launcher"]
-    task = config["task"]
     kind = launcher["kind"]
     if kind not in {"local", "slurm", "pbs"}:
         raise ValueError(f"Unsupported launcher kind: {kind}")
-    if not SAFE_NAME.fullmatch(task["name"]):
-        raise ValueError("Task name must contain only letters, digits, underscore, dash, or dot")
-    if not SAFE_NAME.fullmatch(task["script_folder"]):
-        raise ValueError("task.script_folder must be a safe folder name")
-    command = task["command"]
-    if command not in MANAGED_COMMANDS | {"preprocess"}:
-        raise ValueError(f"Unsupported task command: {command}")
     data_root = absolute(config["dataset"]["root"], repo_root)
-    run_root = absolute(launcher["run_dir"], repo_root)
-    log_root = absolute(config["log_root"], repo_root)
-    # Keep the venv entry point: resolving its symlink can bypass pyvenv.cfg.
-    python = absolute(launcher["python"], repo_root, follow_symlinks=False)
-    args = task.get("args", [])
-    if not isinstance(args, list) or any(isinstance(arg, (list, dict)) or arg is None for arg in args):
-        raise ValueError("task.args must be a list of scalar values")
-    args = [str(arg) for arg in args]
-    task = {**task, "args": args}
-    snapshot = None
-    if command in MANAGED_COMMANDS:
-        if task.get("set") not in {"train", "test"}:
-            raise ValueError("Managed tasks require task.set=train or task.set=test")
-        snapshot = managed_settings(config, data_root, repo_root)
+    run_root = absolute(launcher["log_root"], repo_root)
+    run_dir = run_dir or run_root / name
     plan = {
         "repo_root": str(repo_root),
+        "run_dir": str(run_dir),
         "data_root": str(data_root),
-        "run_root": str(run_root),
-        "log_root": str(log_root),
-        "python": str(python),
         "launcher": launcher,
-        "task": task,
-        "settings_snapshot": None,
+        "dataset": config["dataset"],
+        "stage": stage,
+        "split": split,
+        "settings_snapshot": str(run_dir / "settings.yaml") if name not in {"reduce_and_compact", "extract_mineru"} else None,
     }
-    return plan, snapshot
-
-
-def worker_command(plan: dict[str, Any]) -> list[str]:
-    task = plan["task"]
-    command = task["command"]
-    if command == "preprocess":
-        return [
-            str(Path(plan["repo_root"]) / "scripts/preprocessing/reduce_and_compact_preprocessed.sh"),
-            "--root-dir", plan["data_root"], "--workers", str(plan["launcher"]["cpus"]),
-            *task["args"],
-        ]
-    if command == "judge-queries":
-        return [
-            plan["python"], "-m", "queries.judge_queries",
-            "--settings", plan["settings_snapshot"], "--set", task["set"], *task["args"],
-        ]
-    return [
-        plan["python"], "-m", "cli", command,
-        "--settings", plan["settings_snapshot"], "--set", task["set"], *task["args"],
-    ]
-
-
-def job_script(plan_path: Path, plan: dict[str, Any]) -> str:
-    root = plan["repo_root"]
-    python = plan["python"]
-    lines = ["#!/usr/bin/env bash", "set -euo pipefail"]
-    lines.extend([
-        f"cd {shlex.quote(root)}",
-        f"export PYTHONPATH={shlex.quote(str(Path(root) / 'src'))}${{PYTHONPATH:+:$PYTHONPATH}}",
-        f"exec {shlex.quote(python)} -m hydra_run --worker {shlex.quote(str(plan_path))}",
-    ])
-    return "\n".join(lines) + "\n"
+    settings = managed_settings(config, data_root, repo_root) if name not in {"reduce_and_compact", "extract_mineru"} else None
+    return plan, settings
 
 
 def scheduler_command(plan: dict[str, Any], script: Path, log_dir: Path) -> list[str]:
     launcher = plan["launcher"]
-    name = plan["task"]["name"]
-    cpus = int(launcher["cpus"])
-    gpus = int(launcher["gpus"])
+    cpus, gpus = int(launcher["cpus"]), int(launcher["gpus"])
     if cpus < 1 or gpus < 0:
         raise ValueError("launcher.cpus must be positive and launcher.gpus nonnegative")
-    if launcher["kind"] == "pbs":
-        select = f"select=1:ncpus={cpus}:mem={launcher['memory']}"
-        if gpus:
-            select += f":ngpus={gpus}"
-        return [
-            "qsub", "-N", name, "-q", launcher["queue"],
+    if launcher["kind"] != "pbs":
+        raise ValueError("Only PBS uses the custom scheduler adapter")
+    select = f"select=1:ncpus={cpus}:mem={launcher['memory']}"
+    if gpus:
+        select += f":ngpus={gpus}"
+    return ["qsub", "-N", plan["stage"]["name"], "-q", launcher["queue"],
             "-l", select, "-l", f"walltime={launcher['walltime']}",
-            "-o", str(log_dir), "-e", str(log_dir), str(script),
-        ]
-    raise ValueError("Only PBS uses the custom scheduler adapter")
+            "-o", str(log_dir), "-e", str(log_dir), str(script)]
+
+
+def job_script(plan_path: Path, plan: dict[str, Any]) -> str:
+    root = plan["repo_root"]
+    python = absolute(plan["launcher"]["python"], Path(root))
+    return "\n".join([
+        "#!/usr/bin/env bash", "set -euo pipefail",
+        f"cd {shlex.quote(root)}",
+        f"export PYTHONPATH={shlex.quote(str(Path(root) / 'src'))}${{PYTHONPATH:+:$PYTHONPATH}}",
+        f"exec {shlex.quote(str(python))} -m hydra_run --worker {shlex.quote(str(plan_path))}",
+        "",
+    ])
+
+
+def execute_stage(plan: dict[str, Any]) -> None:
+    """Invoke normal Python functions with a resolved settings file or typed arguments."""
+    repo_root = Path(plan["repo_root"])
+    os.environ["HF_HOME"] = str(absolute(plan["launcher"]["model_cache"], repo_root))
+    os.environ["XDG_CACHE_HOME"] = str(absolute(plan["launcher"]["cache_root"], repo_root))
+
+    from clues.textual_clue_descriptions import build_parser as textual_parser, run as describe_text
+    from clues.vl_figure_descriptions import build_parser as visual_parser, run as describe_figures
+    from queries.query_generation import build_parser as query_parser, run as generate_queries
+    from queries.judge_queries import build_parser as judge_parser, main as judge_queries
+
+    name = plan["stage"]["name"]
+    settings = plan["settings_snapshot"]
+    split = plan["split"]
+    if name == "describe_figures":
+        describe_figures(visual_parser().parse_args(["--settings", settings, "--set", split]))
+    elif name == "describe_textual_clues":
+        describe_text(textual_parser().parse_args(["--settings", settings, "--set", split]))
+    elif name == "generate_queries":
+        args = query_parser().parse_args(["--settings", settings, "--set", split])
+        args.limit = plan["stage"].get("limit")
+        generate_queries(args)
+    elif name == "judge_queries":
+        judge_queries(judge_parser().parse_args(["--settings", settings, "--set", split]))
+    elif name == "extract_mineru":
+        from extraction.mineru_extraction import build_extract_parser, run_extract
+        repo_root = Path(plan["repo_root"])
+        dataset, stage = plan["dataset"], plan["stage"]
+        args = build_extract_parser().parse_args([])
+        args.input_dir = absolute(dataset["pdf_dir"], repo_root)
+        args.output_dir = absolute(dataset["processed_root"], repo_root)
+        args.split_index = absolute(dataset["split_index"], repo_root) if dataset["split_index"] else None
+        args.split = split
+        for key in ("api_url", "backend", "limit", "max_in_flight", "retries",
+                    "start_index", "end_index", "all_domain_pdfs", "retry_incomplete_only"):
+            setattr(args, key, stage[key])
+        run_extract(args)
+    elif name == "reduce_and_compact":
+        from preprocessing.reduce_preprocessed_collection import main as reduce
+        from preprocessing.compact_preprocessed_collection import main as compact
+        dataset, stage = plan["dataset"], plan["stage"]
+        repo_root = Path(plan["repo_root"])
+        preprocessed = absolute(dataset["processed_root"], repo_root)
+        pdf_dir = absolute(dataset["pdf_dir"], repo_root)
+        split_index = absolute(dataset["split_index"], repo_root) if dataset["split_index"] else None
+        common = dict(preprocessed_dir=preprocessed, split_index=split_index, split=split,
+                      workers=int(stage["workers"]), dry_run=bool(stage["dry_run"]),
+                      fail_fast=bool(stage["fail_fast"]), progress_every=int(stage["progress_every"]))
+        reduce(argparse.Namespace(**common, report=preprocessed.parent / "preprocessed_analysis_report.json"))
+        compact(argparse.Namespace(**common, root_dir=Path(plan["data_root"]), pdf_dir=pdf_dir))
 
 
 def execute_worker(plan_path: Path) -> int:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     os.chdir(plan["repo_root"])
-    log_dir = Path(plan["log_dir"])
-    log_dir.mkdir(parents=True, exist_ok=True)
-    with (log_dir / "worker.log").open("a", encoding="utf-8") as log_file:
-        with subprocess.Popen(
-            worker_command(plan), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
-        ) as process:
-            assert process.stdout is not None
-            for line in process.stdout:
-                log_file.write(line)
-                log_file.flush()
-                sys.stdout.write(line)
-                sys.stdout.flush()
-            return process.wait()
+    execute_stage(plan)
+    return 0
 
 
-def launch(config: dict[str, Any], repo_root: Path, *, native_slurm: bool = False) -> None:
-    plan, snapshot = build_plan(config, repo_root)
+def launch(config: dict[str, Any], repo_root: str | Path, *, native_slurm: bool = False,
+           hydra_run_dir: str | Path | None = None) -> None:
+    repo_root = Path(repo_root).resolve()
+    plan, settings = build_plan(config, repo_root, Path(hydra_run_dir) if hydra_run_dir else None)
     kind = plan["launcher"]["kind"]
     if kind == "slurm" and not native_slurm and not config["dry_run"]:
-        raise ValueError("Slurm profiles use Hydra Submitit; launch with -m (or --multirun)")
-    if kind != "local" and (not plan["launcher"].get("partition") and kind == "slurm" or not plan["launcher"].get("queue") and kind == "pbs"):
-        raise ValueError("Scheduler profile needs a partition or queue")
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    run_dir = Path(plan["run_root"]) / plan["task"]["name"] / timestamp
-    log_dir = Path(plan["log_root"]) / plan["task"]["script_folder"] / plan["task"]["name"] / timestamp
-    plan["log_dir"] = str(log_dir)
+        raise ValueError("Slurm profiles use Hydra Submitit; launch with -m")
+    run_dir = Path(plan["run_dir"])
     plan_path = run_dir / "plan.json"
     script = run_dir / "job.sh"
-    if snapshot is not None:
-        plan["settings_snapshot"] = str(run_dir / "settings.yaml")
-    submission = (
-        {"hydra_launcher": "submitit_slurm", "mode": "MULTIRUN"} if kind == "slurm"
-        else scheduler_command(plan, script, log_dir) if kind == "pbs"
-        else worker_command(plan)
-    )
+    submission = scheduler_command(plan, script, run_dir) if kind == "pbs" else (
+        {"hydra_launcher": "submitit_slurm", "mode": "MULTIRUN"} if kind == "slurm" else "local")
     if config["dry_run"]:
-        print(json.dumps({"plan": plan, "settings": snapshot, "submission": submission}, indent=2))
+        print(json.dumps({"plan": plan, "settings": settings, "submission": submission}, indent=2))
         return
-    if not Path(plan["python"]).is_file():
-        raise FileNotFoundError(f"Python environment not found: {plan['python']}")
-    run_dir.mkdir(parents=True, exist_ok=False)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    if snapshot is not None:
-        (run_dir / "settings.yaml").write_text(yaml.safe_dump(snapshot, sort_keys=False), encoding="utf-8")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if settings is not None:
+        Path(plan["settings_snapshot"]).write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
     plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
     if kind == "pbs":
         script.write_text(job_script(plan_path, plan), encoding="utf-8")
-    if kind == "local":
-        raise SystemExit(execute_worker(plan_path))
-    if kind == "slurm":
-        result = execute_worker(plan_path)
-        if result:
-            raise RuntimeError(f"Slurm worker failed with exit code {result}; plan: {plan_path}")
+        result = subprocess.run(submission, cwd=repo_root, text=True, capture_output=True, check=False)
+        (run_dir / "submission.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+        if result.returncode:
+            raise RuntimeError(f"qsub failed ({result.returncode}): {result.stderr.strip()}")
+        print(f"Submitted PBS job {result.stdout.strip()}\nPlan: {plan_path}")
         return
-    result = subprocess.run(submission, cwd=repo_root, text=True, capture_output=True, check=False)
-    (log_dir / "submission.log").write_text(result.stdout + result.stderr, encoding="utf-8")
-    if result.returncode:
-        raise RuntimeError(f"{submission[0]} failed ({result.returncode}): {result.stderr.strip()}")
-    print(f"Submitted {kind} job {result.stdout.strip()}\nPlan: {plan_path}")
+    execute_stage(plan)
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--worker":
         raise SystemExit(execute_worker(Path(sys.argv[2])))
-    raise SystemExit("Use python -m hydra_entry launcher=local_gpu task=describe_figures")
+    raise SystemExit("Use dataset-generation stage=<stage> launcher=<profile>")

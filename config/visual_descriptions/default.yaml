@@ -6,20 +6,20 @@ prompt:
   variables:
   - image
 model:
-  provider: transformers
-  name: Qwen/Qwen3-VL-4B-Instruct
+  provider: ${model.provider}
+  name: ${model.name}
 selection:
   all: true
   start_index: 0
   end_index: null
-  limit: null
+  limit: ${stage.limit}
   resume: true
   overwrite: false
 generation:
   max_tokens: 600
   temperature: 0.0
   batch_size: 1
-  device_map: ${launcher.device_map}
-  dtype: ${launcher.dtype}
-  attn_implementation: ${launcher.attn_implementation}
+  device_map: ${model.device_map}
+  dtype: ${model.dtype}
+  attn_implementation: ${model.attn_implementation}
   debug: false

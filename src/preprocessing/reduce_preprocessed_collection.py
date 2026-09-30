@@ -18,8 +18,8 @@ EQUATION_TYPES = {"equation", "equation_interline", "equation_inline"}
 IMAGE_LIKE_TYPES = {"image", "chart", "table"}
 
 
-def main() -> None:
-    args = parse_args()
+def main(args: argparse.Namespace | None = None) -> None:
+    args = args or parse_args()
     root = args.preprocessed_dir
     if not root.exists():
         raise SystemExit(f"Preprocessed directory does not exist: {root}")

@@ -1,0 +1,5 @@
+provider: "null"
+name: "null"
+device_map: ${launcher.device_map}
+dtype: ${launcher.dtype}
+attn_implementation: ${launcher.attn_implementation}

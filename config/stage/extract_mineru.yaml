@@ -1,0 +1,22 @@
+# @package _global_
+
+stage:
+  name: extract_mineru
+  limit: null
+  api_url: http://127.0.0.1:8002
+  backend: hybrid-engine
+  max_in_flight: 4
+  retries: 2
+  start_index: 0
+  end_index: null
+  all_domain_pdfs: false
+  retry_incomplete_only: false
+
+hydra:
+  job:
+    name: extract_mineru
+  run:
+    dir: ${launcher.log_root}/extraction/extract_mineru/${now:%Y%m%dT%H%M%S}
+  sweep:
+    dir: ${launcher.log_root}/extraction/extract_mineru/${now:%Y%m%dT%H%M%S}
+    subdir: ${hydra.job.num}

@@ -1,155 +1,101 @@
-"""Check the scheduler boundary without submitting jobs or loading models."""
+"""Hydra composition and the stage execution boundary."""
 
-from pathlib import Path
+from __future__ import annotations
+
 import json
-import shlex
+import os
 import subprocess
-import sys
+from pathlib import Path
 
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import pytest
 
-from common.managed_settings import DEFAULT_SETTINGS_PATH, load_managed_settings
-from hydra_run import build_plan, execute_worker, job_script, launch, scheduler_command, worker_command
+from hydra_run import build_plan, job_script, scheduler_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def config(profile: str, task: str = "describe_figures") -> dict:
+def config(*overrides: str) -> dict:
     with initialize_config_dir(config_dir=str(ROOT / "config"), version_base="1.3"):
-        composed = compose(config_name="config", overrides=[
-            f"launcher={profile}", f"task={task}",
-            f"launcher.base_dir={ROOT / 'data'}",
-            f"launcher.run_dir={ROOT / 'runs'}",
-            f"launcher.python={ROOT / '.venv/bin/python'}",
-        ])
-    return OmegaConf.to_container(composed, resolve=True)
+        cfg = compose(config_name="config", overrides=list(overrides))
+    return OmegaConf.to_container(cfg, resolve=True)
 
 
-def hydra_launcher(profile: str) -> dict:
-    with initialize_config_dir(config_dir=str(ROOT / "config"), version_base="1.3"):
-        composed = compose(config_name="config", overrides=[f"launcher={profile}"], return_hydra_config=True)
-    return OmegaConf.to_container(composed.hydra.launcher, resolve=False)
+def test_stage_split_model_and_limit_compose() -> None:
+    cfg = config("stage=generate_queries", "split=test", "model=noop", "stage.limit=3")
+    plan, settings = build_plan(cfg, ROOT)
+    assert plan["stage"]["name"] == "generate_queries"
+    assert plan["stage"]["limit"] == 3
+    assert plan["split"] == "test"
+    assert settings["visual_query"]["model"]["provider"] == "null"
+    assert settings["visual_query"]["model"]["name"] == "null"
+    assert settings["visual_query"]["query_sets"]["test"]["split_name"] == "test"
 
 
-def test_switching_profiles_resolves_paths_and_device_settings() -> None:
+def test_stage_default_models_and_explicit_override() -> None:
+    assert config("stage=generate_queries")["model"]["name"] == "microsoft/phi-4"
+    assert config("stage=describe_textual_clues")["model"]["name"] == "Qwen/Qwen3-4B"
+    assert config("stage=judge_queries")["visual_query"]["judgement"]["model"] == "google/gemma-3-27b-it"
+    assert config("stage=describe_figures", "model=qwen3_text")["model"]["name"] == "Qwen/Qwen3-4B"
+
+
+def test_launcher_paths_override_dataset_defaults() -> None:
     for profile in ("local_gpu", "slurm_a100", "slurm_cpu", "pbs_rt_hg", "pbs_rt_hc"):
-        plan, settings = build_plan(config(profile), ROOT)
-        assert settings is not None
-        assert settings["dataset"]["root"] == str(ROOT / "data")
-        assert Path(settings["visual_descriptions"]["prompt"]["template"]).is_absolute()
-        assert settings["visual_descriptions"]["generation"]["device_map"] == plan["launcher"]["device_map"]
-        assert settings["textual_descriptions"]["generation"]["dtype"] == plan["launcher"]["dtype"]
-        assert settings["visual_query"]["model"]["attn_implementation"] == plan["launcher"]["attn_implementation"]
-        assert settings["visual_query"]["judgement"]["device_map"] == plan["launcher"]["device_map"]
-        plan["settings_snapshot"] = "/tmp/settings.yaml"
-        assert worker_command(plan)[3:5] == ["describe-figures", "--settings"]
+        cfg = config(f"launcher={profile}")
+        assert cfg["dataset"]["root"] == cfg["launcher"]["dataset_root"]
+        assert cfg["dataset"]["processed_root"] == cfg["launcher"]["processed_root"]
+        assert cfg["dataset"]["pdf_dir"] == cfg["launcher"]["pdf_dir"]
+        assert cfg["launcher"]["cache_root"]
+    cfg = config("launcher=slurm_a100", "launcher.dataset_root=/tmp/corpus")
+    assert cfg["dataset"]["root"] == "/tmp/corpus"
+    assert cfg["dataset"]["processed_root"] == "/tmp/corpus/processed"
+    assert cfg["dataset"]["pdf_dir"] == "/tmp/corpus/pdf_datasets"
 
 
-def test_scheduler_requests_match_profiles() -> None:
-    for profile in ("pbs_rt_hg", "pbs_rt_hc"):
-        plan, _ = build_plan(config(profile), ROOT)
-        command = scheduler_command(plan, Path("/tmp/job.sh"), Path("/tmp/logs"))
-        joined = " ".join(command)
-        assert ("ngpus=1" in joined) == bool(plan["launcher"]["gpus"])
-        assert command[0] == "qsub"
-        assert plan["launcher"]["queue"] in command
-        assert "-m hydra_run --worker" in job_script(Path("/tmp/plan.json"), plan)
-
-
-def test_slurm_profiles_use_native_submitit_launcher() -> None:
-    for profile, gpus, partition in (("slurm_a100", 1, "gpu_a100"), ("slurm_cpu", 0, "rome")):
-        launcher = hydra_launcher(profile)
-        application = config(profile)["launcher"]
+def test_slurm_profiles_compose_submitit_resources() -> None:
+    for profile, partition, gpus in (("slurm_a100", "gpu_a100", 1), ("slurm_cpu", "rome", 0)):
+        with initialize_config_dir(config_dir=str(ROOT / "config"), version_base="1.3"):
+            composed = compose(config_name="config", overrides=[f"launcher={profile}"], return_hydra_config=True)
+        launcher = OmegaConf.to_container(composed.hydra.launcher, resolve=False)
         assert launcher["_target_"].endswith(".SlurmLauncher")
-        assert launcher["gpus_per_node"] == application["gpus"] == gpus
-        assert launcher["cpus_per_task"] == application["cpus"] == 16
-        assert launcher["partition"] == application["partition"] == partition
+        assert launcher["partition"] == partition
+        assert launcher["gpus_per_node"] == gpus
+        assert launcher["cpus_per_task"] == 16
         assert launcher["array_parallelism"] == 1000
 
 
-def test_slurm_requires_multirun_for_submission() -> None:
-    cfg = config("slurm_a100")
-    cfg["dry_run"] = False
-    with pytest.raises(ValueError, match="-m"):
-        launch(cfg, ROOT, native_slurm=False)
+def test_pbs_adapter_receives_resources() -> None:
+    plan, _ = build_plan(config("launcher=pbs_rt_hg"), ROOT)
+    submission = scheduler_command(plan, Path("/tmp/job.sh"), Path("/tmp/logs"))
+    assert submission[0] == "qsub"
+    assert "select=1:ncpus=16:mem=32gb:ngpus=1" in submission
+    assert "-m hydra_run --worker" in job_script(Path("/tmp/plan.json"), plan)
 
 
-def test_setup_is_only_in_slurm_launcher_configs() -> None:
-    for profile in ("local_gpu", "slurm_a100", "slurm_cpu", "pbs_rt_hg", "pbs_rt_hc"):
-        hydra_config = hydra_launcher(profile)
-        plan, _ = build_plan(config(profile), ROOT)
-        script = job_script(Path("/tmp/plan.json"), plan)
-        if profile.startswith("slurm"):
-            setup = hydra_config["setup"]
-            assert setup[-1] == "source scripts/environment/activate_env.sh main"
-            if profile == "slurm_a100":
-                assert setup[:3] == ["module purge", "module load 2023", "module load CUDA/12.4.0"]
-        else:
-            assert hydra_config.get("setup") is None
-        assert "module " not in script
-        assert "source scripts/environment/activate_env.sh" not in script
-        result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
-        assert result.returncode == 0, result.stderr
+def test_invalid_generation_split_rejected() -> None:
+    with pytest.raises(ValueError, match="split=train or split=test"):
+        build_plan(config("stage=generate_queries", "split=all"), ROOT)
 
 
-def test_slurm_setup_activates_venv_for_python_imports() -> None:
-    for profile in ("slurm_a100", "slurm_cpu"):
-        commands = "\n".join(hydra_launcher(profile)["setup"])
-        script = (
-            "set -e\nmodule() { :; }\n"
-            f"cd {shlex.quote(str(ROOT))}\n{commands}\n"
-            "python -c 'import hydra, yaml, os, sys; "
-            "assert os.environ[\"VIRTUAL_ENV\"] == sys.prefix'"
-        )
-        result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
-        assert result.returncode == 0, result.stderr
-
-
-def test_preprocess_uses_profile_root_and_cpus() -> None:
-    plan, snapshot = build_plan(config("slurm_cpu", "preprocess"), ROOT)
-    assert snapshot is None
-    command = worker_command(plan)
-    assert command[1:5] == ["--root-dir", str(ROOT / "data"), "--workers", "16"]
-
-
-def test_legacy_cli_reads_hydra_defaults() -> None:
-    settings, path = load_managed_settings(DEFAULT_SETTINGS_PATH)
-    assert path == ROOT / DEFAULT_SETTINGS_PATH
-    assert settings["dataset"]["root"] == str(ROOT / "data")
-    assert settings["visual_query"]["query_sets"]["train"]["collection_id"] == "query_generation_train"
-
-
-def test_judgement_task_receives_hydra_snapshot() -> None:
-    plan, settings = build_plan(config("pbs_rt_hg", "judge_queries"), ROOT)
-    assert settings is not None
-    plan["settings_snapshot"] = "/tmp/settings.yaml"
-    assert worker_command(plan)[1:3] == ["-m", "queries.judge_queries"]
-
-
-def test_hydra_log_directory_follows_script_folder() -> None:
-    folders = {
-        "describe_figures": "clue_generation",
-        "describe_textual_clues": "clue_generation",
-        "generate_queries": "query_generation",
-        "judge_queries": "query_generation",
-        "preprocess": "preprocessing",
+def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    capture = tmp_path / "arguments.json"
+    stub = bin_dir / "uv"
+    stub.write_text("#!/usr/bin/env python3\nimport json,os,sys\nopen(os.environ['CAPTURE'],'w').write(json.dumps(sys.argv[1:]))\n")
+    stub.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CAPTURE": str(capture)}
+    wrappers = {
+        "scripts/clue_generation/describe_all_figures.sh": "describe_figures",
+        "scripts/clue_generation/describe_all_textual_clues.sh": "describe_textual_clues",
+        "scripts/query_generation/generate_queries.sh": "generate_queries",
+        "scripts/query_generation/judge_train_queries.sh": "judge_queries",
+        "scripts/preprocessing/reduce_and_compact_preprocessed.sh": "reduce_and_compact",
     }
-    for task, folder in folders.items():
-        with initialize_config_dir(config_dir=str(ROOT / "config"), version_base="1.3"):
-            composed = compose(config_name="config", overrides=[f"task={task}"], return_hydra_config=True)
-        for mode in ("run", "sweep"):
-            path = str(composed.hydra[mode].dir)
-            assert f"/{folder}/{task}/" in path
-
-
-def test_worker_output_is_written_under_log_root(tmp_path, monkeypatch) -> None:
-    plan, _ = build_plan(config("local_gpu", "preprocess"), ROOT)
-    plan["log_dir"] = str(tmp_path / "logs" / "preprocessing" / "preprocess" / "run")
-    plan_path = tmp_path / "plan.json"
-    plan_path.write_text(json.dumps(plan))
-    monkeypatch.setattr("hydra_run.worker_command", lambda _: [sys.executable, "-c", "print('worker output')"])
-    assert execute_worker(plan_path) == 0
-    assert (Path(plan["log_dir"]) / "worker.log").read_text().strip() == "worker output"
+    for wrapper, stage in wrappers.items():
+        subprocess.run([str(ROOT / wrapper), "split=test", "stage.limit=3"], check=True, env=env)
+        assert json.loads(capture.read_text()) == [
+            "run", "--no-sync", "dataset-generation", f"stage={stage}", "split=test", "stage.limit=3",
+        ]

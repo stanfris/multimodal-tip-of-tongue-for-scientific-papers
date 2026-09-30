@@ -2,11 +2,15 @@
 
 defaults:
   - override /hydra/launcher: basic
-dataset_dir: ${oc.env:VTT_DATA_ROOT,./data}
 launcher:
   kind: local
-  base_dir: ${dataset_dir}
-  run_dir: ${oc.env:VTT_RUN_ROOT,./runs}
+  dataset_root: ${oc.env:VTT_DATA_ROOT,./data}
+  processed_root: ${launcher.dataset_root}/preprocessed
+  pdf_dir: ${launcher.dataset_root}/pdf_datasets
+  split_index: null
+  log_root: ${oc.env:VTT_LOG_ROOT,./logs}
+  cache_root: ${oc.env:VTT_CACHE_ROOT,${launcher.dataset_root}/cache}
+  model_cache: ${oc.env:HF_HOME,${launcher.cache_root}/huggingface}
   python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
   gpus: 1
   cpus: 8

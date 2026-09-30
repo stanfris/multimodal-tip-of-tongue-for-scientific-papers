@@ -1,0 +1,17 @@
+# @package _global_
+
+stage:
+  name: reduce_and_compact
+  limit: null
+  workers: ${launcher.cpus}
+  progress_every: 100
+  fail_fast: false
+  dry_run: false
+hydra:
+  job:
+    name: reduce_and_compact
+  run:
+    dir: ${launcher.log_root}/preprocessing/reduce_and_compact/${now:%Y%m%dT%H%M%S}
+  sweep:
+    dir: ${launcher.log_root}/preprocessing/reduce_and_compact/${now:%Y%m%dT%H%M%S}
+    subdir: ${hydra.job.num}

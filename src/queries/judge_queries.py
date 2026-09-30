@@ -56,8 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(args: argparse.Namespace | None = None) -> int:
+    args = args or build_parser().parse_args()
     if args.settings is not None:
         args, config = load_managed_judgement_args(args)
     else:

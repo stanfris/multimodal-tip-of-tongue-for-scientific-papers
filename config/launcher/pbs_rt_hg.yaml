@@ -2,11 +2,15 @@
 
 defaults:
   - override /hydra/launcher: basic
-dataset_dir: ${oc.env:VTT_DATA_ROOT,${oc.env:HOME}/visual_tip_of_the_tongue_data}
 launcher:
   kind: pbs
-  base_dir: ${dataset_dir}
-  run_dir: ${oc.env:VTT_RUN_ROOT,./runs}
+  dataset_root: ${oc.env:VTT_DATA_ROOT,${oc.env:HOME}/visual_tip_of_the_tongue_data}
+  processed_root: ${launcher.dataset_root}/processed
+  pdf_dir: ${launcher.dataset_root}/pdf_datasets
+  split_index: ${launcher.dataset_root}/data/splits/pdf_dataset_split.json
+  log_root: ${oc.env:VTT_LOG_ROOT,./logs}
+  cache_root: ${oc.env:VTT_CACHE_ROOT,${launcher.dataset_root}/cache}
+  model_cache: ${oc.env:HF_HOME,${launcher.cache_root}/huggingface}
   python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
   queue: rt_HG
   gpus: 1

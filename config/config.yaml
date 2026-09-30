@@ -1,16 +1,17 @@
 defaults:
   - launcher: local_gpu
-  - task: describe_figures
   - dataset: default
+  - split: train
+  - model: qwen3_vl
+  - stage: describe_figures
   - visual_descriptions: default
   - textual_descriptions: default
   - visual_query: default
   - _self_
 
 dry_run: false
-log_root: ${oc.env:VTT_LOG_ROOT,./logs}
 
 hydra:
   job:
     chdir: false
-  output_subdir: null
+  output_subdir: .hydra

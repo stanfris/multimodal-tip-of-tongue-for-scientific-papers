@@ -1,0 +1,5 @@
+provider: transformers
+name: Qwen/Qwen3-VL-4B-Instruct
+device_map: ${launcher.device_map}
+dtype: ${launcher.dtype}
+attn_implementation: ${launcher.attn_implementation}

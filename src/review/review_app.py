@@ -30,7 +30,7 @@ PRIORITY_COLLECTION_IDS = ("query_generation_train", "query_generation_test")
 QUERY_MODES = ("visual_only", "visual_and_text")
 GENERATE_QUERY_COMMANDS = {
     "query_generation_train": "scripts/queries/generate_queries.sh",
-    "query_generation_test": "scripts/queries/generate_queries.sh --set test",
+    "query_generation_test": "scripts/query_generation/generate_queries.sh split=test",
 }
 
 RATINGS = ["Unreviewed", "Good", "Questionable", "Bad"]
@@ -228,7 +228,7 @@ def render_no_queries_message(collection: Path) -> None:
             "Expected train/test query collections were not found. Generate them with:\n\n"
             "```bash\n"
             "scripts/queries/generate_queries.sh\n"
-            "scripts/queries/generate_queries.sh --set test\n"
+            "scripts/query_generation/generate_queries.sh split=test\n"
             "```"
         )
 

@@ -1,0 +1,20 @@
+# @package _global_
+
+defaults:
+  - override /model: gemma3_judge
+
+stage:
+  name: judge_queries
+  limit: null
+visual_query:
+  judgement:
+    model: ${model.name}
+
+hydra:
+  job:
+    name: judge_queries
+  run:
+    dir: ${launcher.log_root}/query_generation/judge_queries/${now:%Y%m%dT%H%M%S}
+  sweep:
+    dir: ${launcher.log_root}/query_generation/judge_queries/${now:%Y%m%dT%H%M%S}
+    subdir: ${hydra.job.num}

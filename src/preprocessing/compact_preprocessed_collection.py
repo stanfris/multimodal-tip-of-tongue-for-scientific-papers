@@ -19,8 +19,8 @@ from preprocessing.preprocessed import select_preprocessed_paper_dirs
 VISUAL_BLOCK_TYPES = {"chart", "image", "table"}
 
 
-def main() -> None:
-    args = parse_args()
+def main(args: argparse.Namespace | None = None) -> None:
+    args = args or parse_args()
     preprocessed_dir = args.preprocessed_dir
     pdf_dir = args.pdf_dir or (args.root_dir / "pdf_datasets" if args.root_dir is not None else Path("data/pdf_datasets"))
     if not preprocessed_dir.exists():
