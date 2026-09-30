@@ -10,7 +10,7 @@ case "${1:-}" in
   --limit|--limit=*|--max-in-flight|--max-in-flight=*|--all-domain-pdfs|\
   --retry-incomplete-only|--help|-h)
     UV_CACHE_DIR="${UV_CACHE_DIR:-$ROOT_DIR/.uv-cache}" exec uv run --no-sync dataset-generation extract-mineru-pdfs \
-      --input-dir data/pdf_datasets --output-dir data/preprocessed "$@"
+      --input-dir data/pdf_datasets --output-dir data/processed "$@"
     ;;
 esac
 

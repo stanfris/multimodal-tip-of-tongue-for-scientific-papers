@@ -51,11 +51,12 @@ def test_launcher_paths_override_dataset_defaults() -> None:
         assert cfg["launcher"]["cache_root"]
     cfg = config("launcher=slurm_a100", "launcher.dataset_root=/tmp/corpus")
     assert cfg["dataset"]["root"] == "/tmp/corpus"
-    assert cfg["dataset"]["processed_root"] == "/tmp/corpus/preprocessed"
+    assert cfg["dataset"]["processed_root"] == "/tmp/corpus/processed"
+    assert cfg["dataset"]["preprocessed"] == "/tmp/corpus/preprocessed"
     assert cfg["dataset"]["pdf_dir"] == "/tmp/corpus/pdf_datasets"
     plan, settings = build_plan(config("launcher=slurm_a100", "stage=describe_textual_clues",
                                        "launcher.dataset_root=/scratch-shared/sfris1"), ROOT)
-    assert plan["dataset"]["processed_root"] == "/scratch-shared/sfris1/preprocessed"
+    assert plan["dataset"]["processed_root"] == "/scratch-shared/sfris1/processed"
     assert settings["dataset"]["preprocessed"] == "/scratch-shared/sfris1/preprocessed"
 
 
@@ -97,6 +98,38 @@ def test_mineru_requires_gpu_slurm_and_describes_one_job() -> None:
         composed = compose(config_name="config", overrides=["stage=extract_mineru", "launcher=slurm_a100"],
                            return_hydra_config=True)
     assert "module load CUDA/12.6.0" in list(composed.hydra.launcher.setup)
+
+
+def test_reduce_and_compact_preserves_mineru_output_and_compacts_copy(tmp_path: Path) -> None:
+    source = tmp_path / "processed" / "papers" / "ACL" / "ACL_paper"
+    content = source / "mineru" / "raw" / "hybrid_auto" / "paper_content_list_v2.json"
+    content.parent.mkdir(parents=True)
+    content.write_text(json.dumps([[{"type": "text", "text": "Paper text"}]]), encoding="utf-8")
+    (source / "markdown.md").write_text("# Paper\n", encoding="utf-8")
+    (source / "paper.json").write_text(json.dumps({
+        "paper_id": "ACL_paper",
+        "source_pdf_relpath": "ACL/paper.pdf",
+        "source_paper_dataset": "ACL",
+        "figures": [],
+        "structured_outputs": {"v2": "mineru/raw/hybrid_auto/paper_content_list_v2.json"},
+    }), encoding="utf-8")
+    (source / "figures.json").write_text("[]", encoding="utf-8")
+    (source / "_SUCCESS").touch()
+    pdf = tmp_path / "pdf_datasets" / "ACL" / "paper.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.7\n")
+
+    cfg = config("stage=reduce_and_compact", "launcher=local_gpu",
+                 f"launcher.dataset_root={tmp_path}", "dataset.split_index=null")
+    plan, _ = build_plan(cfg, ROOT, tmp_path / "run")
+    execute_stage(plan)
+
+    destination = tmp_path / "preprocessed" / "ACL" / "ACL_paper"
+    assert (source / "mineru").exists()
+    assert json.loads((source / "paper.json").read_text(encoding="utf-8"))["structured_outputs"]
+    assert (destination / "paper.pdf").read_bytes() == b"%PDF-1.7\n"
+    assert (destination / "images").is_dir()
+    assert not (destination / "mineru").exists()
 
 
 def test_mineru_worker_propagates_overrides_to_one_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -246,5 +279,5 @@ def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:
                     "--split", "train", "--limit", "3"], check=True, env=env)
     assert json.loads(capture.read_text()) == [
         "run", "--no-sync", "dataset-generation", "extract-mineru-pdfs",
-        "--input-dir", "data/pdf_datasets", "--output-dir", "data/preprocessed",
+        "--input-dir", "data/pdf_datasets", "--output-dir", "data/processed",
         "--split", "train", "--limit", "3"]

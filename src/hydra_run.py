@@ -44,7 +44,7 @@ def managed_settings(config: dict[str, Any], data_root: Path, repo_root: Path) -
         "dataset", "visual_descriptions", "textual_descriptions", "visual_query",
     )})
     settings["dataset"]["root"] = str(data_root)
-    settings["dataset"]["preprocessed"] = str(absolute(config["dataset"]["processed_root"], repo_root))
+    settings["dataset"]["preprocessed"] = str(absolute(config["dataset"]["preprocessed"], repo_root))
     for section in ("visual_descriptions", "textual_descriptions", "visual_query"):
         settings[section]["prompt"]["template"] = str(absolute(settings[section]["prompt"]["template"], repo_root))
     settings["visual_query"]["judgement"]["template"] = str(absolute(settings["visual_query"]["judgement"]["template"], repo_root))
@@ -216,12 +216,20 @@ def execute_stage(plan: dict[str, Any]) -> None:
     elif name == "reduce_and_compact":
         from preprocessing.reduce_preprocessed_collection import main as reduce
         from preprocessing.compact_preprocessed_collection import main as compact
+        from preprocessing.stage_preprocessed import copy_completed_papers
         dataset, stage = plan["dataset"], plan["stage"]
         repo_root = Path(plan["repo_root"])
-        preprocessed = absolute(dataset["processed_root"], repo_root)
+        processed = absolute(dataset["processed_root"], repo_root)
+        preprocessed = absolute(dataset["preprocessed"], repo_root)
         pdf_dir = absolute(dataset["pdf_dir"], repo_root)
         split_index = absolute(dataset["split_index"], repo_root) if dataset["split_index"] else None
-        common = dict(preprocessed_dir=preprocessed, split_index=split_index, split=split,
+        if stage["dry_run"]:
+            work_dir = processed
+        else:
+            copied = copy_completed_papers(processed, preprocessed, split_index=split_index, split=split)
+            print(f"Copied {copied} completed MinerU papers to {preprocessed}", flush=True)
+            work_dir = preprocessed
+        common = dict(preprocessed_dir=work_dir, split_index=split_index, split=split,
                       workers=int(stage["workers"]), dry_run=bool(stage["dry_run"]),
                       fail_fast=bool(stage["fail_fast"]), progress_every=int(stage["progress_every"]))
         reduce(argparse.Namespace(**common, report=preprocessed.parent / "preprocessed_analysis_report.json"))

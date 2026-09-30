@@ -144,10 +144,10 @@ explicit name. Scheduler profiles use scratch defaults; for a different
 corpus pass all relevant paths, for example:
 
 ```bash
-launcher.dataset_root=/scratch/project launcher.pdf_dir=/scratch/project/pdf_datasets launcher.processed_root=/scratch/project/preprocessed launcher.split_index=/scratch/project/data/splits/pdf_dataset_split.json launcher.log_root=/scratch/project/logs
+launcher.dataset_root=/scratch/project launcher.pdf_dir=/scratch/project/pdf_datasets launcher.processed_root=/scratch/project/processed dataset.preprocessed=/scratch/project/preprocessed launcher.split_index=/scratch/project/data/splits/pdf_dataset_split.json launcher.log_root=/scratch/project/logs
 ```
 
-Append those four arguments to a Hydra command below, replacing the example
+Append those path overrides to a Hydra command below, replacing the example
 paths. `dataset.query_output=/scratch/project/query_collections` separately
 controls query output. The canonical split index is required for indexed
 extraction and should be set for split-aware preprocessing and generation.
@@ -188,9 +188,11 @@ Hydra plan. Use `stage.limit=3` for a small figure, textual, or query run.
 selected through `model=gemma3_judge` and the stage maps it to
 `visual_query.judgement.model`.
 
-Reduction reads `dataset.processed_root`, `dataset.pdf_dir`, and the optional
-`dataset.split_index`; it writes the reduced/compacted papers beneath the
-preprocessed root, `preprocessed_analysis_report.json` beside it, and
+Reduction copies completed papers from `dataset.processed_root` to
+`dataset.preprocessed`, then compacts the copies there. MinerU's original files
+remain in `processed`. The stage also reads `dataset.pdf_dir`
+and the optional `dataset.split_index`; it writes `preprocessed_analysis_report.json`
+beside the preprocessed root, and
 `incomplete_documents.json` and `compaction_failures.jsonl` within it. Figure
 and textual stages read those papers and write
 `<dataset.root>/clues/<paper_id>/images/<figure_id>.jsonl` and
@@ -231,9 +233,9 @@ Set `dataset.pdf_dir`, `dataset.processed_root`, and `dataset.split_index`
 for a nondefault corpus; `stage.max_in_flight=2`, `stage.limit=20`, and
 `stage.retry_incomplete_only=true` are optional caller controls. Indexed
 splits require the canonical PDF split JSON. Paper output is
-`<dataset.processed_root>/<subset>/<paper_id>/`. The files `run_config.json`,
+`<dataset.processed_root>/papers/<subset>/<paper_id>/`. The files `run_config.json`,
 `last_run_summary.json`, `resume_report.json`, `incomplete_documents.json`,
-and `failures.jsonl` at the preprocessed root. The Hydra run directory is
+and `failures.jsonl` remain at the processed root. The Hydra run directory is
 `<launcher.log_root>/extraction/extract_mineru/<timestamp>/0/` for the
 Slurm sweep, containing `plan.json`, `.hydra/`, and on the allocated node
 `mineru.server.log` and `mineru.caller.log` if it reaches the worker.
@@ -703,23 +705,20 @@ pane status bars keep moving during long runs.
 
 The stage commands, their prerequisites, and their logs are in [Run the
 pipeline](#run-the-pipeline). MinerU success writes
-`data/preprocessed/<subset>/<paper_id>/` for local defaults (or the
+`data/processed/papers/<subset>/<paper_id>/` for local defaults (or the
 configured `dataset.processed_root`), with `_SUCCESS`, `markdown.md`,
 `paper.json`, `figures.json`, and `mineru/`. Completed papers are skipped on
 resume; failed or pending PDFs are recorded in `incomplete_documents.json`.
-Reduction requires these extraction outputs. Figure and textual clue stages
+The reduction and compaction stage copies completed papers to
+`data/preprocessed/<subset>/<paper_id>/` for local defaults (or the configured
+`dataset.preprocessed`). Figure and textual clue stages
 write per-paper JSONL under `data/clues/` with local defaults. Query generation
 joins both clue types and writes query collections under
 `<dataset.query_output>/<collection_id>/`.
 
-For an existing scratch corpus with papers under `processed/papers`, move the
-subset directories into the new root before resuming extraction or generating
-clues:
-
-```bash
-mkdir -p /scratch-shared/sfris1/preprocessed
-mv /scratch-shared/sfris1/processed/papers/* /scratch-shared/sfris1/preprocessed/
-```
+Run `reduce_and_compact` after extraction before generating clues or queries;
+it prepares and compacts the separate copy automatically. Its dry-run mode
+reports work without copying papers. MinerU can still resume from `processed`.
 
 The operational `extract-mineru-pdfs` CLI remains available for a server that
 is **already running**, for example inspect its flags with

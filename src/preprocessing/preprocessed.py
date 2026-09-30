@@ -188,6 +188,12 @@ def _metadata_from_paper_id(paper_id: str) -> dict[str, Any]:
 def _paper_root(path: Path) -> Path:
     if any((child / "paper.json").exists() for child in path.iterdir() if child.is_dir()) if path.exists() else False:
         return path
+    if path.exists() and any(
+        (paper / "paper.json").exists()
+        for subset in path.iterdir() if subset.is_dir() and subset.name != "papers"
+        for paper in subset.iterdir() if paper.is_dir()
+    ):
+        return path
     nested = path / "papers"
     return nested if nested.exists() else path
 
