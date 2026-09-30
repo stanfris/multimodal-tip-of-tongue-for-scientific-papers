@@ -81,7 +81,7 @@ def test_mineru_gpu_launcher_rejects_cpu_fallback() -> None:
     launcher = (PROJECT_ROOT / "scripts/extraction/run_mineru_full_extraction_gpu.sh").read_text()
     assert "torch.cuda.is_available()" in launcher
     assert "refusing CPU fallback" in launcher
-    assert "--output-dir data/preprocessed" in launcher
+    assert "--output-dir data/processed" in launcher
 
 
 def test_mineru_runtime_rejects_non_iterable_pagechars_dependency() -> None:
@@ -169,7 +169,7 @@ def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:
     assert 'SERVER_LOG="${MINERU_SERVER_LOG:-logs/extraction/slurm/${RUN_ID}.server.log}"' in script
     assert 'CALLER_LOG="${MINERU_CALLER_LOG:-logs/extraction/slurm/${RUN_ID}.caller.log}"' in script
     assert 'SERVER_CMD="${MINERU_SERVER_CMD:-$MINERU_VENV_DIR/bin/mineru-router' in script
-    assert '--output-dir "${OUTPUT_DIR:-$DATASET_DIR/preprocessed}"' in script
+    assert '--output-dir "${OUTPUT_DIR:-$DATASET_DIR/processed}"' in script
     assert "mineru_run_caller_with_server" in script
 
 

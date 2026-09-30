@@ -1,6 +1,6 @@
 name: acl_visual_tip_of_the_tongue
 root: ${launcher.dataset_root}
-preprocessed: ${launcher.processed_root}
+preprocessed: ${dataset.root}/preprocessed
 processed_root: ${launcher.processed_root}
 pdf_dir: ${launcher.pdf_dir}
 split_index: ${launcher.split_index}

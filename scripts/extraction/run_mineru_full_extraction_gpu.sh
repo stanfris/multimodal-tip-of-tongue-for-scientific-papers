@@ -152,7 +152,7 @@ fi
 CALLER_CMD=(env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction)
 if (( DEFAULT_CALLER_ARGS )); then
   CALLER_CMD+=(--input-dir data/pdf_datasets --split-index data/splits/pdf_dataset_split.json
-    --split train+test --output-dir data/preprocessed --api-url "$API_URL")
+    --split train+test --output-dir data/processed --api-url "$API_URL")
 fi
 CALLER_CMD+=("${CALLER_ARGS[@]}")
 
