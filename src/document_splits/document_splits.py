@@ -164,12 +164,20 @@ def filter_papers_by_split(
     if split_name is None:
         raise ValueError("split_name is required when split_index_path is set")
     by_id = {str(paper["paper_id"]): paper for paper in paper_rows}
+    by_source_pdf = {
+        str(paper["source_pdf_relpath"]): paper
+        for paper in paper_rows
+        if paper.get("source_pdf_relpath")
+    }
     selected: list[dict[str, Any]] = []
     missing: list[str] = []
-    for paper_id in read_split_paper_ids(split_index_path, split_name):
-        paper = by_id.get(paper_id)
+    entries = read_split_paper_ids(split_index_path, split_name)
+    pdf_index = all(entry.lower().endswith(".pdf") for entry in entries)
+    for paper_id in entries:
+        paper = by_source_pdf.get(paper_id) if pdf_index else by_id.get(paper_id)
         if paper is None:
-            missing.append(paper_id)
+            if not pdf_index:
+                missing.append(paper_id)
             continue
         selected.append(paper)
     if missing:

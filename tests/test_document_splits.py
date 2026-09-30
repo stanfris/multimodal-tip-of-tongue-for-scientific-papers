@@ -44,3 +44,25 @@ def test_filter_retains_legacy_index_compatibility(tmp_path) -> None:
         split_index_path=split_index,
         split_name="train",
     ) == [papers[1]]
+
+
+def test_filter_uses_pdf_split_paths_for_nested_extraction(tmp_path) -> None:
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(
+        json.dumps({
+            "train": ["ACL/first.pdf", "Biology/not_extracted.pdf"],
+            "test": ["Physics/second.pdf"],
+        }),
+        encoding="utf-8",
+    )
+    papers = [
+        {"paper_id": "ACL_first", "source_pdf_relpath": "ACL/first.pdf", "split": None},
+        {"paper_id": "Physics_second", "source_pdf_relpath": "Physics/second.pdf", "split": None},
+    ]
+
+    assert filter_papers_by_split(
+        papers, split_index_path=split_index, split_name="train"
+    ) == [papers[0]]
+    assert filter_papers_by_split(
+        papers, split_index_path=split_index, split_name="test"
+    ) == [papers[1]]

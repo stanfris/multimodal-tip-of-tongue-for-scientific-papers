@@ -5,6 +5,7 @@ from pathlib import Path
 
 from preprocessing.preprocessed import iter_preprocessed_paper_dirs, read_preprocessed_papers
 from preprocessing.preprocessed import select_preprocessed_paper_dirs
+from document_splits.document_splits import filter_papers_by_split
 
 
 def write_paper(root: Path, subset: str, paper_id: str) -> Path:
@@ -35,6 +36,24 @@ def test_nested_subset_papers_are_discovered_from_output_root(tmp_path: Path) ->
         "ACL_paper",
         "Engineering_paper",
     ]
+
+
+def test_snellius_processed_layout_uses_pdf_split_paths(tmp_path: Path) -> None:
+    root = tmp_path / "processed"
+    paper_dir = write_paper(root, "ACL", "ACL_first")
+    paper_json = paper_dir / "paper.json"
+    paper = json.loads(paper_json.read_text(encoding="utf-8"))
+    paper.update(source_pdf_relpath="ACL/first.pdf", split=None)
+    paper_json.write_text(json.dumps(paper), encoding="utf-8")
+    (root / "ACL").mkdir(exist_ok=True)
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(json.dumps({"train": ["ACL/first.pdf"], "test": []}), encoding="utf-8")
+
+    papers = read_preprocessed_papers(root)
+    assert [paper["paper_id"] for paper in papers] == ["ACL_first"]
+    assert filter_papers_by_split(
+        papers, split_index_path=split_index, split_name="train"
+    ) == papers
 
 
 def test_split_selection_resolves_only_extracted_papers(tmp_path: Path) -> None:
