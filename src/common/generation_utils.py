@@ -29,20 +29,11 @@ def progress(
     if not enabled:
         yield from items
         return
-    try:
-        from tqdm.auto import tqdm
-    except ImportError:
-        processed = 0
-        next_report = 10
-        for item in items:
-            yield item
-            processed += 1
-            percent = int((processed / total) * 100) if total else 100
-            if percent >= next_report or processed == total:
-                print(f"{description}: {processed}/{total} {unit}s ({percent}%)", flush=True)
-                next_report += 10
-        return
-    yield from tqdm(items, total=total, desc=description, unit=unit)
+    unit_label = {"batch": "batches", "query": "queries"}.get(unit, f"{unit}s")
+    for processed, item in enumerate(items, start=1):
+        yield item
+        percent = int((processed / total) * 100) if total else 100
+        print(f"{description}: {processed}/{total} {unit_label} ({percent}%)", flush=True)
 
 
 def record_generation_failure(

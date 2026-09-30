@@ -528,7 +528,6 @@ class QueryProgress:
         if self._bar is not None:
             self._bar.update(1)
             self.set_status(scanned=scanned, skipped=skipped)
-            return
         print(f"{self.description}: {self.count}/{self.total} queries; scanned={scanned}; skipped={skipped}", flush=True)
 
     def set_status(self, *, scanned: int, skipped: int) -> None:

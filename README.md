@@ -204,7 +204,10 @@ add `/0`). Reduction writes `preprocessing.log` there; figure, textual, query,
 and judge stages write `describe_figures.log`, `describe_textual_clues.log`,
 `generate_queries.log`, and `judge_queries.log`, respectively. These logs
 capture stage stdout and stderr while retaining console output. Inspect the
-resolved run path in the printed plan.
+resolved run path in the printed plan. A `dry_run=true` command prints only the
+plan; any empty `.log` file Hydra creates for that command has no stage output.
+During an executing run, the stage log is created immediately and receives a
+flushed line after each completed clue batch or query.
 
 ### MinerU extraction
 

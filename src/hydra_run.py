@@ -271,6 +271,7 @@ def stage_log(run_dir: str | Path, stage_name: str):
         handle.flush()
         stdout, stderr = sys.stdout, sys.stderr
         with contextlib.redirect_stdout(_Tee(stdout, handle)), contextlib.redirect_stderr(_Tee(stderr, handle)):
+            print(f"Stage log: {log_path.resolve()}", flush=True)
             try:
                 yield
             except BaseException:

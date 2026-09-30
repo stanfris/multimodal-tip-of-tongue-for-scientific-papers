@@ -12,7 +12,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import pytest
 
-from hydra_run import build_plan, job_script, scheduler_command, mineru_caller_args, execute_stage, execute_worker, launch
+from hydra_run import build_plan, job_script, scheduler_command, mineru_caller_args, execute_stage, execute_worker, launch, stage_log
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +203,13 @@ def test_stage_failure_is_recorded_in_log(tmp_path: Path, monkeypatch: pytest.Mo
         launch(config("stage=generate_queries"), ROOT, hydra_run_dir=run_dir)
     log = (run_dir / "generate_queries.log").read_text()
     assert "RuntimeError: generation failed" in log
+
+
+def test_stage_log_is_written_before_stage_finishes(tmp_path: Path) -> None:
+    log_path = tmp_path / "generate_queries.log"
+    with stage_log(tmp_path, "generate_queries"):
+        print("first query complete")
+        assert "first query complete" in log_path.read_text()
 
 
 def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:
