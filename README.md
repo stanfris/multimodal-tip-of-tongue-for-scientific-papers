@@ -156,6 +156,10 @@ are 64 for Qwen3-VL, 256 for Qwen3 text, 128 for Phi-4, and 64 for Gemma 3
 27B. It uses BF16 weights, automatic KV-cache dtype, prefix caching, and a
 16,384-token batch budget. These are benchmark priors, not measured optima.
 The figure visual budget defaults to 768 tokens on this launcher.
+The PBS job sets `VLLM_USE_FLASHINFER_SAMPLER=0` so vLLM's sampler does not
+require a CUDA compiler on H200 nodes. If a CUDA toolkit with `nvcc` is available,
+override it with `launcher.environment.VLLM_USE_FLASHINFER_SAMPLER=1` to benchmark
+FlashInfer sampling.
 
 ```bash
 scripts/clue_generation/describe_all_figures.sh split=train launcher=pbs_h200 model=qwen3_vl model.provider=vllm

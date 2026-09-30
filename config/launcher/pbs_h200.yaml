@@ -12,6 +12,8 @@ launcher:
   cache_root: ${oc.env:VTT_CACHE_ROOT,${launcher.dataset_root}/cache}
   model_cache: ${oc.env:HF_HOME,${launcher.cache_root}/huggingface}
   python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
+  environment:
+    VLLM_USE_FLASHINFER_SAMPLER: '0'
   queue: ${oc.env:VTT_PBS_QUEUE,rt_HG}
   gpus: 1
   cpus: 16

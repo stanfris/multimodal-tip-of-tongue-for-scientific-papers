@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -147,10 +148,16 @@ def job_script(plan_path: Path, plan: dict[str, Any]) -> str:
     python = Path(plan["launcher"]["python"]).expanduser()
     if not python.is_absolute():
         python = Path(root) / python
+    environment = []
+    for key, value in (plan["launcher"].get("environment") or {}).items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ValueError(f"Invalid launcher environment variable name: {key!r}")
+        environment.append(f"export {key}={shlex.quote(str(value))}")
     return "\n".join([
         "#!/usr/bin/env bash", "set -euo pipefail",
         f"cd {shlex.quote(root)}",
         f"export PYTHONPATH={shlex.quote(str(Path(root) / 'src'))}${{PYTHONPATH:+:$PYTHONPATH}}",
+        *environment,
         f"exec {shlex.quote(str(python))} -m hydra_run --worker {shlex.quote(str(plan_path))}",
         "",
     ])
