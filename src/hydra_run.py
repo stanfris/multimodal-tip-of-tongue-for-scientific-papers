@@ -122,7 +122,11 @@ def scheduler_command(plan: dict[str, Any], script: Path, log_dir: Path) -> list
 
 def job_script(plan_path: Path, plan: dict[str, Any]) -> str:
     root = plan["repo_root"]
-    python = absolute(plan["launcher"]["python"], Path(root))
+    # Keep the venv entry point intact: resolving its symlink runs the base
+    # interpreter and bypasses the venv's installed packages on PBS nodes.
+    python = Path(plan["launcher"]["python"]).expanduser()
+    if not python.is_absolute():
+        python = Path(root) / python
     return "\n".join([
         "#!/usr/bin/env bash", "set -euo pipefail",
         f"cd {shlex.quote(root)}",

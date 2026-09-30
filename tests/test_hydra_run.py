@@ -76,8 +76,18 @@ def test_pbs_adapter_receives_resources() -> None:
     plan, _ = build_plan(config("launcher=pbs_rt_hg"), ROOT)
     submission = scheduler_command(plan, Path("/tmp/job.sh"), Path("/tmp/logs"))
     assert submission[0] == "qsub"
-    assert "select=1:ncpus=16:mem=32gb:ngpus=1" in submission
+    assert f"select=1:ncpus=16:mem={plan['launcher']['memory']}:ngpus=1" in submission
     assert "-m hydra_run --worker" in job_script(Path("/tmp/plan.json"), plan)
+
+
+def test_pbs_job_preserves_venv_python_symlink(tmp_path: Path) -> None:
+    venv_python = tmp_path / ".venv/bin/python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(sys.executable)
+    plan, _ = build_plan(config("launcher=pbs_rt_hg"), tmp_path)
+    script = job_script(tmp_path / "plan.json", plan)
+    assert f"exec {venv_python} -m hydra_run --worker" in script
+    assert f"exec {Path(sys.executable).resolve()} -m hydra_run --worker" not in script
 
 
 def test_invalid_generation_split_rejected() -> None:
