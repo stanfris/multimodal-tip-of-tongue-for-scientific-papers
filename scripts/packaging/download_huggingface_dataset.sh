@@ -14,10 +14,14 @@ DESTINATION_DIR="$1"
 shift
 
 HF_REPO_ID="${HF_REPO_ID:-kasys/open-source-scientific-documents}"
-HF_CLI="${HF_CLI:-uv run hf}"
+if [[ -n "${HF_CLI:-}" ]]; then
+  HF_CLI_CMD=("$HF_CLI")
+else
+  HF_CLI_CMD=(uv run hf)
+fi
 
 if ! command -v "${HF_CLI_CMD[0]}" >/dev/null 2>&1; then
-  echo "Hugging Face CLI not found: $HF_CLI" >&2
+  echo "Hugging Face CLI not found: ${HF_CLI_CMD[0]}" >&2
   echo "Install it or set HF_CLI to the path of the hf executable." >&2
   exit 127
 fi

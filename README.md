@@ -274,15 +274,15 @@ The packager needs the five PDF source folders and the main environment.
 Its `--dry-run` discovers the planned shards without writing. Prepared files
 and validation reports are under `huggingface_dataset/`; progress goes to the
 terminal. Upload requires Hugging Face authentication and is a separate
-network operation. The download wrapper currently references an unset
-`HF_CLI_CMD` array, so use the CLI directly for download.
+network operation. The download wrapper uses `uv run hf` by default; set
+`HF_CLI` to the path of an `hf` executable to use it directly.
 
 ```bash
 scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --dry-run
 scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --prepare-only
 scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --validate-only
 HF_REPO_ID=kasys/open-source-scientific-documents scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset
-uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir data/downloaded_hf_dataset
+scripts/packaging/download_huggingface_dataset.sh data/downloaded_hf_dataset
 scripts/packaging/restore_pdf_datasets_from_huggingface.sh data/downloaded_hf_dataset data/pdf_datasets --workers 4
 ```
 
