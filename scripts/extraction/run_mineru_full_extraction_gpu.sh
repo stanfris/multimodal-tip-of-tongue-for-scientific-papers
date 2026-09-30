@@ -22,6 +22,7 @@ Launcher options:
   --server-log PATH           Server log path
   --caller-log PATH           Caller log path
   --server-cmd COMMAND        Full server command (default uses mineru-router)
+  --no-default-caller-args     Use only caller args after -- (for Hydra worker)
   -h, --help                  Show this help
 
 Any other arguments are forwarded to:
@@ -37,6 +38,7 @@ SERVER_LOG="${MINERU_SERVER_LOG:-logs/extraction/local/${RUN_ID}.server.log}"
 CALLER_LOG="${MINERU_CALLER_LOG:-logs/extraction/local/${RUN_ID}.caller.log}"
 SERVER_CMD="${MINERU_SERVER_CMD:-}"
 CALLER_ARGS=()
+DEFAULT_CALLER_ARGS=1
 
 while (($#)); do
   case "$1" in
@@ -59,6 +61,10 @@ while (($#)); do
     --server-cmd)
       SERVER_CMD="$2"
       shift 2
+      ;;
+    --no-default-caller-args)
+      DEFAULT_CALLER_ARGS=0
+      shift
       ;;
     -h|--help)
       usage
@@ -100,6 +106,7 @@ import shutil
 from importlib.metadata import PackageNotFoundError, version
 
 from packaging.version import Version
+import torch
 
 try:
     mineru_version = version("mineru")
@@ -120,6 +127,8 @@ if not hasattr(config, "reading_order_config"):
     )
 if shutil.which("ninja") is None:
     raise SystemExit("Missing ninja executable required by vLLM/FlashInfer JIT compilation")
+if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
+    raise SystemExit("MinerU GPU workflow requires a visible CUDA device; refusing CPU fallback")
 
 print(
     f"MinerU runtime OK: mineru={mineru_version} "
@@ -140,15 +149,12 @@ if [[ -z "$SERVER_CMD" ]]; then
   SERVER_CMD="$MINERU_VENV/bin/mineru-router --host 127.0.0.1 --port ${MINERU_PORT}"
 fi
 
-CALLER_CMD=(
-  env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction
-  --input-dir data/pdf_datasets
-  --split-index data/splits/pdf_dataset_split.json
-  --split train+test
-  --output-dir data/processed
-  --api-url "$API_URL"
-  "${CALLER_ARGS[@]}"
-)
+CALLER_CMD=(env "PYTHONPATH=$ROOT_DIR/src" "$MINERU_VENV/bin/python" -m extraction)
+if (( DEFAULT_CALLER_ARGS )); then
+  CALLER_CMD+=(--input-dir data/pdf_datasets --split-index data/splits/pdf_dataset_split.json
+    --split train+test --output-dir data/processed --api-url "$API_URL")
+fi
+CALLER_CMD+=("${CALLER_ARGS[@]}")
 
 printf 'MinerU server log: %s\n' "$SERVER_LOG"
 printf 'MinerU caller log: %s\n' "$CALLER_LOG"

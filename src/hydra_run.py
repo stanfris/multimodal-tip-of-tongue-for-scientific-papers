@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shlex
+import socket
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +57,14 @@ def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = N
     kind = launcher["kind"]
     if kind not in {"local", "slurm", "pbs"}:
         raise ValueError(f"Unsupported launcher kind: {kind}")
+    if name == "extract_mineru" and (kind != "slurm" or int(launcher["gpus"]) < 1):
+        raise ValueError("extract_mineru requires a GPU Slurm launcher (launcher=slurm_a100)")
+    if name == "extract_mineru":
+        port = int(stage["server_port"])
+        if not 0 <= port <= 65535:
+            raise ValueError("stage.server_port must be 0 or a valid TCP port")
+        if int(stage["server_startup_timeout"]) < 1 or int(stage["server_concurrency"]) < 1:
+            raise ValueError("MinerU server timeout and concurrency must be positive")
     data_root = absolute(config["dataset"]["root"], repo_root)
     run_root = absolute(launcher["log_root"], repo_root)
     run_dir = run_dir or run_root / name
@@ -67,6 +78,12 @@ def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = N
         "split": split,
         "settings_snapshot": str(run_dir / "settings.yaml") if name not in {"reduce_and_compact", "extract_mineru"} else None,
     }
+    if name == "extract_mineru":
+        plan["execution"] = {
+            "jobs": 1, "components": ["MinerU server", "extraction caller"],
+            "gpu_required": True,
+            "resources": {key: launcher[key] for key in ("partition", "gpus", "cpus", "memory", "walltime")},
+        }
     settings = managed_settings(config, data_root, repo_root) if name not in {"reduce_and_compact", "extract_mineru"} else None
     return plan, settings
 
@@ -98,11 +115,76 @@ def job_script(plan_path: Path, plan: dict[str, Any]) -> str:
     ])
 
 
+def mineru_caller_args(plan: dict[str, Any], api_url: str) -> list[str]:
+    """Translate resolved Hydra options to the dedicated environment's extraction CLI."""
+    root = Path(plan["repo_root"])
+    dataset, stage = plan["dataset"], plan["stage"]
+    args = ["--input-dir", str(absolute(dataset["pdf_dir"], root)),
+            "--output-dir", str(absolute(dataset["processed_root"], root)),
+            "--api-url", api_url, "--split", plan["split"]]
+    if dataset["split_index"]:
+        args += ["--split-index", str(absolute(dataset["split_index"], root))]
+    for key in ("backend", "max_in_flight", "retries", "start_index", "effort",
+                "parse_method", "lang", "start_page_id", "end_page_id", "poll_interval",
+                "request_timeout", "result_timeout", "min_markdown_chars"):
+        args += ["--" + key.replace("_", "-"), str(stage[key])]
+    for key in ("limit", "end_index"):
+        if stage[key] is not None:
+            args += ["--" + key.replace("_", "-"), str(stage[key])]
+    if stage["domains"]:
+        args += ["--domains", *stage["domains"]]
+    for key in ("all_domain_pdfs", "retry_incomplete_only", "allow_tiny_markdown",
+                "no_formula", "no_table"):
+        if stage[key]:
+            args.append("--" + key.replace("_", "-"))
+    if stage["image_analysis"] is not None:
+        args.append("--image-analysis" if stage["image_analysis"] else "--no-image-analysis")
+    return args
+
+
+def run_mineru_job(plan: dict[str, Any]) -> None:
+    """Run server and caller together inside the single Submitit allocation."""
+    root = Path(plan["repo_root"])
+    stage = plan["stage"]
+    port = int(stage["server_port"])
+    if port == 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+    if not 1 <= port <= 65535:
+        raise ValueError("stage.server_port must be 0 or a valid TCP port")
+    run_dir = Path(plan["run_dir"])
+    run_id = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
+    temp_base = Path(os.environ.get("SLURM_TMPDIR", f"/tmp/{os.environ.get('USER', 'mineru')}/mineru_{run_id}"))
+    temp_dir = temp_base / "tmp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update({
+        "TMPDIR": str(temp_dir), "MINERU_PORT": str(port),
+        "MINERU_VENV": str(absolute(stage["mineru_venv"], root)),
+        "MINERU_STARTUP_TIMEOUT": str(stage["server_startup_timeout"]),
+        "MINERU_API_MAX_CONCURRENT_REQUESTS": str(stage["server_concurrency"]),
+        "MINERU_SERVER_LOG": str(run_dir / "mineru.server.log"),
+        "MINERU_CALLER_LOG": str(run_dir / "mineru.caller.log"),
+    })
+    cmd = [str(root / "scripts/extraction/run_mineru_full_extraction_gpu.sh"),
+           "--no-default-caller-args"]
+    if stage["server_command"]:
+        cmd += ["--server-cmd", stage["server_command"].replace("{port}", str(port))]
+    cmd += ["--", *mineru_caller_args(plan, f"http://127.0.0.1:{port}")]
+    print(f"One GPU Slurm job: MinerU server and caller; temp={temp_dir}", flush=True)
+    subprocess.run(cmd, cwd=root, env=env, check=True)
+
+
 def execute_stage(plan: dict[str, Any]) -> None:
     """Invoke normal Python functions with a resolved settings file or typed arguments."""
     repo_root = Path(plan["repo_root"])
     os.environ["HF_HOME"] = str(absolute(plan["launcher"]["model_cache"], repo_root))
     os.environ["XDG_CACHE_HOME"] = str(absolute(plan["launcher"]["cache_root"], repo_root))
+
+    if plan["stage"]["name"] == "extract_mineru":
+        run_mineru_job(plan)
+        return
 
     from clues.textual_clue_descriptions import build_parser as textual_parser, run as describe_text
     from clues.vl_figure_descriptions import build_parser as visual_parser, run as describe_figures
@@ -122,19 +204,6 @@ def execute_stage(plan: dict[str, Any]) -> None:
         generate_queries(args)
     elif name == "judge_queries":
         judge_queries(judge_parser().parse_args(["--settings", settings, "--set", split]))
-    elif name == "extract_mineru":
-        from extraction.mineru_extraction import build_extract_parser, run_extract
-        repo_root = Path(plan["repo_root"])
-        dataset, stage = plan["dataset"], plan["stage"]
-        args = build_extract_parser().parse_args([])
-        args.input_dir = absolute(dataset["pdf_dir"], repo_root)
-        args.output_dir = absolute(dataset["processed_root"], repo_root)
-        args.split_index = absolute(dataset["split_index"], repo_root) if dataset["split_index"] else None
-        args.split = split
-        for key in ("api_url", "backend", "limit", "max_in_flight", "retries",
-                    "start_index", "end_index", "all_domain_pdfs", "retry_incomplete_only"):
-            setattr(args, key, stage[key])
-        run_extract(args)
     elif name == "reduce_and_compact":
         from preprocessing.reduce_preprocessed_collection import main as reduce
         from preprocessing.compact_preprocessed_collection import main as compact
@@ -153,8 +222,47 @@ def execute_stage(plan: dict[str, Any]) -> None:
 def execute_worker(plan_path: Path) -> int:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     os.chdir(plan["repo_root"])
-    execute_stage(plan)
+    if plan["stage"]["name"] == "reduce_and_compact":
+        with preprocessing_log(plan["run_dir"]):
+            execute_stage(plan)
+    else:
+        execute_stage(plan)
     return 0
+
+
+class _Tee:
+    """Write worker output to the run log and the original stream."""
+
+    def __init__(self, original: Any, log_handle: Any) -> None:
+        self.original = original
+        self.log_handle = log_handle
+
+    def write(self, value: str) -> int:
+        self.log_handle.write(value)
+        self.log_handle.flush()
+        return self.original.write(value)
+
+    def flush(self) -> None:
+        self.log_handle.flush()
+        self.original.flush()
+
+    def isatty(self) -> bool:
+        return self.original.isatty()
+
+
+@contextlib.contextmanager
+def preprocessing_log(run_dir: str | Path):
+    """Capture preprocessing stdout/stderr in an immediately visible text file."""
+    log_path = Path(run_dir) / "preprocessing.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8", buffering=1) as handle:
+        handle.write(
+            f"\n[{datetime.now(timezone.utc).isoformat()}] preprocessing worker started\n"
+        )
+        handle.flush()
+        stdout, stderr = sys.stdout, sys.stderr
+        with contextlib.redirect_stdout(_Tee(stdout, handle)), contextlib.redirect_stderr(_Tee(stderr, handle)):
+            yield
 
 
 def launch(config: dict[str, Any], repo_root: str | Path, *, native_slurm: bool = False,
@@ -173,6 +281,13 @@ def launch(config: dict[str, Any], repo_root: str | Path, *, native_slurm: bool 
         print(json.dumps({"plan": plan, "settings": settings, "submission": submission}, indent=2))
         return
     run_dir.mkdir(parents=True, exist_ok=True)
+    if plan["stage"]["name"] == "reduce_and_compact":
+        preprocessing_path = run_dir / "preprocessing.log"
+        if not preprocessing_path.exists():
+            preprocessing_path.write_text(
+                f"[{datetime.now(timezone.utc).isoformat()}] preprocessing job submitted\n",
+                encoding="utf-8",
+            )
     if settings is not None:
         Path(plan["settings_snapshot"]).write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
     plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
@@ -184,7 +299,11 @@ def launch(config: dict[str, Any], repo_root: str | Path, *, native_slurm: bool 
             raise RuntimeError(f"qsub failed ({result.returncode}): {result.stderr.strip()}")
         print(f"Submitted PBS job {result.stdout.strip()}\nPlan: {plan_path}")
         return
-    execute_stage(plan)
+    if plan["stage"]["name"] == "reduce_and_compact":
+        with preprocessing_log(plan["run_dir"]):
+            execute_stage(plan)
+    else:
+        execute_stage(plan)
 
 
 if __name__ == "__main__":

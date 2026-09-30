@@ -117,8 +117,9 @@ scripts/preprocessing/reduce_and_compact_preprocessed.sh split=all \
   dataset.pdf_dir=data/acl_subset/pdfs stage.workers=1
 ```
 
-The `extract_mineru` stage calls an already running MinerU API; the server
-start/readiness/shutdown lifecycle remains in the extraction scripts.
+The `extract_mineru` stage runs the MinerU server and extraction caller together
+inside one GPU Slurm job. Its worker reuses the server lifecycle in the
+extraction scripts.
 
 The launcher profile supplies filesystem locations as well as execution
 resources. `launcher=slurm_a100` and `launcher=slurm_cpu` point at Snellius
@@ -138,8 +139,8 @@ Set `dry_run=true` to inspect the resolved plan without executing or submitting.
 Hydra writes `.hydra/config.yaml`, `.hydra/hydra.yaml`, and
 `.hydra/overrides.yaml` in its run directory. The pipeline also writes
 `plan.json` and, for generation stages, `settings.yaml` as the adapter
-snapshot used by existing generation code. MinerU server orchestration has
-its own process lifecycle and remains in the extraction scripts.
+snapshot used by existing generation code. The MinerU worker runs its server
+and caller from the same resolved plan in one submitted job.
 
 ## Query Review UI
 
@@ -163,7 +164,6 @@ scripts/document_downloads/build_acl_subset.sh
 scripts/document_downloads/download_acl_pdfs.sh
 scripts/pdf_corpus/build_pdf_datasets_folder.sh
 scripts/pdf_corpus/build_pdf_dataset_split.sh
-scripts/extraction/start_mineru_router.sh
 scripts/extraction/run_mineru_full_extraction.sh
 scripts/preprocessing/reduce_and_compact_preprocessed.sh
 scripts/clue_generation/describe_all_figures.sh
@@ -172,8 +172,7 @@ scripts/query_generation/generate_queries.sh
 scripts/query_generation/judge_train_queries.sh
 ```
 
-Run `start_mineru_router.sh` in a separate terminal before
-`run_mineru_full_extraction.sh`. The clue and query stages read directly
+The MinerU wrapper starts its server inside the GPU Slurm job. The clue and query stages read directly
 from `data/preprocessed` or `data/preprocessed/papers`.
 
 For an external corpus, set the paths through Hydra:
@@ -618,159 +617,65 @@ The full-paper PDF extraction path uses MinerU 3.x through a persistent
 once per PDF and keeps corpus-level resume state in this repository instead of
 depending on MinerU's in-process task IDs.
 
-First inspect the machine:
-
-```bash
-scripts/extraction/probe_mineru_env.sh
-```
-
-On the DGX, start a persistent router:
-
-```bash
-CUDA_VISIBLE_DEVICES=0 scripts/extraction/start_mineru_router.sh \
-  --host 127.0.0.1 \
-  --port 8002
-```
-
-The wrapper activates `.venv-mineru` for the router and its vLLM/FlashInfer
-subprocesses. This is required so JIT build tools such as `ninja` remain on
-`PATH`. The environment also pins `pdftext==0.6.3`: MinerU 3.4.0 is not
-compatible with the non-iterable `PageChars` API introduced in pdftext 0.7.
-Pass `--help` to the wrapper for custom router settings.
-
-With the router running, use the Hydra extraction caller for a small local run:
-
-```bash
-uv run --no-sync dataset-generation stage=extract_mineru split=train \
-  stage.limit=20 stage.max_in_flight=2
-```
-
-The `extract_mineru` stage uses `dataset.pdf_dir` as input and
-`dataset.processed_root` as output. Its default API URL is
-`http://127.0.0.1:8002`; override it with `stage.api_url=...` if the router uses
-another port. Use `split=test` for the test split. To parse all discovered PDFs,
-use `split=all stage.all_domain_pdfs=true`. The router must already be running.
-
-The older `scripts/extraction/run_mineru_full_extraction.sh` remains available
-as an operational caller with argparse options. By default, it reads every PDF under
-`data/pdf_datasets/{ACL,Physics,Engineering,Biology,Medicine}`. A selected
-train/test scope reads `data/splits/pdf_dataset_split.json`, so split membership
-and source dataset names are recorded in each extracted `paper.json`. For a
-small smoke run, pass normal CLI overrides through the script:
-
-```bash
-scripts/extraction/run_mineru_full_extraction.sh --split train --limit 20 --max-in-flight 2
-```
-
-Process only the PDFs listed in both the train and test portions of the
-canonical split index:
-
-```bash
-scripts/extraction/run_mineru_full_extraction.sh --split train+test
-```
-
-Restrict that split-index run to one or more domain groups:
-
-```bash
-scripts/extraction/run_mineru_full_extraction.sh \
-  --split train+test \
-  --domains ACL Biology
-```
-
-To process every PDF in selected domain folders, including documents outside
-the train/test split, bypass the split index explicitly:
-
-```bash
-scripts/extraction/run_mineru_full_extraction.sh \
-  --domains Engineering Physics \
-  --all-domain-pdfs
-```
-
-A run with exactly one `--domains` value writes beneath that domain name. For
-example, `--domains Engineering` writes papers, failure records, and run
-metadata under `data/processed/Engineering/`.
-
-To run the router and extraction caller together on one GPU machine, use the
-portable launcher. It starts one local MinerU server, waits for the real
-`/health` endpoint on `127.0.0.1`, runs the existing extraction caller, then
-shuts the server down and exits with the caller's status:
-
-```bash
-scripts/extraction/run_mineru_full_extraction_gpu.sh --split train --limit 20 --max-in-flight 2
-```
-
-The launcher defaults to port `8002` and writes separate server/caller logs.
-Server output stays in the server log, while extraction progress is both shown
-live and appended to the caller log under `logs/extraction/local/`. Override
-launcher settings before normal caller arguments:
-
-```bash
-scripts/extraction/run_mineru_full_extraction_gpu.sh \
-  --port 8012 \
-  --startup-timeout 900 \
-  -- \
-  --input-dir data/pdf_datasets \
-  --output-dir data/processed \
-  --split all
-```
-
-Before submitting PDFs, the launcher verifies that `.venv-mineru` has MinerU
-3.4.0 and a Transformers 4.57.3 PP-DocLayoutV2 configuration with reading-order
-support. Create or repair that isolated environment with:
+Prepare the dedicated MinerU environment once:
 
 ```bash
 scripts/environment/sync_mineru_env.sh
+scripts/extraction/probe_mineru_env.sh
 ```
 
-By default the server command is:
+The normal GPU workflow is a Hydra Submitit multirun. The wrapper passes Hydra
+flags before its stage override, so put `-m` before the config overrides:
 
 ```bash
-.venv-mineru/bin/mineru-router --host 127.0.0.1 --port <PORT>
+scripts/extraction/run_mineru_full_extraction.sh \
+  -m stage=extract_mineru split=train launcher=slurm_a100
 ```
 
-If a local MinerU install exposes a different router flag shape, pass the exact
-server command with `--server-cmd` or `MINERU_SERVER_CMD`. The caller remains
-the repository CLI and preserves the current `hybrid-engine`, page range, and
-output format defaults unless you explicitly override them with caller args.
-
-On a Slurm cluster with A100 nodes, submit one server plus one caller as a
-single job:
+Inspect the resolved plan locally without submitting a job:
 
 ```bash
-sbatch scripts/extraction/slurm/run_mineru_full_extraction_a100.job
+scripts/extraction/run_mineru_full_extraction.sh \
+  stage=extract_mineru split=train launcher=slurm_a100 dry_run=true
 ```
 
-When submitting from outside the repository root, set the checkout explicitly:
+The dry run reports one job containing the MinerU server and extraction caller,
+with the `gpu_a100` partition, one GPU, 16 CPUs, 32G memory, and a three-hour
+limit. The real worker starts a localhost server, checks `/health`, runs the
+caller in `.venv-mineru`, and shuts the server down on completion or failure.
+It checks the pinned MinerU, Transformers, and pdftext versions, reading-order
+support, and `ninja` before starting. Server and caller logs are separate in
+Hydra's run directory. The worker uses `$SLURM_TMPDIR` when available and
+otherwise creates a job-specific temporary directory.
+
+Use Hydra overrides for corpus paths, concurrency, retry and resume options:
 
 ```bash
-repo_root=/path/to/repo
-sbatch \
-  --output="$repo_root/logs/extraction/slurm/mineru_extract_%j.out" \
-  --error="$repo_root/logs/extraction/slurm/mineru_extract_%j.err" \
-  "$repo_root/scripts/extraction/slurm/run_mineru_full_extraction_a100.job" \
-  --root-dir "$repo_root"
+scripts/extraction/run_mineru_full_extraction.sh -m \
+  stage=extract_mineru split=train+test launcher=slurm_a100 \
+  dataset.pdf_dir=/scratch/project/pdf_datasets \
+  dataset.processed_root=/scratch/project/processed \
+  dataset.split_index=/scratch/project/data/splits/pdf_dataset_split.json \
+  stage.max_in_flight=2 stage.server_concurrency=4 stage.retries=3 \
+  stage.limit=20 stage.retry_incomplete_only=true
 ```
 
-The script uses one node, one A100 GPU, 16 CPUs, 32G memory, and a three-hour
-time limit. It chooses a localhost port and writes Slurm stdout/stderr plus the
-server/caller logs to `logs/extraction/slurm/`. It uses `$SLURM_TMPDIR` for
-temporary files when available. Live extraction progress is written to both
-the caller log and `mineru_extract_<job>.out`; MinerU server output remains only
-in the server log. Input and split-index paths default to locations beneath
-`/scratch-shared/sfris1`, and extracted papers are written to
-`/scratch-shared/sfris1/processed`. Additional arguments after the script path
-are forwarded to `extract-mineru-pdfs`; `--root-dir` sets the repository
-checkout, and environment variables such as
-`DATASET_DIR`, `INPUT_DIR`, `SPLIT_INDEX`, `SPLIT`, `OUTPUT_DIR`,
-`MINERU_PORT`, and `MINERU_STARTUP_TIMEOUT` override the defaults. The Slurm
-launcher sets both MinerU's server request limit and the extraction caller's
-in-flight limit from `MINERU_CONCURRENCY`, which defaults to `8`.
+`split=train`, `split=test`, and `split=train+test` use the configured split
+index. `split=all stage.all_domain_pdfs=true` processes every discovered PDF.
+The caller keeps its usual resume behavior: completed papers are preserved,
+and incomplete papers are queued. `stage.retry_incomplete_only=true` narrows
+that queue to recorded incomplete or failed papers. Additional caller options,
+including `stage.domains`, page range, parsing options, and timeouts, are in
+`config/stage/extract_mineru.yaml`. `stage.server_port=0` chooses a free
+localhost port; `stage.server_startup_timeout` controls readiness waiting.
 
-The A100 job processes every discovered PDF by default. Pass `--split train`,
-`--split test`, or `--split train+test` after the `.job` path to use the
-corresponding entries from the split index. Override its location with
-`--split-index PATH`. Every launch reports its selected scope and resume
-behavior before starting the MinerU server.
+The standalone `start_mineru_router.sh`,
+`run_mineru_full_extraction_gpu.sh`, and
+`slurm/run_mineru_full_extraction_a100.job` remain available for legacy or
+manual workflows. The operational `extract-mineru-pdfs` CLI still calls an
+already running server. For compatibility, the Hydra wrapper also forwards
+legacy calls beginning with argparse flags such as `--split` or `--input-dir`
+to that standalone caller; those calls require a server started separately.
 
 Completed papers are skipped on restart. Each successful paper has:
 

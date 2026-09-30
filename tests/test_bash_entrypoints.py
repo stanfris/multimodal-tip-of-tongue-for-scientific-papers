@@ -77,6 +77,12 @@ def test_mineru_server_launchers_expose_environment_build_tools() -> None:
         assert "mineru_check_pdftext_compatibility" in script
 
 
+def test_mineru_gpu_launcher_rejects_cpu_fallback() -> None:
+    launcher = (PROJECT_ROOT / "scripts/extraction/run_mineru_full_extraction_gpu.sh").read_text()
+    assert "torch.cuda.is_available()" in launcher
+    assert "refusing CPU fallback" in launcher
+
+
 def test_mineru_runtime_rejects_non_iterable_pagechars_dependency() -> None:
     launcher = (PROJECT_ROOT / "scripts/extraction/mineru_server_launcher.sh").read_text(
         encoding="utf-8"
@@ -95,6 +101,44 @@ def test_mineru_server_output_is_logged_but_only_caller_output_is_teed() -> None
     assert '> >(tee -a "$server_log")' not in launcher
     assert '"${caller_cmd[@]}" 2>&1 | tee -a "$caller_log"' in launcher
     assert "MinerU server exited before readiness with status %s" in launcher
+
+
+def test_mineru_lifecycle_stops_mock_server_after_caller_success_and_failure(tmp_path: Path) -> None:
+    lifecycle = PROJECT_ROOT / "scripts/extraction/mineru_server_launcher.sh"
+    for caller_exit in (0, 7):
+        server_log = tmp_path / f"server-{caller_exit}.log"
+        caller_log = tmp_path / f"caller-{caller_exit}.log"
+        script = f'''set -uo pipefail
+source "{lifecycle}"
+mineru_health_check() {{ return 0; }}
+mineru_run_caller_with_server http://127.0.0.1:43123 'sleep 60' "{server_log}" "{caller_log}" 2 bash -c 'exit {caller_exit}'
+status=$?
+if kill -0 "$MINERU_SERVER_PID" 2>/dev/null; then exit 99; fi
+exit "$status"
+'''
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        assert result.returncode == caller_exit, result.stderr
+        assert "Starting MinerU server" in server_log.read_text()
+        assert "Stopping MinerU server" in server_log.read_text()
+        assert "Starting caller" in caller_log.read_text()
+
+
+def test_mineru_lifecycle_stops_mock_server_when_readiness_fails(tmp_path: Path) -> None:
+    lifecycle = PROJECT_ROOT / "scripts/extraction/mineru_server_launcher.sh"
+    server_log = tmp_path / "server.log"
+    caller_log = tmp_path / "caller.log"
+    script = f'''set -uo pipefail
+source "{lifecycle}"
+mineru_health_check() {{ return 1; }}
+mineru_run_caller_with_server http://127.0.0.1:43123 'sleep 60' "{server_log}" "{caller_log}" 1 bash -c 'exit 0'
+status=$?
+if kill -0 "$MINERU_SERVER_PID" 2>/dev/null; then exit 99; fi
+exit "$status"
+'''
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 124
+    assert "Stopping MinerU server" in server_log.read_text()
+    assert not caller_log.exists() or "Starting caller" not in caller_log.read_text()
 
 
 def test_slurm_mineru_launcher_preserves_log_stream_separation() -> None:

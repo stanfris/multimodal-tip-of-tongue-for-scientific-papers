@@ -11,7 +11,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import pytest
 
-from hydra_run import build_plan, job_script, scheduler_command
+from hydra_run import build_plan, job_script, scheduler_command, mineru_caller_args, execute_stage, launch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +79,80 @@ def test_invalid_generation_split_rejected() -> None:
         build_plan(config("stage=generate_queries", "split=all"), ROOT)
 
 
+def test_mineru_requires_gpu_slurm_and_describes_one_job() -> None:
+    for profile in ("slurm_cpu", "local_gpu", "pbs_rt_hg"):
+        with pytest.raises(ValueError, match="GPU Slurm launcher"):
+            build_plan(config("stage=extract_mineru", f"launcher={profile}"), ROOT)
+    plan, _ = build_plan(config("stage=extract_mineru", "launcher=slurm_a100"), ROOT)
+    assert plan["execution"]["jobs"] == 1
+    assert plan["execution"]["components"] == ["MinerU server", "extraction caller"]
+    assert plan["execution"]["resources"] == {
+        "partition": "gpu_a100", "gpus": 1, "cpus": 16, "memory": "32G", "walltime": "03:00:00"}
+    with initialize_config_dir(config_dir=str(ROOT / "config"), version_base="1.3"):
+        composed = compose(config_name="config", overrides=["stage=extract_mineru", "launcher=slurm_a100"],
+                           return_hydra_config=True)
+    assert "module load CUDA/12.6.0" in list(composed.hydra.launcher.setup)
+
+
+def test_mineru_worker_propagates_overrides_to_one_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = config("stage=extract_mineru", "launcher=slurm_a100", "split=train+test",
+                 "stage.limit=20", "stage.max_in_flight=2", "stage.server_concurrency=4",
+                 "stage.retries=5", "stage.retry_incomplete_only=true",
+                 "stage.start_page_id=1", "stage.end_page_id=3",
+                 "dataset.split_index=/tmp/custom-splits.json")
+    plan, _ = build_plan(cfg, ROOT, tmp_path / "run")
+    calls = []
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+    monkeypatch.setattr("hydra_run.subprocess.run", fake_run)
+    monkeypatch.setattr("hydra_run.socket.socket", lambda *args: FakeSocket())
+    monkeypatch.setenv("SLURM_TMPDIR", str(tmp_path / "slurm-tmp"))
+    execute_stage(plan)
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    assert cmd[0].endswith("run_mineru_full_extraction_gpu.sh")
+    assert cmd[1:3] == ["--no-default-caller-args", "--"]
+    caller = cmd[3:]
+    for option, value in (("--split", "train+test"), ("--split-index", str(Path("/tmp/custom-splits.json").resolve())),
+                          ("--limit", "20"), ("--max-in-flight", "2"), ("--retries", "5"),
+                          ("--start-page-id", "1"), ("--end-page-id", "3")):
+        assert caller[caller.index(option) + 1] == value
+    assert "--retry-incomplete-only" in caller
+    assert caller[caller.index("--api-url") + 1] == "http://127.0.0.1:43123"
+    assert kwargs["env"]["MINERU_API_MAX_CONCURRENT_REQUESTS"] == "4"
+    assert kwargs["env"]["TMPDIR"].endswith("/tmp")
+    assert kwargs["check"] is True
+
+
+class FakeSocket:
+    def __enter__(self): return self
+    def __exit__(self, *args): return None
+    def bind(self, address): pass
+    def getsockname(self): return ("127.0.0.1", 43123)
+
+
+def test_mineru_dry_run_does_not_submit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    cfg = config("stage=extract_mineru", "launcher=slurm_a100", "dry_run=true")
+    monkeypatch.setattr("hydra_run.subprocess.run", lambda *args, **kwargs: pytest.fail("submitted"))
+    launch(cfg, ROOT, hydra_run_dir=tmp_path / "dry")
+    output = json.loads(capsys.readouterr().out)
+    assert output["submission"]["hydra_launcher"] == "submitit_slurm"
+    assert output["plan"]["execution"]["jobs"] == 1
+    assert not (tmp_path / "dry").exists()
+
+
+def test_mineru_submitit_worker_executes_once_in_allocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = config("stage=extract_mineru", "launcher=slurm_a100", "split=train")
+    executed = []
+    monkeypatch.setattr("hydra_run.execute_stage", lambda plan: executed.append(plan))
+    monkeypatch.setattr("hydra_run.subprocess.run", lambda *args, **kwargs: pytest.fail("nested submission"))
+    run_dir = tmp_path / "submitit-job"
+    launch(cfg, ROOT, native_slurm=True, hydra_run_dir=run_dir)
+    assert len(executed) == 1
+    assert executed[0]["execution"]["jobs"] == 1
+    assert json.loads((run_dir / "plan.json").read_text())["split"] == "train"
+
+
 def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -99,3 +173,15 @@ def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:
         assert json.loads(capture.read_text()) == [
             "run", "--no-sync", "dataset-generation", f"stage={stage}", "split=test", "stage.limit=3",
         ]
+    subprocess.run([str(ROOT / "scripts/extraction/run_mineru_full_extraction.sh"),
+                    "-m", "stage=extract_mineru", "split=train", "launcher=slurm_a100"],
+                   check=True, env=env)
+    assert json.loads(capture.read_text()) == [
+        "run", "--no-sync", "dataset-generation", "-m", "stage=extract_mineru",
+        "split=train", "launcher=slurm_a100", "stage=extract_mineru"]
+    subprocess.run([str(ROOT / "scripts/extraction/run_mineru_full_extraction.sh"),
+                    "--split", "train", "--limit", "3"], check=True, env=env)
+    assert json.loads(capture.read_text()) == [
+        "run", "--no-sync", "dataset-generation", "extract-mineru-pdfs",
+        "--input-dir", "data/pdf_datasets", "--output-dir", "data/preprocessed",
+        "--split", "train", "--limit", "3"]
