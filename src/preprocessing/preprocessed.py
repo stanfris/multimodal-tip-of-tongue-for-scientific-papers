@@ -48,7 +48,8 @@ def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR)
         paper["paper_id"] = paper_id
         paper["paper_dir"] = str(paper_dir)
         paper["markdown_path"] = str(markdown_path)
-        paper["figures"] = _resolve_figures(paper_dir, paper.get("figures") or [])
+        figures = paper.get("figures") or _figures_from_images(paper_dir)
+        paper["figures"] = _resolve_figures(paper_dir, figures)
         papers.append(paper)
     return papers
 
@@ -148,15 +149,19 @@ def _minimal_paper_record(paper_dir: Path) -> dict[str, Any]:
         "paper_id": paper_dir.name,
         "pdf_path": str(pdfs[0]) if pdfs else None,
         **metadata,
-        "figures": [
-            {
-                "figure_id": image_path.stem,
-                "filename": image_path.name,
-                "image_relpath": str(image_path.relative_to(paper_dir)),
-            }
-            for image_path in _iter_image_files(paper_dir / "images")
-        ],
+        "figures": _figures_from_images(paper_dir),
     }
+
+
+def _figures_from_images(paper_dir: Path) -> list[dict[str, str]]:
+    return [
+        {
+            "figure_id": image_path.stem,
+            "filename": image_path.name,
+            "image_relpath": str(image_path.relative_to(paper_dir)),
+        }
+        for image_path in _iter_image_files(paper_dir / "images")
+    ]
 
 
 def _iter_image_files(images_dir: Path) -> list[Path]:

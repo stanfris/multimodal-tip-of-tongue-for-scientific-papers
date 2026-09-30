@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PIL import Image
+
 from extraction.mineru_extraction import build_pdf_inputs
 from extraction.mineru_extraction import build_extraction_resume_report
 from extraction.mineru_extraction import build_extract_parser
@@ -12,6 +14,36 @@ from extraction.mineru_extraction import paper_output_dir
 from extraction.mineru_extraction import resolve_extraction_output_dir
 from extraction.mineru_extraction import resolve_split_index
 from extraction.mineru_extraction import write_extraction_incomplete_manifest
+from extraction.mineru_extraction import PDFInput, normalize_figures
+
+
+def test_normalize_figures_reads_nested_mineru_image_source(tmp_path: Path) -> None:
+    work_dir = tmp_path / "work"
+    base_dir = work_dir / "mineru" / "raw"
+    image_path = base_dir / "images" / "figure.png"
+    image_path.parent.mkdir(parents=True)
+    Image.new("RGB", (12, 8)).save(image_path)
+    pdf_input = PDFInput(
+        path=tmp_path / "paper.pdf",
+        relative_path=Path("ACL/paper.pdf"),
+        paper_id="ACL_paper",
+        source_dataset="ACL",
+        split="train",
+    )
+
+    figures = normalize_figures(
+        [[{"type": "image", "content": {"image_source": {"path": "images/figure.png"}}}]],
+        base_dir,
+        pdf_input.paper_id,
+        pdf_input,
+        work_dir,
+        tmp_path / "final",
+    )
+
+    assert len(figures) == 1
+    assert figures[0]["image_relpath"] == "mineru/raw/images/figure.png"
+    assert figures[0]["image_width"] == 12
+    assert figures[0]["image_height"] == 8
 
 
 def write_pdf(path: Path) -> None:
