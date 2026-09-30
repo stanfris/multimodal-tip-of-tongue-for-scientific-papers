@@ -41,7 +41,7 @@ from preprocessing.parse_tracking import write_incomplete_documents
 DEFAULT_API_URL = "http://127.0.0.1:8002"
 DEFAULT_PDF_DATASET_NAMES = ("ACL", "Biology", "Engineering", "Medicine", "Physics")
 DEFAULT_INPUT_DIR = Path("data") / "pdf_datasets"
-DEFAULT_OUTPUT_DIR = Path("data") / "processed"
+DEFAULT_OUTPUT_DIR = Path("data") / "preprocessed"
 DEFAULT_SPLIT_INDEX = Path("data") / "splits" / "pdf_dataset_split.json"
 FIGURE_TYPES = {"image", "chart"}
 TERMINAL_SUCCESS = {"completed", "complete", "success", "succeeded", "done"}
@@ -437,7 +437,6 @@ def probe_environment() -> dict[str, Any]:
 
 async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOptions) -> ExtractionStats:
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "papers").mkdir(exist_ok=True)
     (output_dir / "_tmp").mkdir(exist_ok=True)
     stats = ExtractionStats(total=len(pdfs))
     pending = [pdf for pdf in pdfs if not is_complete(output_dir, pdf)]
@@ -956,7 +955,7 @@ def paper_subset(pdf_input: PDFInput) -> str:
 
 
 def paper_output_dir(output_dir: Path, pdf_input: PDFInput) -> Path:
-    return output_dir / "papers" / paper_subset(pdf_input) / pdf_input.paper_id
+    return output_dir / paper_subset(pdf_input) / pdf_input.paper_id
 
 
 def is_complete(output_dir: Path, pdf_input: PDFInput) -> bool:

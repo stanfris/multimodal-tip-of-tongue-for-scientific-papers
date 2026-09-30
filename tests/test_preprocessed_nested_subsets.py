@@ -89,19 +89,21 @@ def test_split_selection_resolves_only_extracted_papers(tmp_path: Path) -> None:
 def test_split_selection_supports_direct_domain_layout(tmp_path: Path) -> None:
     split_index = tmp_path / "pdf_dataset_split.json"
     split_index.write_text(json.dumps({"train": ["ACL/train.pdf"], "test": []}), encoding="utf-8")
-    write_paper(tmp_path / "processed", "ACL", "ACL_train")
-    (tmp_path / "processed" / "papers").rename(tmp_path / "nested")
-    direct_dir = tmp_path / "processed" / "ACL" / "ACL_train"
-    direct_dir.parent.mkdir()
-    (tmp_path / "nested" / "ACL" / "ACL_train").rename(direct_dir)
+    root = tmp_path / "preprocessed"
+    direct_dir = root / "ACL" / "ACL_train"
+    direct_dir.mkdir(parents=True)
+    (direct_dir / "markdown.md").write_text("# ACL_train\n", encoding="utf-8")
+    (direct_dir / "paper.json").write_text(json.dumps({"paper_id": "ACL_train"}), encoding="utf-8")
+    (direct_dir / "_SUCCESS").touch()
 
     selection = select_preprocessed_paper_dirs(
-        tmp_path / "processed",
+        root,
         split_index=split_index,
         split="train",
     )
 
     assert selection.paper_dirs == [direct_dir]
+    assert [paper["paper_dir"] for paper in read_preprocessed_papers(root)] == [str(direct_dir)]
 
 
 def test_split_selection_supports_domain_then_papers_layout(tmp_path: Path) -> None:

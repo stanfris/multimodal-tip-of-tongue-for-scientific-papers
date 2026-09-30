@@ -34,7 +34,7 @@ def test_extract_parser_accepts_retry_incomplete_only() -> None:
 
 
 def test_single_domain_extraction_keeps_shared_output_root() -> None:
-    assert resolve_extraction_output_dir(Path("data/processed"), ["Engineering"]) == Path("data/processed")
+    assert resolve_extraction_output_dir(Path("data/preprocessed"), ["Engineering"]) == Path("data/preprocessed")
 
 
 def test_paper_output_dir_always_includes_source_subset(tmp_path: Path) -> None:
@@ -44,9 +44,9 @@ def test_paper_output_dir_always_includes_source_subset(tmp_path: Path) -> None:
 
     pdfs = discover_pdfs(input_dir)
 
-    assert [paper_output_dir(tmp_path / "processed", pdf) for pdf in pdfs] == [
-        tmp_path / "processed/papers/ACL/ACL_paper",
-        tmp_path / "processed/papers/Engineering/Engineering_paper",
+    assert [paper_output_dir(tmp_path / "preprocessed", pdf) for pdf in pdfs] == [
+        tmp_path / "preprocessed/ACL/ACL_paper",
+        tmp_path / "preprocessed/Engineering/Engineering_paper",
     ]
 
 
@@ -69,7 +69,7 @@ def test_direct_subset_input_still_uses_subset_output_folder(tmp_path: Path) -> 
     pdf = discover_pdfs(input_dir)[0]
 
     assert pdf.source_dataset == "ACL"
-    assert paper_output_dir(tmp_path / "processed", pdf) == tmp_path / "processed/papers/ACL/paper"
+    assert paper_output_dir(tmp_path / "preprocessed", pdf) == tmp_path / "preprocessed/ACL/paper"
 
 
 def test_discover_pdfs_can_follow_train_test_split_index(tmp_path: Path) -> None:

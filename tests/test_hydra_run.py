@@ -51,8 +51,12 @@ def test_launcher_paths_override_dataset_defaults() -> None:
         assert cfg["launcher"]["cache_root"]
     cfg = config("launcher=slurm_a100", "launcher.dataset_root=/tmp/corpus")
     assert cfg["dataset"]["root"] == "/tmp/corpus"
-    assert cfg["dataset"]["processed_root"] == "/tmp/corpus/processed"
+    assert cfg["dataset"]["processed_root"] == "/tmp/corpus/preprocessed"
     assert cfg["dataset"]["pdf_dir"] == "/tmp/corpus/pdf_datasets"
+    plan, settings = build_plan(config("launcher=slurm_a100", "stage=describe_textual_clues",
+                                       "launcher.dataset_root=/scratch-shared/sfris1"), ROOT)
+    assert plan["dataset"]["processed_root"] == "/scratch-shared/sfris1/preprocessed"
+    assert settings["dataset"]["preprocessed"] == "/scratch-shared/sfris1/preprocessed"
 
 
 def test_slurm_profiles_compose_submitit_resources() -> None:

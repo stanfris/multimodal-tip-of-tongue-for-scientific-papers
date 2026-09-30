@@ -22,8 +22,7 @@ The current source path should be the curated ACL Anthology subset:
 - Build official ACL Anthology metadata into `data/acl_subset/papers.jsonl`.
 - Download subset PDFs into `data/acl_subset/pdfs/`.
 - Extract markdown and figures from PDFs with MinerU into `data/preprocessed`.
-- Generate clues and queries directly from `data/preprocessed` or
-  `data/preprocessed/papers`.
+- Generate clues and queries directly from `data/preprocessed`.
 
 ## Essential Stages To Preserve
 
