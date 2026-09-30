@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import pytest
 
-from hydra_run import build_plan, job_script, scheduler_command, mineru_caller_args, execute_stage, launch
+from hydra_run import build_plan, job_script, scheduler_command, mineru_caller_args, execute_stage, execute_worker, launch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -151,6 +152,57 @@ def test_mineru_submitit_worker_executes_once_in_allocation(tmp_path: Path, monk
     assert len(executed) == 1
     assert executed[0]["execution"]["jobs"] == 1
     assert json.loads((run_dir / "plan.json").read_text())["split"] == "train"
+
+
+@pytest.mark.parametrize("stage, log_name", [
+    ("reduce_and_compact", "preprocessing.log"),
+    ("describe_figures", "describe_figures.log"),
+    ("describe_textual_clues", "describe_textual_clues.log"),
+    ("generate_queries", "generate_queries.log"),
+    ("judge_queries", "judge_queries.log"),
+])
+def test_local_stage_captures_stdout_and_stderr(
+    stage: str, log_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    def fake_execute(plan):
+        print("stage output")
+        print("stage warning", file=sys.stderr)
+
+    monkeypatch.setattr("hydra_run.execute_stage", fake_execute)
+    run_dir = tmp_path / stage
+    launch(config(f"stage={stage}"), ROOT, hydra_run_dir=run_dir)
+    log = (run_dir / log_name).read_text()
+    assert f"{stage} job submitted" in log
+    assert f"{stage} worker started" in log
+    assert "stage output" in log
+    assert "stage warning" in log
+    captured = capsys.readouterr()
+    assert "stage output" in captured.out
+    assert "stage warning" in captured.err
+
+
+def test_worker_stage_captures_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = tmp_path / "worker"
+    plan, _ = build_plan(config("stage=generate_queries"), ROOT, run_dir)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan))
+    monkeypatch.setattr("hydra_run.execute_stage", lambda plan: print("worker output"))
+    assert execute_worker(plan_path) == 0
+    log = (run_dir / "generate_queries.log").read_text()
+    assert "generate_queries worker started" in log
+    assert "worker output" in log
+
+
+def test_stage_failure_is_recorded_in_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(plan):
+        raise RuntimeError("generation failed")
+
+    monkeypatch.setattr("hydra_run.execute_stage", fail)
+    run_dir = tmp_path / "failed"
+    with pytest.raises(RuntimeError, match="generation failed"):
+        launch(config("stage=generate_queries"), ROOT, hydra_run_dir=run_dir)
+    log = (run_dir / "generate_queries.log").read_text()
+    assert "RuntimeError: generation failed" in log
 
 
 def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:

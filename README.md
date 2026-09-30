@@ -42,7 +42,7 @@ Generated data is intentionally ignored by Git:
 ```text
 data/acl_subset/                          # curated ACL metadata and PDFs
 data/arxiv_open_reuse/                    # arXiv CC BY/CC0 metadata, report, PDFs
-data/processed/mineru_pdf_extraction/     # extracted PDF markdown and figures
+data/preprocessed/                       # extracted and compacted papers
 data/clues/                               # per-paper textual and visual clues
 data/query_collections/<id>/              # generated query/eval collections
 ```
@@ -77,132 +77,219 @@ scripts/environment/run_in_env.sh main python --version
 scripts/environment/run_in_env.sh mineru mineru --version
 ```
 
-## Hydra Configuration and Launching
+## Run the pipeline
 
-`dataset-generation` is the Hydra entrypoint for clue generation, query generation,
-judgement, MinerU extraction callers, and preprocessing reduction/compaction. Its resolved config is the
-source of truth. The config groups are:
-
-| Group | Purpose |
-| --- | --- |
-| `config/dataset/` | Dataset identity, roots, input and output locations |
-| `config/stage/` | Stage selection and stage-specific limits/workers |
-| `config/model/` | Reusable model identifiers and loading defaults |
-| `config/split/` | `train`, `test`, or `all` for reduction/compaction |
-| `config/launcher/` | Machine profile: resources, data/output/cache paths, and scheduler |
-| `config/visual_descriptions/`, `textual_descriptions/`, `visual_query/` | Existing prompt and generation settings |
-
-Use Hydra overrides directly. The stage scripts below select a stage and
-forward the rest of the command unchanged:
-
-```bash
-scripts/query_generation/generate_queries.sh split=test stage.limit=3
-scripts/clue_generation/describe_all_figures.sh launcher=local_gpu stage.limit=3
-scripts/query_generation/generate_queries.sh model=noop split=test stage.limit=3
-```
-
-`model=noop` generates template queries without loading a model. For a real
-model, choose `model=phi4`, `model=qwen3_text`, `model=qwen3_vl`, or
-`model=gemma3_judge`, as appropriate for the stage. Stage selection chooses a
-sensible default model; an explicit `model=...` override takes precedence.
-Inspect the full composition with `uv run --no-sync dataset-generation
-stage=generate_queries split=test --cfg job --resolve`.
-
-Local runs use `launcher=local_gpu` by default. A small preprocessing smoke run
-that does not mutate data is:
-
-```bash
-scripts/preprocessing/reduce_and_compact_preprocessed.sh split=all \
-  stage.dry_run=true dataset.processed_root=data/preprocessed \
-  dataset.pdf_dir=data/acl_subset/pdfs stage.workers=1
-```
-
-The `extract_mineru` stage runs the MinerU server and extraction caller together
-inside one GPU Slurm job. Its worker reuses the server lifecycle in the
-extraction scripts.
-
-The launcher profile supplies filesystem locations as well as execution
-resources. `launcher=slurm_a100` and `launcher=slurm_cpu` point at Snellius
-scratch locations and select Hydra Submitit. Use `-m` to submit through Slurm:
-
-```bash
-uv run --no-sync dataset-generation -m stage=describe_figures launcher=slurm_a100 split=train
-```
-
-`launcher=pbs_rt_hg` and `launcher=pbs_rt_hc` use PBS, while
-`launcher=local_gpu` runs locally. Override machine paths with values such as
-`launcher.dataset_root=/scratch/project`, `launcher.processed_root=/scratch/project/processed`,
-`launcher.cache_root=/scratch/cache`, or `dataset.query_output=/scratch/queries`.
-The environment variables `VTT_DATA_ROOT`, `VTT_CACHE_ROOT`, `VTT_LOG_ROOT`, `HF_HOME`, and `VTT_PYTHON` remain optional machine defaults.
-Set `dry_run=true` to inspect the resolved plan without executing or submitting.
-
-Hydra writes `.hydra/config.yaml`, `.hydra/hydra.yaml`, and
-`.hydra/overrides.yaml` in its run directory. The pipeline also writes
-`plan.json` and, for generation stages, `settings.yaml` as the adapter
-snapshot used by existing generation code. The MinerU worker runs its server
-and caller from the same resolved plan in one submitted job.
-
-## Query Review UI
-
-Launch the local Streamlit reviewer for generated tip-of-the-tongue query collections:
-
-```bash
-scripts/review/run_review_app.sh
-```
-
-The reviewer can inspect generated query collections and writes manual
-annotations separately to `data/reviews/query_review_annotations.jsonl`.
-
-## Bash Scripts
-
-Run the dataset generation stages individually:
+Run these commands from the repository root. Install `uv` and create the main
+Python 3.11 environment before any wrapper that calls `uv run`. The separate
+MinerU environment is needed on the GPU execution node for extraction. `uv
+run --no-sync` in the Hydra wrappers uses the already installed `.venv`; it
+does not install missing packages. Environment setup changes `.venv` or
+`.venv-mineru` and prints to the terminal; it creates no pipeline log.
 
 ```bash
 scripts/environment/sync_env.sh
 scripts/environment/sync_mineru_env.sh
-scripts/document_downloads/build_acl_subset.sh
-scripts/document_downloads/download_acl_pdfs.sh
-scripts/pdf_corpus/build_pdf_datasets_folder.sh
-scripts/pdf_corpus/build_pdf_dataset_split.sh
-scripts/extraction/run_mineru_full_extraction.sh
-scripts/preprocessing/reduce_and_compact_preprocessed.sh
-scripts/clue_generation/describe_all_figures.sh
-scripts/clue_generation/describe_all_textual_clues.sh
-scripts/query_generation/generate_queries.sh
-scripts/query_generation/judge_train_queries.sh
+scripts/environment/run_in_env.sh main python --version
+scripts/environment/run_in_env.sh mineru mineru --version
 ```
 
-The MinerU wrapper starts its server inside the GPU Slurm job. The clue and query stages read directly
-from `data/preprocessed` or `data/preprocessed/papers`.
+The second sync **clears and rebuilds** `.venv-mineru`. The main environment
+contains the CLI and Streamlit; MinerU 3.4.0 uses its own pinned environment.
+On Slurm, the repository and both environments must be visible from the
+allocated node. Set `VTT_DATA_ROOT`, `VTT_LOG_ROOT`, `VTT_CACHE_ROOT`, and
+`HF_HOME` as needed, or override the corresponding `launcher.*` paths.
 
-For an external corpus, set the paths through Hydra:
+### Corpus and canonical PDF split
+
+The ACL metadata builder and the PMC metadata builder accept `--metadata-only`
+through their wrappers. PMC requires an NCBI contact email. arXiv requires an
+authenticated Kaggle CLI or an existing metadata snapshot. These are network
+operations; `--help` only inspects arguments and creates no corpus files.
 
 ```bash
-scripts/preprocessing/reduce_and_compact_preprocessed.sh split=all \
-  launcher.dataset_root=/path/to/corpus-root \
-  dataset.processed_root=/path/to/corpus-root/processed \
-  dataset.pdf_dir=/path/to/corpus-root/pdf_datasets
+scripts/document_downloads/build_acl_subset.sh
+scripts/document_downloads/download_acl_pdfs.sh --max-workers 16
+scripts/document_downloads/build_pmc_oa_subset.sh --email you@example.org
+scripts/document_downloads/download_pmc_oa_pdfs.sh --max-workers 16
+scripts/document_downloads/build_arxiv_open_reuse.sh --metadata-only --snapshot-path data/arxiv_open_reuse/arxiv-metadata-oai-snapshot.json
+scripts/document_downloads/download_arxiv_open_reuse_pdfs.sh --max-workers 32
+scripts/pdf_corpus/split_arxiv_pdfs_by_domain.sh --dry-run
+scripts/pdf_corpus/split_arxiv_pdfs_by_domain.sh
+scripts/pdf_corpus/build_pdf_datasets_folder.sh --dry-run
+scripts/pdf_corpus/build_pdf_datasets_folder.sh
+scripts/pdf_corpus/build_pdf_dataset_split.sh --input-dir data/pdf_datasets --output data/splits/pdf_dataset_split.json
 ```
 
-The preprocessing stage prints discovered-paper totals and progress records.
-Use `stage.progress_every=1` for per-paper updates or `0` to disable them.
-The clue and query scripts accept the same `stage`, `split`, `model`, `launcher`,
-`dataset`, and generation-section Hydra overrides described above.
+The arXiv metadata command needs the snapshot at the shown path; omit
+`--snapshot-path` to let the builder download it with Kaggle credentials.
+Download results and reports live under `data/acl_subset/`,
+`data/pmc_oa_strict/`, and `data/arxiv_open_reuse/`. Assembly writes
+`data/arxiv_open_reuse/pdfs_by_domain/` and `data/pdf_datasets/`. The last
+command requires the five assembled PDF folders and writes
+`data/splits/pdf_dataset_split.json` (2,200 train and 110 test PDFs per
+folder by default). These utilities report progress to the terminal; they do
+not use Hydra run logs. Inspect options with, for example,
+`scripts/pdf_corpus/build_pdf_dataset_split.sh --help`. The old
+`scripts/document_splits/build_document_split.sh` is a post-extraction legacy
+split and is not the canonical input to extraction.
 
-Source-document download and MinerU utilities still expose their dedicated
-operational commands; for example `uv run dataset-generation download-documents
---help`.
+### Hydra stages and argument order
 
-The clue-generation scripts write per-paper clue files:
+`src/cli.py` routes operational subcommands to argparse and all other calls
+to Hydra. Stage wrappers embed their own `stage=...`; do not add a second stage
+override. `split=train` or `split=test` selects a canonical split for model
+stages. Reduction and extraction also accept `split=train+test`. The file
+`config/split/all.yaml` currently also resolves to `train+test`, so use the
+explicit name. Scheduler profiles use scratch defaults; for a different
+corpus pass all relevant paths, for example:
 
-```text
-data/clues/<paper_id>/base/textual_clues.jsonl
-data/clues/<paper_id>/images/<figure_id>.jsonl
+```bash
+launcher.dataset_root=/scratch/project launcher.pdf_dir=/scratch/project/pdf_datasets launcher.processed_root=/scratch/project/processed launcher.split_index=/scratch/project/data/splits/pdf_dataset_split.json launcher.log_root=/scratch/project/logs
 ```
 
-The full-run scripts are single-process and do not launch multi-GPU workers.
-They resume by default, write clues incrementally, and record failures under
-`data/clues/`.
+Append those four arguments to a Hydra command below, replacing the example
+paths. `dataset.query_output=/scratch/project/query_collections` separately
+controls query output. The canonical split index is required for indexed
+extraction and should be set for split-aware preprocessing and generation.
+
+The reduction, figure, textual, query, and judge wrappers put `stage=...`
+**before** user arguments. For their Slurm calls, put overrides before `-m`,
+as shown below. The MinerU wrapper instead appends `stage=extract_mineru`
+**after** user arguments: its working form puts `-m` first, followed by
+`split=` and `launcher=`. It also switches to the direct argparse extraction
+client when its first argument begins with a recognized `--` option; that
+client requires an already running MinerU server. `-m` submits through Hydra
+Submitit; `dry_run=true` prints a plan without creating a run or submitting.
+`--cfg job --resolve` inspects composition only. For MinerU, use the
+entrypoint directly for `--cfg` because its wrapper appends `stage=` after
+all supplied arguments, which Hydra rejects when `--cfg` is present.
+
+```bash
+scripts/preprocessing/reduce_and_compact_preprocessed.sh split=train launcher=slurm_cpu -m
+scripts/preprocessing/reduce_and_compact_preprocessed.sh split=train launcher=slurm_cpu dry_run=true
+scripts/preprocessing/reduce_and_compact_preprocessed.sh split=train launcher=local_gpu dataset.split_index=data/splits/pdf_dataset_split.json stage.dry_run=true
+scripts/clue_generation/describe_all_figures.sh split=train launcher=slurm_a100 model=qwen3_vl -m
+scripts/clue_generation/describe_all_figures.sh split=train launcher=slurm_a100 model=qwen3_vl dry_run=true
+scripts/clue_generation/describe_all_textual_clues.sh split=train launcher=slurm_a100 model=qwen3_text -m
+scripts/clue_generation/describe_all_textual_clues.sh split=train launcher=slurm_a100 model=qwen3_text dry_run=true
+scripts/query_generation/generate_queries.sh split=train launcher=slurm_a100 model=phi4 -m
+scripts/query_generation/generate_queries.sh split=train launcher=slurm_a100 model=phi4 dry_run=true
+scripts/query_generation/judge_train_queries.sh split=train launcher=slurm_a100 model=gemma3_judge -m
+scripts/query_generation/judge_train_queries.sh split=train launcher=slurm_a100 model=gemma3_judge dry_run=true
+```
+
+To run a model stage locally, replace `launcher=slurm_a100 -m` with
+`launcher=local_gpu`; a CUDA GPU and model weights are then needed on that
+machine. The CPU reduction can run with `launcher=local_gpu` despite the
+profile name. `stage.dry_run=true` inspects reduction's paper work without
+mutating it, but does execute its readers; `dry_run=true` only prints the
+Hydra plan. Use `stage.limit=3` for a small figure, textual, or query run.
+`model=noop` is supported for template query generation. The judge model is
+selected through `model=gemma3_judge` and the stage maps it to
+`visual_query.judgement.model`.
+
+Reduction reads `dataset.processed_root`, `dataset.pdf_dir`, and the optional
+`dataset.split_index`; it writes the reduced/compacted papers beneath the
+processed root, `preprocessed_analysis_report.json` beside it, and
+`incomplete_documents.json` and `compaction_failures.jsonl` within it. Figure
+and textual stages read those papers and write
+`<dataset.root>/clues/<paper_id>/images/<figure_id>.jsonl` and
+`<dataset.root>/clues/<paper_id>/base/textual_clues.jsonl`. Query generation
+writes `<dataset.query_output>/query_generation_train/` (or
+`query_generation_test/`) and `<dataset.root>/clues/queries.jsonl`;
+judging updates the selected query collection. Each Hydra run writes
+`plan.json`, `.hydra/`, and for model stages `settings.yaml` in
+`<launcher.log_root>/<stage family>/<stage>/<timestamp>/` (Slurm multiruns
+add `/0`). Reduction writes `preprocessing.log` there; figure, textual, query,
+and judge stages write `describe_figures.log`, `describe_textual_clues.log`,
+`generate_queries.log`, and `judge_queries.log`, respectively. These logs
+capture stage stdout and stderr while retaining console output. Inspect the
+resolved run path in the printed plan.
+
+### MinerU extraction
+
+The general Hydra wrapper is intended to submit a **single GPU Slurm job**
+that runs the server and caller on the allocated node. The login node needs
+no visible CUDA device for submission. The direct GPU script, if invoked
+manually, requires a visible CUDA device on the machine where it is invoked.
+In this checkout, `src/hydra_run.py` calls
+`scripts/extraction/run_mineru_full_extraction_gpu.sh`, but that file is
+**missing**. Consequently, the Hydra command below composes and can submit,
+but its worker cannot complete extraction until the script is restored or the
+worker is fixed. Do not treat a Submitit “submitted” message as success.
+
+```bash
+scripts/extraction/run_mineru_full_extraction.sh -m split=train launcher=slurm_a100
+scripts/extraction/run_mineru_full_extraction.sh split=train launcher=slurm_a100 dry_run=true
+uv run --no-sync dataset-generation stage=extract_mineru split=train launcher=slurm_a100 --cfg job --resolve
+```
+
+Set `dataset.pdf_dir`, `dataset.processed_root`, and `dataset.split_index`
+for a nondefault corpus; `stage.max_in_flight=2`, `stage.limit=20`, and
+`stage.retry_incomplete_only=true` are optional caller controls. Indexed
+splits require the canonical PDF split JSON. The intended output is
+`<dataset.processed_root>/papers/` with `run_config.json`,
+`last_run_summary.json`, `resume_report.json`, `incomplete_documents.json`,
+and `failures.jsonl` at the processed root. The Hydra run directory is
+`<launcher.log_root>/extraction/extract_mineru/<timestamp>/0/` for the
+Slurm sweep, containing `plan.json`, `.hydra/`, and on the allocated node
+`mineru.server.log` and `mineru.caller.log` if it reaches the worker.
+
+Use the job ID from Submitit to inspect the scheduler and logs, or cancel a
+still running job. Interrupting the local waiting process with Ctrl-C may
+leave the Slurm job running.
+
+```bash
+squeue -j JOB_ID
+sacct -j JOB_ID --format=JobID,State,ExitCode,Elapsed
+find logs/extraction/extract_mineru -type f \( -name '*.out' -o -name '*.err' -o -name 'mineru.*.log' \)
+scancel JOB_ID
+```
+
+A runnable Slurm alternative in this checkout is the separate job script.
+It starts MinerU inside the GPU allocation and uses the dedicated MinerU
+environment. From the repository root, after creating the split index and
+`.venv-mineru`, submit:
+
+```bash
+INPUT_DIR="$PWD/data/pdf_datasets" OUTPUT_DIR="$PWD/data/preprocessed" sbatch \
+  scripts/extraction/slurm/run_mineru_full_extraction_a100.job \
+  --root-dir "$PWD" --split train \
+  --split-index "$PWD/data/splits/pdf_dataset_split.json"
+```
+
+This script uses
+`logs/extraction/slurm/mineru_extract_<job-id>.out` and `.err`, plus
+`<job-id>.server.log` and `.caller.log`. Check completion with `sacct`
+and the caller log as above. This path is separate from the broken Hydra worker.
+
+### Packaging and review
+
+The packager needs the five PDF source folders and the main environment.
+Its `--dry-run` discovers the planned shards without writing. Prepared files
+and validation reports are under `huggingface_dataset/`; progress goes to the
+terminal. Upload requires Hugging Face authentication and is a separate
+network operation. The download wrapper currently references an unset
+`HF_CLI_CMD` array, so use the CLI directly for download.
+
+```bash
+scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --dry-run
+scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --prepare-only
+scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --validate-only
+HF_REPO_ID=kasys/open-source-scientific-documents scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset
+uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir data/downloaded_hf_dataset
+scripts/packaging/restore_pdf_datasets_from_huggingface.sh data/downloaded_hf_dataset data/pdf_datasets --workers 4
+```
+
+Once query collections exist under `data/query_collections/`, launch the
+local Streamlit reviewer. It listens on `127.0.0.1`; inspect collections in
+the browser and find annotations at
+`data/reviews/query_review_annotations.jsonl`. Streamlit writes runtime
+messages to the terminal.
+
+```bash
+scripts/review/run_review_app.sh --server.port 8501
+```
 
 ## ACL Anthology Subset
 
@@ -526,7 +613,7 @@ scripts/packaging/prepare_huggingface_dataset.sh --help
 Download the complete dataset repository into a specific local directory:
 
 ```bash
-scripts/packaging/download_huggingface_dataset.sh data/downloaded_hf_dataset
+uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir data/downloaded_hf_dataset
 ```
 
 Restore the downloaded shards to the original `pdf_datasets` layout. The target
@@ -550,18 +637,17 @@ scripts/packaging/restore_pdf_datasets_from_huggingface.sh \
   --workers 4 --skip-checksum
 ```
 
-The downloader uses the same default repository. Override it with
-`HF_REPO_ID=owner/dataset-name`, or set `HF_CLI` when the `hf` executable is not
-on `PATH`. For the project virtual environment, run:
+For a different repository, change the repository ID in the `hf download`
+command. For a scratch destination, run:
 
 ```bash
-HF_CLI="$PWD/.venv/bin/hf" scripts/packaging/download_huggingface_dataset.sh /scratch-shared/sfris1
+uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir /scratch-shared/sfris1
 ```
 
 Additional arguments are forwarded to `hf download`, for example:
 
 ```bash
-scripts/packaging/download_huggingface_dataset.sh data/metadata-only \
+uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir data/metadata-only \
   --include "*.parquet" "README.md"
 ```
 
@@ -610,183 +696,24 @@ metadata and valid PDFs already present. When running inside tmux, snapshot
 scan and PDF phases also post short `tmux display-message` status updates so
 pane status bars keep moving during long runs.
 
-## MinerU PDF Extraction
+## Extracted and generated artifacts
 
-The full-paper PDF extraction path uses MinerU 3.x through a persistent
-`mineru-api` or `mineru-router` service. This avoids paying model startup cost
-once per PDF and keeps corpus-level resume state in this repository instead of
-depending on MinerU's in-process task IDs.
+The stage commands, their prerequisites, and their logs are in [Run the
+pipeline](#run-the-pipeline). MinerU success writes
+`data/preprocessed/papers/<subset>/<paper_id>/` for local defaults (or the
+configured `dataset.processed_root`), with `_SUCCESS`, `markdown.md`,
+`paper.json`, `figures.json`, and `mineru/`. Completed papers are skipped on
+resume; failed or pending PDFs are recorded in `incomplete_documents.json`.
+Reduction requires these extraction outputs. Figure and textual clue stages
+write per-paper JSONL under `data/clues/` with local defaults. Query generation
+joins both clue types and writes query collections under
+`<dataset.query_output>/<collection_id>/`.
 
-Prepare the dedicated MinerU environment once:
-
-```bash
-scripts/environment/sync_mineru_env.sh
-scripts/extraction/probe_mineru_env.sh
-```
-
-The normal GPU workflow is a Hydra Submitit multirun. The wrapper passes Hydra
-flags before its stage override, so put `-m` before the config overrides:
-
-```bash
-scripts/extraction/run_mineru_full_extraction.sh \
-  -m stage=extract_mineru split=train launcher=slurm_a100
-```
-
-Inspect the resolved plan locally without submitting a job:
-
-```bash
-scripts/extraction/run_mineru_full_extraction.sh \
-  stage=extract_mineru split=train launcher=slurm_a100 dry_run=true
-```
-
-The dry run reports one job containing the MinerU server and extraction caller,
-with the `gpu_a100` partition, one GPU, 16 CPUs, 32G memory, and a three-hour
-limit. The real worker starts a localhost server, checks `/health`, runs the
-caller in `.venv-mineru`, and shuts the server down on completion or failure.
-It checks the pinned MinerU, Transformers, and pdftext versions, reading-order
-support, and `ninja` before starting. Server and caller logs are separate in
-Hydra's run directory. The worker uses `$SLURM_TMPDIR` when available and
-otherwise creates a job-specific temporary directory.
-
-Use Hydra overrides for corpus paths, concurrency, retry and resume options:
-
-```bash
-scripts/extraction/run_mineru_full_extraction.sh -m \
-  stage=extract_mineru split=train+test launcher=slurm_a100 \
-  dataset.pdf_dir=/scratch/project/pdf_datasets \
-  dataset.processed_root=/scratch/project/processed \
-  dataset.split_index=/scratch/project/data/splits/pdf_dataset_split.json \
-  stage.max_in_flight=2 stage.server_concurrency=4 stage.retries=3 \
-  stage.limit=20 stage.retry_incomplete_only=true
-```
-
-`split=train`, `split=test`, and `split=train+test` use the configured split
-index. `split=all stage.all_domain_pdfs=true` processes every discovered PDF.
-The caller keeps its usual resume behavior: completed papers are preserved,
-and incomplete papers are queued. `stage.retry_incomplete_only=true` narrows
-that queue to recorded incomplete or failed papers. Additional caller options,
-including `stage.domains`, page range, parsing options, and timeouts, are in
-`config/stage/extract_mineru.yaml`. `stage.server_port=0` chooses a free
-localhost port; `stage.server_startup_timeout` controls readiness waiting.
-
-The standalone `start_mineru_router.sh`,
-`run_mineru_full_extraction_gpu.sh`, and
-`slurm/run_mineru_full_extraction_a100.job` remain available for legacy or
-manual workflows. The operational `extract-mineru-pdfs` CLI still calls an
-already running server. For compatibility, the Hydra wrapper also forwards
-legacy calls beginning with argparse flags such as `--split` or `--input-dir`
-to that standalone caller; those calls require a server started separately.
-
-Completed papers are skipped on restart. Each successful paper has:
-
-```text
-data/preprocessed/papers/<subset>/<paper_id>/
-  _SUCCESS
-  markdown.md
-  paper.json
-  figures.json
-  mineru/                  # MinerU Markdown, content_list JSON, images
-```
-
-`paper_id` is derived from the PDF path relative to the input root, so repeated
-filenames across datasets do not collide. `paper.json` records the source PDF,
-relative source path, source dataset, split, MinerU configuration/version,
-Markdown path, page count if available, and normalized `image`/`chart` figure
-records with page, bounding box, caption, footnote, and image paths. Failed PDFs are
-appended to `<output-dir>/failures.jsonl` and do not stop the batch. The latest
-run configuration and summary are saved as `run_config.json` and
-`last_run_summary.json`. Each run also rewrites
-`<output-dir>/incomplete_documents.json` with the current complement of the
-successful outputs: selected PDFs that are still pending, partial, or failed.
-At startup, `resume_report.json` records how many selected documents are being
-preserved as complete, queued as incomplete, and retried after prior failures.
-Completed paper directories are never replaced. An incomplete directory is
-replaced only after its retry has produced and validated a complete result.
-Use `--retry-incomplete-only` to process only the PDFs named by that manifest or
-the failure log; completed papers are still skipped.
-
-Extraction and automatic postprocessing preserve the complete document; they
-do not impose a page-count limit. Page-count filtering is confined to the
-explicit `--prune` mode of `pdf_corpus.pdf_page_distribution`.
-
-Before a full run, benchmark medium-effort throughput on a small sample:
-
-```bash
-scripts/extraction/benchmark_mineru_extraction.sh \
-  --input-dir data/acl_subset/pdfs \
-  --sample-size 20 \
-  --api-url http://127.0.0.1:8002 \
-  --max-in-flight-values 1 2 4 8
-```
-
-For this project, use `hybrid-engine --effort medium`: current MinerU
-documentation states that hybrid medium is the default fast path and skips
-expensive image/chart analysis, while still returning extracted image/chart
-blocks when available. The benchmark writes a `benchmark_report.json` with a
-recommended `max_in_flight` starting point.
-
-The extraction client requests only production outputs: Markdown, images, and
-content list JSON. It explicitly skips the original PDF, middle JSON, and model
-output in MinerU responses.
-
-Compaction writes the same `incomplete_documents.json` shape under the
-preprocessed root. It records split-index PDFs with no completed extraction,
-paper directories missing required compaction inputs, and compaction failures;
-failures are also appended to `compaction_failures.jsonl`.
-
-## Figure Descriptions
-
-Generate Qwen-VL visual descriptions from preprocessed papers:
-
-```bash
-scripts/clue_generation/describe_all_figures.sh
-```
-
-This reads figure image references from
-`data/preprocessed` and writes visual clues to
-`data/clues/<paper_id>/images/<figure_id>.jsonl`. For a small figure run, use `stage.limit=3` and choose an appropriate
-`model` and `launcher` profile. Output locations come from `dataset.root` and
-`dataset.clues_dir`.
-
-## Textual Clues
-
-Generate semantic memory cues from preprocessed paper markdown:
-
-```bash
-scripts/clue_generation/describe_all_textual_clues.sh
-```
-
-This writes textual clues to `data/clues/<paper_id>/base/textual_clues.jsonl`.
-
-Print stored coverage statistics:
-
-```bash
-scripts/reporting/generated_artifact_stats.sh \
-  --dataset data/query_collections/query_generation_train/visual_only
-```
-
-## Artifact Structure
-
-Preprocessing and clue generation write:
-
-```text
-data/preprocessed/papers/<subset>/<paper_id>/
-  markdown.md
-  paper.json
-  figures.json
-  mineru/
-
-data/clues/<paper_id>/
-  base/textual_clues.jsonl
-  images/<figure_id>.jsonl
-
-data/clues/queries.jsonl
-```
-
-Prompt templates live in `prompts/` and are referenced by ID/version from
-sidecar metadata. Query generation joins preprocessed papers with per-paper
-clue files and writes query collections under
-`data/query_collections/<collection_id>/`.
+The operational `extract-mineru-pdfs` CLI remains available for a server that
+is **already running**, for example inspect its flags with
+`scripts/extraction/run_mineru_full_extraction.sh --help`. This wrapper's
+argparse branch is selected only when its first argument is a recognized
+`--` flag; it is distinct from the Hydra Slurm workflow.
 
 ## Output Schema
 

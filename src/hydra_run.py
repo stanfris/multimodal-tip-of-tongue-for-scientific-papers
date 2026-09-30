@@ -10,6 +10,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,14 @@ import yaml
 STAGES = {
     "describe_figures", "describe_textual_clues", "generate_queries",
     "judge_queries", "reduce_and_compact", "extract_mineru",
+}
+
+STAGE_LOG_NAMES = {
+    "reduce_and_compact": "preprocessing.log",
+    "describe_figures": "describe_figures.log",
+    "describe_textual_clues": "describe_textual_clues.log",
+    "generate_queries": "generate_queries.log",
+    "judge_queries": "judge_queries.log",
 }
 
 
@@ -222,8 +231,8 @@ def execute_stage(plan: dict[str, Any]) -> None:
 def execute_worker(plan_path: Path) -> int:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     os.chdir(plan["repo_root"])
-    if plan["stage"]["name"] == "reduce_and_compact":
-        with preprocessing_log(plan["run_dir"]):
+    if plan["stage"]["name"] in STAGE_LOG_NAMES:
+        with stage_log(plan["run_dir"], plan["stage"]["name"]):
             execute_stage(plan)
     else:
         execute_stage(plan)
@@ -251,18 +260,22 @@ class _Tee:
 
 
 @contextlib.contextmanager
-def preprocessing_log(run_dir: str | Path):
-    """Capture preprocessing stdout/stderr in an immediately visible text file."""
-    log_path = Path(run_dir) / "preprocessing.log"
+def stage_log(run_dir: str | Path, stage_name: str):
+    """Capture stage stdout/stderr in an immediately visible text file."""
+    log_path = Path(run_dir) / STAGE_LOG_NAMES[stage_name]
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8", buffering=1) as handle:
         handle.write(
-            f"\n[{datetime.now(timezone.utc).isoformat()}] preprocessing worker started\n"
+            f"\n[{datetime.now(timezone.utc).isoformat()}] {stage_name} worker started\n"
         )
         handle.flush()
         stdout, stderr = sys.stdout, sys.stderr
         with contextlib.redirect_stdout(_Tee(stdout, handle)), contextlib.redirect_stderr(_Tee(stderr, handle)):
-            yield
+            try:
+                yield
+            except BaseException:
+                traceback.print_exc(file=handle)
+                raise
 
 
 def launch(config: dict[str, Any], repo_root: str | Path, *, native_slurm: bool = False,
@@ -281,11 +294,12 @@ def launch(config: dict[str, Any], repo_root: str | Path, *, native_slurm: bool 
         print(json.dumps({"plan": plan, "settings": settings, "submission": submission}, indent=2))
         return
     run_dir.mkdir(parents=True, exist_ok=True)
-    if plan["stage"]["name"] == "reduce_and_compact":
-        preprocessing_path = run_dir / "preprocessing.log"
-        if not preprocessing_path.exists():
-            preprocessing_path.write_text(
-                f"[{datetime.now(timezone.utc).isoformat()}] preprocessing job submitted\n",
+    stage_name = plan["stage"]["name"]
+    if stage_name in STAGE_LOG_NAMES:
+        log_path = run_dir / STAGE_LOG_NAMES[stage_name]
+        if not log_path.exists():
+            log_path.write_text(
+                f"[{datetime.now(timezone.utc).isoformat()}] {stage_name} job submitted\n",
                 encoding="utf-8",
             )
     if settings is not None:
@@ -299,8 +313,8 @@ def launch(config: dict[str, Any], repo_root: str | Path, *, native_slurm: bool 
             raise RuntimeError(f"qsub failed ({result.returncode}): {result.stderr.strip()}")
         print(f"Submitted PBS job {result.stdout.strip()}\nPlan: {plan_path}")
         return
-    if plan["stage"]["name"] == "reduce_and_compact":
-        with preprocessing_log(plan["run_dir"]):
+    if stage_name in STAGE_LOG_NAMES:
+        with stage_log(plan["run_dir"], stage_name):
             execute_stage(plan)
     else:
         execute_stage(plan)
