@@ -1,0 +1,43 @@
+# @package _global_
+defaults:
+  - override /hydra/launcher: basic
+launcher:
+  kind: pbs
+  project: ${oc.env:VTT_PBS_PROJECT,gcb50357}
+  dataset_root: ${oc.env:VTT_DATA_ROOT,./data}
+  processed_root: ${launcher.dataset_root}/processed
+  pdf_dir: ${launcher.dataset_root}/pdf_datasets
+  split_index: ${launcher.dataset_root}/splits/pdf_dataset_split.json
+  log_root: ${oc.env:VTT_LOG_ROOT,./logs}
+  cache_root: ${oc.env:VTT_CACHE_ROOT,${launcher.dataset_root}/cache}
+  model_cache: ${oc.env:HF_HOME,${launcher.cache_root}/huggingface}
+  python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
+  queue: ${oc.env:VTT_PBS_QUEUE,rt_HG}
+  gpus: 1
+  cpus: 16
+  memory: 160gb
+  walltime: 03:00:00
+  device_map: auto
+  dtype: bfloat16
+  attn_implementation: sdpa
+  visual_max_tokens: 768
+  visual_batch_size: 64
+  text_batch_size: 256
+  query_batch_size: 128
+  judgement_batch_size: 64
+  vllm:
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.92
+    max_num_seqs: null
+    model_max_num_seqs:
+      Qwen/Qwen3-VL-4B-Instruct: 64
+      Qwen/Qwen3-4B: 256
+      microsoft/phi-4: 128
+      google/gemma-3-27b-it: 64
+    max_num_batched_tokens: 16384
+    dtype: bfloat16
+    kv_cache_dtype: auto
+    enable_prefix_caching: true
+    mm_processor_cache_gb: 1
+    limit_mm_per_prompt:
+      image: 16

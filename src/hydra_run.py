@@ -51,6 +51,24 @@ def managed_settings(config: dict[str, Any], data_root: Path, repo_root: Path) -
         settings[section]["prompt"]["template"] = str(absolute(settings[section]["prompt"]["template"], repo_root))
     settings["visual_query"]["judgement"]["template"] = str(absolute(settings["visual_query"]["judgement"]["template"], repo_root))
     settings["visual_query"]["output"]["dir"] = str(absolute(settings["visual_query"]["output"]["dir"], repo_root))
+    launcher = config["launcher"]
+    runtime = {key: launcher.get(key) for key in ("device_map", "dtype", "attn_implementation")}
+    vllm = dict(launcher.get("vllm") or {})
+    model_limits = vllm.pop("model_max_num_seqs", {})
+    if vllm.get("max_num_seqs") is None and config["model"]["name"] in model_limits:
+        vllm["max_num_seqs"] = model_limits[config["model"]["name"]]
+    if config["model"]["name"] not in {"Qwen/Qwen3-VL-4B-Instruct", "google/gemma-3-27b-it"}:
+        vllm.pop("limit_mm_per_prompt", None)
+    settings["visual_descriptions"]["runtime"] = {"transformers": runtime, "vllm": vllm}
+    settings["textual_descriptions"]["runtime"] = {"transformers": runtime, "vllm": vllm}
+    settings["visual_query"]["runtime"] = {"transformers": runtime, "vllm": vllm}
+    judge_vllm = dict(vllm)
+    judgement_model = settings["visual_query"]["judgement"].get("model")
+    if launcher.get("vllm", {}).get("max_num_seqs") is None and judgement_model in model_limits:
+        judge_vllm["max_num_seqs"] = model_limits[judgement_model]
+    if judgement_model in {"Qwen/Qwen3-VL-4B-Instruct", "google/gemma-3-27b-it"}:
+        judge_vllm["limit_mm_per_prompt"] = launcher.get("vllm", {}).get("limit_mm_per_prompt", {"image": 16})
+    settings["visual_query"]["judgement"]["runtime"] = {"transformers": runtime, "vllm": judge_vllm}
     return settings
 
 

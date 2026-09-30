@@ -11,6 +11,7 @@ model:
   name: ${model.name}
   temperature: 0.2
   max_tokens: 300
+  batch_size: ${oc.select:launcher.query_batch_size,1}
   device_map: ${launcher.device_map}
   dtype: ${launcher.dtype}
   attn_implementation: ${launcher.attn_implementation}
@@ -24,6 +25,7 @@ judgement:
   model: google/gemma-3-27b-it
   temperature: 0.0
   max_tokens: 900
+  batch_size: ${oc.select:launcher.judgement_batch_size,1}
   device_map: ${launcher.device_map}
   dtype: ${launcher.dtype}
   attn_implementation: ${launcher.attn_implementation}

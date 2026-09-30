@@ -6,10 +6,11 @@ import argparse
 import hashlib
 import json
 import re
+import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from clues.component_parsing import split_component_text
 from document_splits.document_splits import filter_papers_by_split
@@ -33,13 +34,10 @@ from preprocessing.preprocessed import (
     visual_clue_path,
 )
 from queries.synthetic import TestCollectionExample, write_test_collection
-from clues.textual_clue_descriptions import (
-    generate_with_mlx,
-    generate_with_transformers,
-    load_mlx_model,
-    load_transformers_model,
-)
 from common.validation import validate_index_window
+from common.generation_utils import batched
+from inference.base import ordered_results
+from inference import GenerationRequest, InferenceBackend, load_backend
 
 
 QueryMode = Literal["visual-only", "visual-and-text"]
@@ -54,6 +52,7 @@ DEFAULT_MODELS = {
     "null": "null",
     "mlx": "Qwen/Qwen3-1.7B-MLX-8bit",
     "transformers": "Qwen/Qwen3-4B",
+    "vllm": "microsoft/phi-4",
 }
 DEFAULT_JUDGEMENT_MODEL = "google/gemma-3-27b-it"
 
@@ -78,6 +77,8 @@ class QueryGenerationConfig:
     dtype: str = "bfloat16"
     attn_implementation: str | None = "sdpa"
     thinking: bool = False
+    batch_size: int = 1
+    runtime: dict[str, Any] = field(default_factory=dict)
     judge_queries: bool = False
     judgement_prompt: Path = DEFAULT_JUDGEMENT_PROMPT
     judgement_prompt_id: str = "query_judgement"
@@ -89,6 +90,8 @@ class QueryGenerationConfig:
     judgement_device_map: str = "auto"
     judgement_dtype: str = "bfloat16"
     judgement_attn_implementation: str | None = "sdpa"
+    judgement_batch_size: int = 1
+    judgement_runtime: dict[str, Any] = field(default_factory=dict)
     modes: tuple[QueryMode, ...] = ("visual-and-text", "visual-only")
     seed: int = 13
     visual_component_budget: int = DEFAULT_VISUAL_COMPONENT_BUDGET
@@ -117,7 +120,6 @@ class ExistingQueryState:
     query_ids: set[str]
 
 
-JudgementGenerator = Callable[[dict[str, Any], list[Path], str, int, float], str]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -152,13 +154,17 @@ def load_query_generation_config(args: argparse.Namespace) -> QueryGenerationCon
 
 
 def generate_query_collections(config: QueryGenerationConfig, *, limit: int | None = None) -> Path:
+    started = time.monotonic()
     prompt_text = config.prompt.read_text(encoding="utf-8")
     prompt_sha256 = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     loaded_generator = load_query_generator(config)
     loaded_judge = load_query_judge(config)
-    return _generate_query_collections_from_preprocessed(
+    output = _generate_query_collections_from_preprocessed(
         config, prompt_text, prompt_sha256, loaded_generator, loaded_judge, limit=limit
     )
+    elapsed = time.monotonic() - started
+    print(f"Query generation elapsed: {elapsed:.1f}s", flush=True)
+    return output
 
 
 
@@ -168,8 +174,8 @@ def _generate_query_collections_from_preprocessed(
     config: QueryGenerationConfig,
     prompt_text: str,
     prompt_sha256: str,
-    loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
-    loaded_judge: tuple[dict[str, Any], JudgementGenerator] | None,
+    loaded_generator: InferenceBackend | None,
+    loaded_judge: InferenceBackend | None,
     *,
     limit: int | None = None,
 ) -> Path:
@@ -236,8 +242,8 @@ def _generate_mode_examples_from_papers(
     components_by_paper: dict[str, list[MemoryComponent]],
     config: QueryGenerationConfig,
     prompt_template: str,
-    loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
-    loaded_judge: tuple[dict[str, Any], JudgementGenerator] | None,
+    loaded_generator: InferenceBackend | None,
+    loaded_judge: InferenceBackend | None,
     *,
     existing: ExistingQueryState | None = None,
     query_keys: set[str] | None = None,
@@ -246,6 +252,7 @@ def _generate_mode_examples_from_papers(
     collection_query_path: Path | None = None,
     require_target: bool = True,
 ) -> list[TestCollectionExample]:
+    started = time.monotonic()
     examples: list[TestCollectionExample] = []
     existing_count = len(existing.examples) if existing is not None else 0
     target_new_examples = None
@@ -260,6 +267,8 @@ def _generate_mode_examples_from_papers(
     empty = 0
     incomplete_clues = 0
     resumed = 0
+    failed = 0
+    candidates = []
     for paper_index, paper in papers:
         if target_new_examples == 0:
             break
@@ -284,50 +293,86 @@ def _generate_mode_examples_from_papers(
             underfilled += 1
             progress.set_status(scanned=scanned, skipped=empty + underfilled + incomplete_clues)
             continue
-        generation_prompt = format_query_prompt(prompt_template, selected)
-        query = generate_query_text(selected, config, prompt_template, loaded_generator)
-        visual_count = sum(component.kind == "visual" for component in selected)
-        text_count = sum(component.kind == "textual" for component in selected)
-        judgement = judge_query(mode, paper, selected, query, config, loaded_judge)
-        metadata = {
-            "mode": mode,
-            "method": "preprocessed_acl_paper_query_generation",
-            "model_provider": config.model_provider,
-            "model": config.model,
-            "seed": config.seed,
-            "paper_id": paper_id,
-            "source_paper_dataset": paper.get("source_paper_dataset"),
-            "split": config.split_name,
-            "split_index": str(config.split_index) if config.split_index is not None else None,
-            "split_paper_index": paper_index if config.split_name is not None else None,
-            "selected_component_count": len(selected),
-            "selected_visual_count": visual_count,
-            "selected_text_count": text_count,
-            "component_selection": "all_available",
-            "visual_component_budget": config.visual_component_budget,
-            "textual_component_budget": config.textual_component_budget,
-            "prompt_id": config.prompt_id,
-            "prompt_version": config.prompt_version,
-            "prompt": generation_prompt,
-            "selected_components": [asdict(component) for component in selected],
-        }
-        if judgement is not None:
-            metadata["query_judgement"] = judgement
-        example = TestCollectionExample(
-            query_id=query_id,
-            query=query,
-            relevant_ids=[paper_id],
-            metadata=metadata,
-        )
-        examples.append(example)
-        if collection_query_path is not None:
-            _append_query(example, collection_query_path, collection_query_keys)
-        if root_query_path is not None:
-            _append_query(example, root_query_path, query_keys)
-        progress.update(scanned=scanned, skipped=empty + underfilled + incomplete_clues + resumed)
+        candidates.append((paper_index, paper, paper_id, query_id, selected))
+    for batch in batched(candidates, config.batch_size):
         if target_new_examples is not None and len(examples) >= target_new_examples:
             break
+        if target_new_examples is not None:
+            batch = batch[:target_new_examples - len(examples)]
+        if loaded_generator is not None:
+            requests = [GenerationRequest(query_id, format_query_prompt(prompt_template, selected),
+                                          max_tokens=config.max_tokens, temperature=config.temperature,
+                                          thinking=config.thinking)
+                        for _, _, _, query_id, selected in batch]
+            results = ordered_results(requests, loaded_generator.generate(requests))
+            query_values = [result.error if result.error else result.text.strip() for result in results]
+        else:
+            query_values = [generate_query_text(selected, config, prompt_template, None)
+                            for _, _, _, _, selected in batch]
+        judgements_by_id = {}
+        if loaded_judge is not None:
+            judgement_template = config.judgement_prompt.read_text(encoding="utf-8")
+            judgement_requests = [GenerationRequest(
+                query_id,
+                format_judgement_prompt(judgement_template, mode, paper, selected, query),
+                images=tuple(paper_image_paths(paper)), max_tokens=config.judgement_max_tokens,
+                temperature=config.judgement_temperature,
+            ) for (_, paper, _, query_id, selected), query in zip(batch, query_values, strict=True)
+                if not isinstance(query, Exception)]
+            if judgement_requests:
+                for result in ordered_results(judgement_requests, loaded_judge.generate(judgement_requests)):
+                    judgements_by_id[result.request_id] = (
+                        parse_judgement_output(result.text.strip(), config) if result.error is None else
+                        {"error": str(result.error), "model_provider": config.judgement_model_provider,
+                         "model": config.judgement_model, "prompt_id": config.judgement_prompt_id,
+                         "prompt_version": config.judgement_prompt_version}
+                    )
+        for (paper_index, paper, paper_id, query_id, selected), query in zip(batch, query_values, strict=True):
+            if isinstance(query, Exception):
+                failed += 1
+                print(f"Query generation failed for {query_id}: {query}", flush=True)
+                continue
+            generation_prompt = format_query_prompt(prompt_template, selected)
+            visual_count = sum(component.kind == "visual" for component in selected)
+            text_count = sum(component.kind == "textual" for component in selected)
+            judgement = judgements_by_id.get(query_id)
+            metadata = {
+                "mode": mode,
+                "method": "preprocessed_acl_paper_query_generation",
+                "model_provider": config.model_provider,
+                "model": config.model,
+                "seed": config.seed,
+                "paper_id": paper_id,
+                "source_paper_dataset": paper.get("source_paper_dataset"),
+                "split": config.split_name,
+                "split_index": str(config.split_index) if config.split_index is not None else None,
+                "split_paper_index": paper_index if config.split_name is not None else None,
+                "selected_component_count": len(selected),
+                "selected_visual_count": visual_count,
+                "selected_text_count": text_count,
+                "component_selection": "all_available",
+                "visual_component_budget": config.visual_component_budget,
+                "textual_component_budget": config.textual_component_budget,
+                "prompt_id": config.prompt_id,
+                "prompt_version": config.prompt_version,
+                "prompt": generation_prompt,
+                "selected_components": [asdict(component) for component in selected],
+            }
+            if judgement is not None:
+                metadata["query_judgement"] = judgement
+            example = TestCollectionExample(query_id=query_id, query=query,
+                                            relevant_ids=[paper_id], metadata=metadata)
+            examples.append(example)
+            if collection_query_path is not None:
+                _append_query(example, collection_query_path, collection_query_keys)
+            if root_query_path is not None:
+                _append_query(example, root_query_path, query_keys)
+            progress.update(scanned=scanned, skipped=empty + underfilled + incomplete_clues + resumed)
     progress.close()
+    elapsed = time.monotonic() - started
+    print(f"{mode}: completed={len(examples)} skipped={empty + underfilled + incomplete_clues + resumed} "
+          f"failed={failed} elapsed={elapsed:.1f}s requests_per_second={len(examples) / max(elapsed, 0.001):.2f}",
+          flush=True)
     final_count = existing_count + len(examples)
     if require_target and config.max_examples is not None and final_count < config.max_examples:
         raise RuntimeError(
@@ -571,120 +616,41 @@ def select_components(
     return textual + visual
 
 
-def load_query_generator(config: QueryGenerationConfig) -> tuple[dict[str, Any], Callable[..., str]] | None:
+def load_query_generator(config: QueryGenerationConfig) -> InferenceBackend | None:
     if config.model_provider == "null":
         return None
     print(f"Loading query backend: {config.model_provider}")
     print(f"Loading query model: {config.model}")
-    if config.model_provider == "mlx":
-        return load_mlx_model(config.model), generate_with_mlx
-    if config.model_provider == "transformers":
-        return (
-            load_transformers_model(
-                model_name=config.model,
-                device_map=config.device_map,
-                dtype=config.dtype,
-                attn_implementation=config.attn_implementation,
-            ),
-            generate_with_transformers,
-        )
-    raise ValueError(f"Unsupported model provider: {config.model_provider}")
+    runtime = config.runtime or ({} if config.model_provider == "vllm" else {"device_map": config.device_map, "dtype": config.dtype,
+                                 "attn_implementation": config.attn_implementation})
+    return load_backend(config.model_provider, config.model, runtime=runtime)
 
 
-def load_query_judge(config: QueryGenerationConfig) -> tuple[dict[str, Any], JudgementGenerator] | None:
+def load_query_judge(config: QueryGenerationConfig) -> InferenceBackend | None:
     if not config.judge_queries:
         return None
     print(f"Loading query judgement backend: {config.judgement_model_provider}")
     print(f"Loading query judgement model: {config.judgement_model}")
-    if config.judgement_model_provider != "transformers":
-        raise ValueError(f"Unsupported judgement model provider: {config.judgement_model_provider}")
-    return (
-        load_multimodal_transformers_model(
-            model_name=config.judgement_model,
-            device_map=config.judgement_device_map,
-            dtype=config.judgement_dtype,
-            attn_implementation=config.judgement_attn_implementation,
-        ),
-        generate_multimodal_judgement_with_transformers,
-    )
-
-
-def load_multimodal_transformers_model(
-    model_name: str,
-    device_map: str,
-    dtype: str,
-    attn_implementation: str | None,
-) -> dict[str, Any]:
-    from transformers import AutoModelForImageTextToText, AutoModelForMultimodalLM, AutoProcessor
-
-    kwargs: dict[str, Any] = {"device_map": device_map, "dtype": dtype}
-    if attn_implementation:
-        kwargs["attn_implementation"] = attn_implementation
-    try:
-        model = AutoModelForMultimodalLM.from_pretrained(model_name, **kwargs)
-    except (OSError, ValueError):
-        model = AutoModelForImageTextToText.from_pretrained(model_name, **kwargs)
-    processor = AutoProcessor.from_pretrained(model_name)
-    return {"model": model, "processor": processor}
-
-
-def generate_multimodal_judgement_with_transformers(
-    loaded: dict[str, Any],
-    image_paths: list[Path],
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-) -> str:
-    from PIL import Image
-
-    model = loaded["model"]
-    processor = loaded["processor"]
-    images = [Image.open(image_path).convert("RGB") for image_path in image_paths]
-    content: list[dict[str, Any]] = [{"type": "image", "image": image} for image in images]
-    content.append({"type": "text", "text": prompt})
-    messages = [{"role": "user", "content": content}]
-    inputs = processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
-    inputs = inputs.to(model.device)
-    generate_kwargs: dict[str, Any] = {"max_new_tokens": max_tokens}
-    if temperature > 0:
-        generate_kwargs.update({"do_sample": True, "temperature": temperature})
-    else:
-        generate_kwargs["do_sample"] = False
-    generated_ids = model.generate(**inputs, **generate_kwargs)
-    generated_ids_trimmed = [
-        out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids, strict=True)
-    ]
-    output_text = processor.batch_decode(
-        generated_ids_trimmed,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
-    )
-    return output_text[0].strip()
+    runtime = config.judgement_runtime or ({} if config.judgement_model_provider == "vllm" else {"device_map": config.judgement_device_map,
+                                           "dtype": config.judgement_dtype,
+                                           "attn_implementation": config.judgement_attn_implementation})
+    return load_backend(config.judgement_model_provider, config.judgement_model, runtime=runtime)
 
 
 def generate_query_text(
     selected: list[MemoryComponent],
     config: QueryGenerationConfig,
     prompt_template: str,
-    loaded_generator: tuple[dict[str, Any], Callable[..., str]] | None,
+    loaded_generator: InferenceBackend | None,
 ) -> str:
     if loaded_generator is None:
         return _render_null_query(selected)
-    loaded, generate = loaded_generator
     prompt = format_query_prompt(prompt_template, selected)
-    return generate(
-        loaded=loaded,
-        prompt=prompt,
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        thinking=config.thinking,
-    ).strip()
+    result = loaded_generator.generate([GenerationRequest("query", prompt, max_tokens=config.max_tokens,
+                                                          temperature=config.temperature, thinking=config.thinking)])[0]
+    if result.error:
+        raise result.error
+    return result.text.strip()
 
 
 def judge_query(
@@ -693,21 +659,25 @@ def judge_query(
     selected: list[MemoryComponent],
     query: str,
     config: QueryGenerationConfig,
-    loaded_judge: tuple[dict[str, Any], JudgementGenerator] | None,
+    loaded_judge: InferenceBackend | None,
 ) -> dict[str, Any] | None:
     if loaded_judge is None:
         return None
     prompt_template = config.judgement_prompt.read_text(encoding="utf-8")
     prompt = format_judgement_prompt(prompt_template, mode, paper, selected, query)
     image_paths = paper_image_paths(paper)
-    loaded, generate = loaded_judge
-    raw_output = generate(
-        loaded=loaded,
-        image_paths=image_paths,
-        prompt=prompt,
-        max_tokens=config.judgement_max_tokens,
-        temperature=config.judgement_temperature,
-    ).strip()
+    result = loaded_judge.generate([GenerationRequest("judgement", prompt, images=tuple(image_paths),
+                                                      max_tokens=config.judgement_max_tokens,
+                                                      temperature=config.judgement_temperature)])[0]
+    if result.error:
+        return {"error": str(result.error), "model_provider": config.judgement_model_provider,
+                "model": config.judgement_model, "prompt_id": config.judgement_prompt_id,
+                "prompt_version": config.judgement_prompt_version}
+    raw_output = result.text.strip()
+    return parse_judgement_output(raw_output, config)
+
+
+def parse_judgement_output(raw_output: str, config: QueryGenerationConfig) -> dict[str, Any]:
     parsed = parse_json_object(raw_output)
     if parsed is None:
         return {
@@ -897,6 +867,8 @@ def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGe
         dtype=model.get("dtype", "bfloat16"),
         attn_implementation=model.get("attn_implementation", "sdpa"),
         thinking=bool(model.get("thinking", False)),
+        batch_size=int(model.get("batch_size", 1)),
+        runtime=(visual_query.get("runtime") or {}).get(model.get("provider", "null"), {}),
         judge_queries=bool(judgement.get("enabled", False)),
         judgement_prompt=resolve_path(judgement.get("template", DEFAULT_JUDGEMENT_PROMPT), config_dir),
         judgement_prompt_id=judgement.get("name", "query_judgement"),
@@ -908,6 +880,8 @@ def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGe
         judgement_device_map=judgement.get("device_map", "auto"),
         judgement_dtype=judgement.get("dtype", "bfloat16"),
         judgement_attn_implementation=judgement.get("attn_implementation", "sdpa"),
+        judgement_batch_size=int(judgement.get("batch_size", 1)),
+        judgement_runtime=(judgement.get("runtime") or {}).get(judgement.get("provider", "transformers"), {}),
         modes=modes,
         seed=int(visual_query.get("seed", 13)),
         visual_component_budget=int(
@@ -949,8 +923,8 @@ def _validate_config(config: QueryGenerationConfig) -> None:
         raise ValueError("The null query-generation provider expects model to be 'null'.")
     if config.model_provider != "null" and config.model == "null":
         raise ValueError("Non-null query-generation providers require a real model name.")
-    if config.judgement_model_provider != "transformers":
-        raise ValueError("The query-judgement model provider must be 'transformers'.")
+    if config.judgement_model_provider not in {"transformers", "vllm", "mlx"}:
+        raise ValueError("Unsupported query-judgement model provider")
     if not config.judgement_model:
         raise ValueError("judgement_model must be set")
     if config.max_tokens < 1:

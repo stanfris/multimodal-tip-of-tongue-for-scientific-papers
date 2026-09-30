@@ -18,8 +18,11 @@ selection:
 generation:
   max_tokens: 600
   temperature: 0.0
-  batch_size: 1
+  batch_size: ${oc.select:launcher.visual_batch_size,1}
   device_map: ${model.device_map}
   dtype: ${model.dtype}
   attn_implementation: ${model.attn_implementation}
   debug: false
+image:
+  min_visual_tokens: null
+  max_visual_tokens: ${oc.select:launcher.visual_max_tokens,null}

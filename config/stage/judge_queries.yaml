@@ -9,6 +9,7 @@ stage:
 visual_query:
   judgement:
     model: ${model.name}
+    provider: ${model.provider}
 
 hydra:
   job:

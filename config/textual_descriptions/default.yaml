@@ -20,7 +20,7 @@ generation:
   max_markdown_chars: 12000
   temperature: 0.0
   thinking: false
-  batch_size: 8
+  batch_size: ${oc.select:launcher.text_batch_size,8}
   device_map: ${model.device_map}
   dtype: ${model.dtype}
   attn_implementation: ${model.attn_implementation}

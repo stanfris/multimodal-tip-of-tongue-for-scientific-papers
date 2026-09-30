@@ -32,11 +32,14 @@ from preprocessing.preprocessed import (
     visual_clue_path,
 )
 from common.validation import validate_index_window
+from inference import GenerationRequest, load_backend
+from inference.base import ordered_results
 
 
 DEFAULT_MODELS = {
     "mlx": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
     "transformers": "Qwen/Qwen3-VL-4B-Instruct",
+    "vllm": "Qwen/Qwen3-VL-4B-Instruct",
 }
 DEFAULT_PROMPT = Path("prompts/visual_interpretation.v1.txt")
 DEFAULT_RUN_ID = "qwen3_vl_figure_description"
@@ -86,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-index", type=int, default=None, help="Exclusive dataset row index to consider.")
     parser.add_argument("--resume", action="store_true", help="Skip records already present in interpretation JSONL.")
     parser.add_argument("--overwrite", action="store_true", help="Regenerate records even when --resume is set.")
-    parser.add_argument("--batch-size", type=int, default=1, help="Scheduling batch size; visual generations run serially.")
+    parser.add_argument("--batch-size", type=int, default=1, help="Inference requests submitted together.")
     parser.add_argument(
         "--image",
         action="append",
@@ -353,7 +356,10 @@ def run(args: argparse.Namespace) -> Path:
             split_name=args.split,
         )
 
-    loaded, generate_description = load_generator(args, model_name)
+    inference = load_backend(args.backend, model_name, runtime=getattr(args, "runtime", {}) if args.backend == "vllm" else getattr(args, "runtime", {
+        "device_map": args.device_map, "dtype": args.dtype,
+        "attn_implementation": args.attn_implementation,
+    }), image=getattr(args, "image_limits", {}))
     completed = set()
     if args.resume and not args.overwrite:
         completed = read_completed_interpretation_keys(
@@ -385,7 +391,10 @@ def run(args: argparse.Namespace) -> Path:
     overwritten_clue_paths: set[Path] = set()
 
     batches = batched(samples, args.batch_size)
+    generation_seconds = 0.0
+    generated_tokens = 0
     for batch in progress(batches, total=len(batches), enabled=args.all, description="Figure description batches"):
+        pending = []
         for sample in batch:
             candidate = InterpretationRecord(
                 record_id=sample.record_id,
@@ -398,14 +407,26 @@ def run(args: argparse.Namespace) -> Path:
             if interpretation_key(candidate) in completed:
                 skipped += 1
                 continue
+            pending.append(sample)
+        if not pending:
+            continue
+        requests = [GenerationRequest(f"{index}:{sample.record_id}", prompt,
+                                      images=(sample.image_path,), max_tokens=args.max_tokens,
+                                      temperature=args.temperature)
+                    for index, sample in enumerate(pending)]
+        inference_started = time.monotonic()
+        try:
+            results = ordered_results(requests, inference.generate(requests))
+        except Exception as exc:
+            from inference.base import GenerationResult
+            results = [GenerationResult(request.request_id, error=exc) for request in requests]
+        generation_seconds += time.monotonic() - inference_started
+        for sample, result in zip(pending, results, strict=True):
             try:
-                description = generate_description(
-                    loaded=loaded,
-                    image_path=sample.image_path,
-                    prompt=prompt,
-                    max_tokens=args.max_tokens,
-                    temperature=args.temperature,
-                )
+                if result.error is not None:
+                    raise result.error
+                description = result.text
+                generated_tokens += result.generated_tokens or 0
                 if args.debug:
                     print_debug_trace(sample, prompt, description)
             except Exception as exc:
@@ -469,6 +490,9 @@ def run(args: argparse.Namespace) -> Path:
             "skipped_existing_records": skipped,
             "failed_records": failed,
             "elapsed_seconds": round(time.time() - started, 3),
+            "generation_seconds": round(generation_seconds, 3),
+            "requests_per_second": round(processed / max(time.time() - started, 0.001), 3),
+            "generated_tokens": generated_tokens,
     }
     (output_path / "visual_clues.metadata.json").write_text(
         json.dumps({"record_count": processed, **metadata}, indent=2, sort_keys=True),
@@ -513,6 +537,11 @@ def load_managed_visual_description_args(args: argparse.Namespace) -> argparse.N
     managed.device_map = generation.get("device_map", "auto")
     managed.dtype = generation.get("dtype", "auto")
     managed.attn_implementation = generation.get("attn_implementation")
+    managed.runtime = (visual.get("runtime") or {}).get(managed.backend, {} if managed.backend == "vllm" else {
+        "device_map": managed.device_map, "dtype": managed.dtype,
+        "attn_implementation": managed.attn_implementation,
+    })
+    managed.image_limits = visual.get("image") or {}
     return managed
 
 

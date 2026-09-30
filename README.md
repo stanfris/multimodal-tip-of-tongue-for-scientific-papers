@@ -135,6 +135,59 @@ split and is not the canonical input to extraction.
 
 ### Hydra stages and argument order
 
+#### Shared inference backends and ABCI H200
+
+The generative stages use `src/inference`: each stage submits `GenerationRequest`
+windows and receives ordered `GenerationResult` values. `transformers` performs
+padded model batches, `vllm` submits the whole window to the offline engine for
+continuous batching, and `mlx` retains the local Apple Silicon path. Backend
+packages are imported only when selected. Existing clue and query output paths,
+JSONL rows, and resume keys are unchanged.
+
+Select the backend with `model.provider=transformers`, `model.provider=mlx`, or
+`model.provider=vllm`. The model choice is independent: `model=qwen3_vl`,
+`model=qwen3_text`, `model=phi4`, and `model=gemma3_judge` still work. Install
+vLLM in the H200 worker environment before submitting vLLM runs, for example
+with `uv pip install --python .venv/bin/python vllm` after the normal environment
+sync. The local test environment does not need it.
+
+The `pbs_h200` launcher requests one GPU. Its starting `max_num_seqs` values
+are 64 for Qwen3-VL, 256 for Qwen3 text, 128 for Phi-4, and 64 for Gemma 3
+27B. It uses BF16 weights, automatic KV-cache dtype, prefix caching, and a
+16,384-token batch budget. These are benchmark priors, not measured optima.
+The figure visual budget defaults to 768 tokens on this launcher.
+
+```bash
+scripts/clue_generation/describe_all_figures.sh split=train launcher=pbs_h200 model=qwen3_vl model.provider=vllm
+scripts/clue_generation/describe_all_textual_clues.sh split=train launcher=pbs_h200 model=qwen3_text model.provider=vllm
+scripts/query_generation/generate_queries.sh split=train launcher=pbs_h200 model=phi4 model.provider=vllm
+scripts/query_generation/judge_train_queries.sh split=train launcher=pbs_h200 model=gemma3_judge model.provider=vllm
+```
+
+Append `dry_run=true` to inspect the resolved plan and settings without
+submitting. Runtime overrides use, for example,
+`launcher.vllm.max_num_seqs=32 launcher.vllm.max_num_batched_tokens=8192`.
+For figures append `visual_descriptions.image.max_visual_tokens=512` (or 768 or
+1024). `visual_descriptions.generation.batch_size`,
+`textual_descriptions.generation.batch_size`, `visual_query.model.batch_size`,
+and `visual_query.judgement.batch_size` control how many requests enter a real
+inference call. The H200 preset keeps tensor parallel size at one, including
+Gemma; override `launcher.vllm.tensor_parallel_size` only when using a different
+GPU allocation.
+
+Run representative benchmarks without writing clues or queries:
+
+```bash
+PYTHONPATH=src python -m inference.benchmark visual --provider vllm --dataset data/preprocessed
+PYTHONPATH=src python -m inference.benchmark text --provider transformers --dataset data/preprocessed
+```
+
+The benchmark grids cover 32/64/128 sequences and 512/768/1024 visual tokens
+for figures, 128/256/512 sequences for Qwen3 text, 64/128/256 for Phi-4,
+32/64/128 for Gemma, and Transformers batch sizes 1/4/8. It prints JSON lines
+with elapsed time, throughput, failures, and configuration. Model weights and a
+compatible GPU are needed for real vLLM measurements.
+
 `src/cli.py` routes operational subcommands to argparse and all other calls
 to Hydra. Stage wrappers embed their own `stage=...`; do not add a second stage
 override. `split=train` or `split=test` selects a canonical split for model

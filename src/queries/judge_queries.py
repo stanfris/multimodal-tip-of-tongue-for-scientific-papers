@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from document_splits.document_splits import filter_papers_by_split
-from common.generation_utils import progress
+from common.generation_utils import progress, batched
+from inference import GenerationRequest
+from inference.base import ordered_results
 from common.jsonl import append_jsonl_object, read_jsonl_objects
 from common.managed_settings import DEFAULT_SETTINGS_PATH, load_managed_settings, section
 from preprocessing.preprocessed import DEFAULT_DATA_DIR, clue_domain_dir, read_preprocessed_papers
@@ -22,6 +25,9 @@ from queries.query_generation import (
     _config_from_yaml,
     judge_query,
     load_query_judge,
+    format_judgement_prompt,
+    paper_image_paths,
+    parse_judgement_output,
 )
 
 
@@ -46,6 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt-id", default="query_judgement")
     parser.add_argument("--prompt-version", default="v1")
     parser.add_argument("--model", default=DEFAULT_JUDGEMENT_MODEL)
+    parser.add_argument("--provider", choices=["transformers", "vllm", "mlx"], default="transformers")
+    parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=900)
     parser.add_argument("--device-map", default="auto")
@@ -57,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(args: argparse.Namespace | None = None) -> int:
+    started = time.monotonic()
     args = args or build_parser().parse_args()
     if args.settings is not None:
         args, config = load_managed_judgement_args(args)
@@ -94,6 +103,8 @@ def main(args: argparse.Namespace | None = None) -> int:
             judgement_prompt_id=args.prompt_id,
             judgement_prompt_version=args.prompt_version,
             judgement_model=args.model,
+            judgement_model_provider=args.provider,
+            judgement_batch_size=args.batch_size,
             judgement_temperature=args.temperature,
             judgement_max_tokens=args.max_tokens,
             judgement_device_map=args.device_map,
@@ -104,6 +115,7 @@ def main(args: argparse.Namespace | None = None) -> int:
     processed = 0
     skipped = 0
     missing = 0
+    failed = 0
     found_queries = False
     for collection_dir, mode in ((directory, mode) for directory in input_dirs for mode in modes):
         query_path = collection_dir / MODE_DIRS[mode] / "queries.jsonl"
@@ -118,6 +130,7 @@ def main(args: argparse.Namespace | None = None) -> int:
         completed_query_ids = read_completed_query_ids(judgement_path)
         rows = read_jsonl_objects(query_path)
         indexed_rows = list(enumerate(rows))
+        pending = []
         for _, row in progress(
             indexed_rows,
             total=len(indexed_rows),
@@ -130,38 +143,55 @@ def main(args: argparse.Namespace | None = None) -> int:
             if query_id in completed_query_ids and not args.overwrite:
                 skipped += 1
                 continue
-            if args.limit is not None and processed >= args.limit:
+            if args.limit is not None and processed + len(pending) >= args.limit:
                 continue
             paper_id = str(metadata.get("paper_id") or (row.get("relevant_ids") or [""])[0])
             paper = papers.get(paper_id)
             if paper is None:
                 missing += 1
                 continue
-            selected = components_from_metadata(metadata)
-            judgement = judge_query(
-                mode,
-                paper,
-                selected,
-                str(row.get("query") or ""),
-                config,
-                loaded_judge,
-            )
-            append_judgement_row(
-                judgement_path,
-                {
-                    "query_id": query_id,
-                    "mode": mode,
-                    "paper_id": paper_id,
-                    "query": str(row.get("query") or ""),
-                    "relevant_ids": row.get("relevant_ids") or [],
-                    "judgement": judgement,
-                },
-            )
-            completed_query_ids.add(query_id)
-            processed += 1
+            pending.append((row, query_id, paper_id, paper, components_from_metadata(metadata)))
+        for batch in batched(pending, config.judgement_batch_size):
+            if loaded_judge is not None:
+                template = config.judgement_prompt.read_text(encoding="utf-8")
+                requests = [GenerationRequest(query_id,
+                    format_judgement_prompt(template, mode, paper, selected, str(row.get("query") or "")),
+                    images=tuple(paper_image_paths(paper)), max_tokens=config.judgement_max_tokens,
+                    temperature=config.judgement_temperature)
+                    for row, query_id, _, paper, selected in batch]
+                results = ordered_results(requests, loaded_judge.generate(requests))
+                judgements = [parse_judgement_output(result.text.strip(), config) if result.error is None
+                              else {"error": str(result.error)}
+                              for result in results]
+            else:
+                judgements = [judge_query(mode, paper, selected, str(row.get("query") or ""), config, loaded_judge)
+                              for row, _, _, paper, selected in batch]
+            for (row, query_id, paper_id, _, _), judgement in zip(batch, judgements, strict=True):
+                if isinstance(judgement, dict) and "error" in judgement:
+                    failed += 1
+                    print(f"Judgement failed for {query_id}: {judgement['error']}", flush=True)
+                    continue
+                append_judgement_row(
+                    judgement_path,
+                    {
+                        "query_id": query_id,
+                        "mode": mode,
+                        "paper_id": paper_id,
+                        "query": str(row.get("query") or ""),
+                        "relevant_ids": row.get("relevant_ids") or [],
+                        "judgement": judgement,
+                    },
+                )
+                completed_query_ids.add(query_id)
+                processed += 1
     if not found_queries:
         raise FileNotFoundError(f"No domain query files found under {input_dir}")
-    print(json.dumps({"processed": processed, "skipped": skipped, "missing_papers": missing}, indent=2, sort_keys=True))
+    elapsed = time.monotonic() - started
+    print(json.dumps({"processed": processed, "skipped": skipped, "failed": failed,
+                      "missing_papers": missing,
+                      "elapsed_seconds": round(elapsed, 3),
+                      "requests_per_second": round(processed / max(elapsed, 0.001), 3)},
+                     indent=2, sort_keys=True))
     return 0
 
 

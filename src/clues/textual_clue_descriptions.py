@@ -34,11 +34,14 @@ from preprocessing.preprocessed import (
     textual_clue_path,
 )
 from common.validation import validate_index_window
+from inference import GenerationRequest, load_backend
+from inference.base import ordered_results
 
 
 DEFAULT_MODELS: dict[str, str | None] = {
     "mlx": "Qwen/Qwen3-1.7B-MLX-8bit",
     "transformers": "Qwen/Qwen3-4B",
+    "vllm": "Qwen/Qwen3-4B",
 }
 DEFAULT_PROMPT = Path("prompts/textual_interpretation.v1.txt")
 DEFAULT_RUN_ID = "qwen3_textual_clue_description"
@@ -481,7 +484,10 @@ def run(args: argparse.Namespace) -> Path:
         split_name=args.split,
     )
 
-    loaded, generate_description = load_generator(args, model_name)
+    inference = load_backend(args.backend, model_name, runtime=getattr(args, "runtime", {}) if args.backend == "vllm" else getattr(args, "runtime", {
+        "device_map": args.device_map, "dtype": args.dtype,
+        "attn_implementation": args.attn_implementation,
+    }))
     completed = set()
     if args.resume and not args.overwrite:
         completed = read_completed_interpretation_keys(
@@ -511,6 +517,8 @@ def run(args: argparse.Namespace) -> Path:
     skipped = 0
     failed = 0
     overwritten_clue_paths: set[Path] = set()
+    generation_seconds = 0.0
+    generated_tokens = 0
 
     batches = batched(samples, args.batch_size)
     for batch in progress(batches, total=len(batches), enabled=args.all, description="Textual clue batches"):
@@ -530,20 +538,24 @@ def run(args: argparse.Namespace) -> Path:
                 pending.append(sample)
         if not pending:
             continue
+        requests = [GenerationRequest(f"{index}:{sample.record_id}", format_prompt(prompt_template, sample.markdown),
+                                      max_tokens=args.max_tokens, temperature=args.temperature, thinking=args.thinking)
+                    for index, sample in enumerate(pending)]
+        inference_started = time.monotonic()
         try:
-            descriptions = generate_text_batch(args, loaded, generate_description, pending, prompt_template)
+            results = ordered_results(requests, inference.generate(requests))
         except Exception as exc:
-            failed += len(pending)
-            for sample in pending:
-                record_generation_failure(
-                    failure_file,
-                    record_id=sample.record_id,
-                    kind="textual",
-                    error=exc,
-                    metadata=sample.metadata,
-                )
-            continue
-        for sample, description in zip(pending, descriptions, strict=True):
+            from inference.base import GenerationResult
+            results = [GenerationResult(request.request_id, error=exc) for request in requests]
+        generation_seconds += time.monotonic() - inference_started
+        for sample, result in zip(pending, results, strict=True):
+            if result.error is not None:
+                failed += 1
+                record_generation_failure(failure_file, record_id=sample.record_id, kind="textual",
+                                          error=result.error, metadata=sample.metadata)
+                continue
+            description = result.text if args.thinking else strip_thinking(result.text)
+            generated_tokens += result.generated_tokens or 0
             record = InterpretationRecord(
                 record_id=sample.record_id,
                 kind="textual",
@@ -590,6 +602,9 @@ def run(args: argparse.Namespace) -> Path:
             "skipped_existing_records": skipped,
             "failed_records": failed,
             "elapsed_seconds": round(time.time() - started, 3),
+            "generation_seconds": round(generation_seconds, 3),
+            "requests_per_second": round(processed / max(time.time() - started, 0.001), 3),
+            "generated_tokens": generated_tokens,
     }
     (output_path / "textual_clues.metadata.json").write_text(
         json.dumps({"record_count": processed, **metadata}, indent=2, sort_keys=True),
@@ -635,6 +650,10 @@ def load_managed_textual_description_args(args: argparse.Namespace) -> argparse.
     managed.device_map = generation.get("device_map", "auto")
     managed.dtype = generation.get("dtype", "auto")
     managed.attn_implementation = generation.get("attn_implementation")
+    managed.runtime = (textual.get("runtime") or {}).get(managed.backend, {} if managed.backend == "vllm" else {
+        "device_map": managed.device_map, "dtype": managed.dtype,
+        "attn_implementation": managed.attn_implementation,
+    })
     return managed
 
 
