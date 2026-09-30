@@ -5,7 +5,7 @@ defaults:
 launcher:
   kind: pbs
   project: gcb50357
-  dataset_root: ${oc.env:VTT_DATA_ROOT,${oc.env:HOME}/visual_tip_of_the_tongue_data}
+  dataset_root: ${oc.env:VTT_DATA_ROOT,./data}
   processed_root: ${launcher.dataset_root}/processed
   pdf_dir: ${launcher.dataset_root}/pdf_datasets
   split_index: ${launcher.dataset_root}/data/splits/pdf_dataset_split.json

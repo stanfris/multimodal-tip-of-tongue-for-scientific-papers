@@ -60,6 +60,14 @@ def test_launcher_paths_override_dataset_defaults() -> None:
     assert settings["dataset"]["preprocessed"] == "/scratch-shared/sfris1/preprocessed"
 
 
+def test_pbs_defaults_to_repository_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VTT_DATA_ROOT", raising=False)
+    for profile in ("pbs_rt_hg", "pbs_rt_hc"):
+        plan, settings = build_plan(config(f"launcher={profile}"), tmp_path)
+        assert plan["data_root"] == str(tmp_path / "data")
+        assert settings["dataset"]["preprocessed"] == str(tmp_path / "data/preprocessed")
+
+
 def test_slurm_profiles_compose_submitit_resources() -> None:
     for profile, partition, gpus in (("slurm_a100", "gpu_a100", 1), ("slurm_cpu", "rome", 0)):
         with initialize_config_dir(config_dir=str(ROOT / "config"), version_base="1.3"):
