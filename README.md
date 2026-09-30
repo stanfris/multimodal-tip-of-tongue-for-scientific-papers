@@ -144,7 +144,7 @@ explicit name. Scheduler profiles use scratch defaults; for a different
 corpus pass all relevant paths, for example:
 
 ```bash
-launcher.dataset_root=/scratch/project launcher.pdf_dir=/scratch/project/pdf_datasets launcher.processed_root=/scratch/project/processed dataset.preprocessed=/scratch/project/preprocessed launcher.split_index=/scratch/project/data/splits/pdf_dataset_split.json launcher.log_root=/scratch/project/logs
+launcher.dataset_root=/scratch/project launcher.pdf_dir=/scratch/project/pdf_datasets launcher.processed_root=/scratch/project/processed dataset.preprocessed=/scratch/project/preprocessed launcher.split_index=/scratch/project/splits/pdf_dataset_split.json launcher.log_root=/scratch/project/logs
 ```
 
 Append those path overrides to a Hydra command below, replacing the example
@@ -687,7 +687,7 @@ scripts/pdf_corpus/build_pdf_dataset_split.sh --root-dir /scratch-shared/sfris1
 ```
 
 This reads the PDF subfolders beneath `/scratch-shared/sfris1/pdf_datasets`
-and writes `/scratch-shared/sfris1/data/splits/pdf_dataset_split.json`.
+and writes `/scratch-shared/sfris1/splits/pdf_dataset_split.json`.
 
 The split contains source documents, not a guaranteed number of generated
 queries: downstream generation can emit one or more queries per selected PDF.

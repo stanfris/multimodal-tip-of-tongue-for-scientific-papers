@@ -45,6 +45,8 @@ def managed_settings(config: dict[str, Any], data_root: Path, repo_root: Path) -
     )})
     settings["dataset"]["root"] = str(data_root)
     settings["dataset"]["preprocessed"] = str(absolute(config["dataset"]["preprocessed"], repo_root))
+    if config["dataset"]["split_index"] is not None:
+        settings["dataset"]["split_index"] = str(absolute(config["dataset"]["split_index"], repo_root))
     for section in ("visual_descriptions", "textual_descriptions", "visual_query"):
         settings[section]["prompt"]["template"] = str(absolute(settings[section]["prompt"]["template"], repo_root))
     settings["visual_query"]["judgement"]["template"] = str(absolute(settings["visual_query"]["judgement"]["template"], repo_root))

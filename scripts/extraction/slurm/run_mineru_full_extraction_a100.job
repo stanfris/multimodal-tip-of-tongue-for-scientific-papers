@@ -162,7 +162,7 @@ case "$EXTRACTION_SCOPE" in
       EXTRACTION_SCOPE="train+test"
     fi
     CALLER_CMD+=(
-      --split-index "${SPLIT_INDEX_ARG:-${SPLIT_INDEX:-$DATASET_DIR/data/splits/pdf_dataset_split.json}}"
+      --split-index "${SPLIT_INDEX_ARG:-${SPLIT_INDEX:-$DATASET_DIR/splits/pdf_dataset_split.json}}"
       --split "$EXTRACTION_SCOPE"
     )
     SCOPE_DESCRIPTION="the indexed $EXTRACTION_SCOPE split"

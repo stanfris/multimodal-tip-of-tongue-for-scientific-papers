@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Dataset storage root. Defaults --input-dir to ROOT/pdf_datasets "
-            "and --output to ROOT/data/splits/pdf_dataset_split.json."
+            "and --output to ROOT/splits/pdf_dataset_split.json."
         ),
     )
     parser.add_argument("--input-dir", type=Path)
@@ -68,7 +68,7 @@ def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     root_dir = args.root_dir.expanduser().resolve() if args.root_dir is not None else None
     input_dir = args.input_dir or (root_dir / "pdf_datasets" if root_dir is not None else DEFAULT_INPUT_DIR)
     output = args.output or (
-        root_dir / "data/splits/pdf_dataset_split.json" if root_dir is not None else DEFAULT_OUTPUT
+        root_dir / "splits/pdf_dataset_split.json" if root_dir is not None else DEFAULT_OUTPUT
     )
     return input_dir, output
 

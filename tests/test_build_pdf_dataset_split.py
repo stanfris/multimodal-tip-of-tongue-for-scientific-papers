@@ -28,7 +28,7 @@ def test_root_dir_sets_scratch_layout_defaults(tmp_path) -> None:
     input_dir, output = resolve_paths(args)
 
     assert input_dir == tmp_path / "pdf_datasets"
-    assert output == tmp_path / "data/splits/pdf_dataset_split.json"
+    assert output == tmp_path / "splits/pdf_dataset_split.json"
 
 
 def test_explicit_paths_override_root_dir(tmp_path) -> None:

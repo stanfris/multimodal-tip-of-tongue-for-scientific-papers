@@ -48,16 +48,20 @@ def test_launcher_paths_override_dataset_defaults() -> None:
         assert cfg["dataset"]["root"] == cfg["launcher"]["dataset_root"]
         assert cfg["dataset"]["processed_root"] == cfg["launcher"]["processed_root"]
         assert cfg["dataset"]["pdf_dir"] == cfg["launcher"]["pdf_dir"]
+        if profile != "local_gpu":
+            assert cfg["dataset"]["split_index"] == f"{cfg['dataset']['root']}/splits/pdf_dataset_split.json"
         assert cfg["launcher"]["cache_root"]
     cfg = config("launcher=slurm_a100", "launcher.dataset_root=/tmp/corpus")
     assert cfg["dataset"]["root"] == "/tmp/corpus"
     assert cfg["dataset"]["processed_root"] == "/tmp/corpus/processed"
     assert cfg["dataset"]["preprocessed"] == "/tmp/corpus/preprocessed"
     assert cfg["dataset"]["pdf_dir"] == "/tmp/corpus/pdf_datasets"
+    assert cfg["dataset"]["split_index"] == "/tmp/corpus/splits/pdf_dataset_split.json"
     plan, settings = build_plan(config("launcher=slurm_a100", "stage=describe_textual_clues",
                                        "launcher.dataset_root=/scratch-shared/sfris1"), ROOT)
     assert plan["dataset"]["processed_root"] == "/scratch-shared/sfris1/processed"
     assert settings["dataset"]["preprocessed"] == "/scratch-shared/sfris1/preprocessed"
+    assert settings["dataset"]["split_index"] == "/scratch-shared/sfris1/splits/pdf_dataset_split.json"
 
 
 def test_pbs_defaults_to_repository_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,6 +70,13 @@ def test_pbs_defaults_to_repository_data(tmp_path: Path, monkeypatch: pytest.Mon
         plan, settings = build_plan(config(f"launcher={profile}"), tmp_path)
         assert plan["data_root"] == str(tmp_path / "data")
         assert settings["dataset"]["preprocessed"] == str(tmp_path / "data/preprocessed")
+        assert settings["dataset"]["split_index"] == str(tmp_path / "data/splits/pdf_dataset_split.json")
+
+
+def test_managed_settings_resolves_relative_split_override_once(tmp_path: Path) -> None:
+    cfg = config("launcher=local_gpu", "dataset.split_index=data/splits/pdf_dataset_split.json")
+    _, settings = build_plan(cfg, tmp_path)
+    assert settings["dataset"]["split_index"] == str(tmp_path / "data/splits/pdf_dataset_split.json")
 
 
 def test_slurm_profiles_compose_submitit_resources() -> None:
