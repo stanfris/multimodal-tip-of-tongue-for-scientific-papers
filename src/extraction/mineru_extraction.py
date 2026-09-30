@@ -759,6 +759,13 @@ def image_path_from_block(block: dict[str, Any]) -> str | None:
         value = block.get(key)
         if isinstance(value, str) and value:
             return value
+    content = block.get("content")
+    if isinstance(content, dict):
+        image_source = content.get("image_source")
+        if isinstance(image_source, dict):
+            value = image_source.get("path")
+            if isinstance(value, str) and value:
+                return value
     return None
 
 

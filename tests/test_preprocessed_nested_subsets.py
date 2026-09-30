@@ -6,6 +6,7 @@ from pathlib import Path
 from preprocessing.preprocessed import iter_preprocessed_paper_dirs, read_preprocessed_papers
 from preprocessing.preprocessed import select_preprocessed_paper_dirs
 from document_splits.document_splits import filter_papers_by_split
+from clues.vl_figure_descriptions import iter_samples_from_preprocessed_dataset
 
 
 def write_paper(root: Path, subset: str, paper_id: str) -> Path:
@@ -35,6 +36,30 @@ def test_nested_subset_papers_are_discovered_from_output_root(tmp_path: Path) ->
     assert [paper["paper_id"] for paper in read_preprocessed_papers(tmp_path)] == [
         "ACL_paper",
         "Engineering_paper",
+    ]
+
+
+def test_existing_paper_json_with_empty_figures_uses_images_for_visual_samples(tmp_path: Path) -> None:
+    paper_dir = write_paper(tmp_path, "ACL", "ACL_paper")
+    images_dir = paper_dir / "images"
+    images_dir.mkdir()
+    (images_dir / "first.jpg").write_bytes(b"image")
+    (images_dir / "second.png").write_bytes(b"image")
+    (images_dir / "notes.txt").write_text("not an image", encoding="utf-8")
+    split_index = tmp_path / "split.json"
+    split_index.write_text(json.dumps({"train": ["ACL_paper"], "test": []}), encoding="utf-8")
+
+    samples = iter_samples_from_preprocessed_dataset(
+        tmp_path,
+        limit=None,
+        split_index=split_index,
+        split_name="train",
+    )
+
+    assert [sample.record_id for sample in samples] == ["first", "second"]
+    assert [sample.image_path for sample in samples] == [
+        images_dir / "first.jpg",
+        images_dir / "second.png",
     ]
 
 
