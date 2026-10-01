@@ -161,6 +161,19 @@ def test_h200_job_disables_flashinfer_sampling_without_nvcc() -> None:
     assert "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" in script
 
 
+def test_h200_mineru_thread_defaults_and_override() -> None:
+    plan, _ = build_plan(config("stage=extract_mineru", "launcher=pbs_h200"), ROOT)
+    script = job_script(Path("/tmp/plan.json"), plan)
+    for key, value in {"MINERU_INTRA_OP_NUM_THREADS": 4, "MINERU_INTER_OP_NUM_THREADS": 1,
+                       "OMP_NUM_THREADS": 4, "MKL_NUM_THREADS": 4,
+                       "OPENBLAS_NUM_THREADS": 4, "NUMEXPR_NUM_THREADS": 4}.items():
+        assert f"export {key}={value}" in script
+    overridden, _ = build_plan(config("stage=extract_mineru", "launcher=pbs_h200",
+                                      "launcher.environment.MINERU_INTRA_OP_NUM_THREADS=8"), ROOT)
+    assert "export MINERU_INTRA_OP_NUM_THREADS=8" in job_script(Path("/tmp/plan.json"), overridden)
+    assert overridden["launcher"]["cpus"] == 16
+
+
 def test_invalid_generation_split_rejected() -> None:
     with pytest.raises(ValueError, match="split=train or split=test"):
         build_plan(config("stage=generate_queries", "split=all"), ROOT)
@@ -222,12 +235,16 @@ def test_h200_mineru_defaults_propagate_through_plan_and_caller(tmp_path: Path, 
     monkeypatch.delenv("SLURM_TMPDIR", raising=False)
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     execute_stage(plan)
-    cmd, kwargs = calls[0]
+    cmd, kwargs = next((cmd, kwargs) for cmd, kwargs in calls if isinstance(cmd, list) and
+                       cmd[0].endswith("run_mineru_full_extraction_gpu.sh"))
     assert cmd.count("--max-in-flight") == 1
     assert cmd[cmd.index("--max-in-flight") + 1] == "32"
     assert kwargs["env"]["MINERU_API_MAX_CONCURRENT_REQUESTS"] == "32"
     assert Path(kwargs["env"]["TMPDIR"]).parent.parent == tmp_path / "pbs-tmp"
     assert Path(kwargs["env"]["TMPDIR"]).name == "tmp"
+    assert (tmp_path / "run" / "performance_summary.json").exists()
+    assert kwargs["env"]["MINERU_INTRA_OP_NUM_THREADS"] == "4"
+    assert kwargs["env"]["MINERU_INTER_OP_NUM_THREADS"] == "1"
 
 
 def test_mineru_pbs_gpu_uuid_is_mapped_before_starting_server(
@@ -250,9 +267,11 @@ def test_mineru_pbs_gpu_uuid_is_mapped_before_starting_server(
     monkeypatch.delenv("SLURM_TMPDIR", raising=False)
     execute_stage(plan)
     assert calls[0][0] == ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"]
-    assert calls[1][1]["env"]["CUDA_VISIBLE_DEVICES"] == "3"
-    assert calls[1][1]["env"]["MINERU_API_MAX_CONCURRENT_REQUESTS"] == "32"
-    assert calls[1][0][calls[1][0].index("--max-in-flight") + 1] == "32"
+    job_cmd, job_kwargs = next((cmd, kwargs) for cmd, kwargs in calls if isinstance(cmd, list) and
+                               cmd[0].endswith("run_mineru_full_extraction_gpu.sh"))
+    assert job_kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "3"
+    assert job_kwargs["env"]["MINERU_API_MAX_CONCURRENT_REQUESTS"] == "32"
+    assert job_cmd[job_cmd.index("--max-in-flight") + 1] == "32"
     assert os.environ["CUDA_VISIBLE_DEVICES"] == gpu_uuid
 
 
@@ -363,8 +382,10 @@ def test_mineru_worker_propagates_overrides_to_one_subprocess(tmp_path: Path, mo
     monkeypatch.setattr("hydra_run.socket.socket", lambda *args: FakeSocket())
     monkeypatch.setenv("SLURM_TMPDIR", str(tmp_path / "slurm-tmp"))
     execute_stage(plan)
-    assert len(calls) == 1
-    cmd, kwargs = calls[0]
+    jobs = [(cmd, kwargs) for cmd, kwargs in calls if isinstance(cmd, list) and
+            cmd[0].endswith("run_mineru_full_extraction_gpu.sh")]
+    assert len(jobs) == 1
+    cmd, kwargs = jobs[0]
     assert cmd[0].endswith("run_mineru_full_extraction_gpu.sh")
     assert cmd[1:3] == ["--no-default-caller-args", "--"]
     caller = cmd[3:]

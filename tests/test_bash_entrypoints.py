@@ -100,7 +100,8 @@ def test_mineru_server_output_is_logged_but_only_caller_output_is_teed() -> None
 
     assert '>>"$server_log" 2>&1 &' in launcher
     assert '> >(tee -a "$server_log")' not in launcher
-    assert '"${caller_cmd[@]}" 2>&1 | tee -a "$caller_log"' in launcher
+    assert 'exec env PYTHONUNBUFFERED=1 "${caller_cmd[@]}"' in launcher
+    assert ') 2>&1 | tee -a "$caller_log"' in launcher
     assert "MinerU server exited before readiness with status %s" in launcher
 
 

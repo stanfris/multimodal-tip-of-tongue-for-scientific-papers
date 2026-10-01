@@ -79,6 +79,9 @@ mineru_start_server() {
     PYTHONUNBUFFERED=1 bash -lc "exec $server_cmd" >>"$server_log" 2>&1 &
   fi
   MINERU_SERVER_PID=$!
+  if [[ -n "${MINERU_SERVER_PID_FILE:-}" ]]; then
+    printf '%s\n' "$MINERU_SERVER_PID" >"$MINERU_SERVER_PID_FILE"
+  fi
   MINERU_SERVER_STARTED=1
 }
 
@@ -174,7 +177,11 @@ mineru_run_caller_with_server() {
   } | tee -a "$caller_log"
 
   set +e
-  PYTHONUNBUFFERED=1 "${caller_cmd[@]}" 2>&1 | tee -a "$caller_log"
+  ( if [[ -n "${MINERU_CALLER_PID_FILE:-}" ]]; then
+      printf '%s\n' "$BASHPID" >"$MINERU_CALLER_PID_FILE"
+    fi
+    exec env PYTHONUNBUFFERED=1 "${caller_cmd[@]}"
+  ) 2>&1 | tee -a "$caller_log"
   caller_status=${PIPESTATUS[0]}
   set -e
 

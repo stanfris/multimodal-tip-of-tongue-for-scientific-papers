@@ -287,6 +287,11 @@ runtime. An unresolved UUID stops the worker before it submits papers.
 The H200 launcher also disables optional vLLM DeepGEMM kernels because the
 dedicated MinerU environment does not install DeepGEMM; vLLM's supported
 fallback retains the BF16 model and extraction settings.
+Its 16-CPU PBS allocation is unchanged. Each ONNX operation defaults to four
+intra-op threads and one inter-op thread; OMP, MKL, OpenBLAS, and NumExpr
+default to four threads. Set `launcher.environment.MINERU_INTRA_OP_NUM_THREADS=2`
+(or `4` or `8`) on the command line to compare thread counts. These settings
+are inherited by both the MinerU server and extraction caller.
 
 ```bash
 scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200
@@ -315,6 +320,13 @@ replace each other's reports or retry manifests. Paper output remains under
 contains `plan.json` with both concurrency settings, plus `mineru.server.log`
 and `mineru.caller.log` from the allocated node. `run_config.json` also records
 the server and client concurrency used by the extraction caller.
+The allocated worker also writes `system_info.log`, `gpu_usage.csv`,
+`cpu_usage.log`, `process_usage.log`, and `performance_summary.json` to the
+Hydra run directory. GPU and CPU samples are taken about every three seconds;
+process diagnostics about every 15 seconds. The CPU log is JSON Lines with
+one record per allocated logical CPU and an aggregate record. It uses
+`mpstat` when available and `/proc/stat` otherwise. An active core has more
+than 50% utilization. Missing monitoring tools do not stop extraction.
 For a full-folder scan, the caller uses the selected launcher's PDF and
 processed paths but does not open its split-index path. Use `dry_run=true` to
 check these resolved paths before submitting a scheduler job.

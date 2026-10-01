@@ -12,6 +12,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -251,6 +252,7 @@ def run_mineru_job(plan: dict[str, Any]) -> None:
     if not 1 <= port <= 65535:
         raise ValueError("stage.server_port must be 0 or a valid TCP port")
     run_dir = Path(plan["run_dir"])
+    run_dir.mkdir(parents=True, exist_ok=True)
     run_id = os.environ.get("SLURM_JOB_ID") or os.environ.get("PBS_JOBID") or str(os.getpid())
     scratch_root = Path(os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR") or
                         f"/tmp/{os.environ.get('USER', 'mineru')}")
@@ -258,14 +260,19 @@ def run_mineru_job(plan: dict[str, Any]) -> None:
     temp_dir = temp_base / "tmp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    env.update({key: str(value) for key, value in
+                (plan["launcher"].get("environment") or {}).items()})
     normalize_mineru_cuda_visibility(env)
     env.update({
         "TMPDIR": str(temp_dir), "MINERU_PORT": str(port),
+        "MINERU_PARENT_TMPDIR": os.environ.get("TMPDIR", ""),
         "MINERU_VENV": str(absolute(stage["mineru_venv"], root)),
         "MINERU_STARTUP_TIMEOUT": str(stage["server_startup_timeout"]),
         "MINERU_API_MAX_CONCURRENT_REQUESTS": str(stage["server_concurrency"]),
         "MINERU_SERVER_LOG": str(run_dir / "mineru.server.log"),
         "MINERU_CALLER_LOG": str(run_dir / "mineru.caller.log"),
+        "MINERU_SERVER_PID_FILE": str(run_dir / "mineru.server.pid"),
+        "MINERU_CALLER_PID_FILE": str(run_dir / "mineru.caller.pid"),
     })
     cmd = [str(root / "scripts/extraction/run_mineru_full_extraction_gpu.sh"),
            "--no-default-caller-args"]
@@ -275,7 +282,29 @@ def run_mineru_job(plan: dict[str, Any]) -> None:
     print(f"One GPU {plan['launcher']['kind']} job: MinerU server and caller; "
           f"server_concurrency={stage['server_concurrency']} "
           f"max_in_flight={stage['max_in_flight']} temp={temp_dir}", flush=True)
-    subprocess.run(cmd, cwd=root, env=env, check=True)
+    from extraction.mineru_telemetry import monitor_job, summarize_telemetry
+
+    paths = {
+        "repository": root,
+        "data": Path(plan["data_root"]),
+        "input_pdfs": absolute(plan["dataset"]["pdf_dir"], root),
+        "output": absolute(plan["dataset"]["processed_root"], root),
+        "cache": absolute(plan["launcher"]["cache_root"], root),
+        "model_cache": absolute(plan["launcher"]["model_cache"], root),
+        "tmp": temp_dir,
+    }
+    domains = stage.get("domains") or []
+    state_dir = paths["output"] / "_runs" / domains[0] if len(domains) == 1 else paths["output"]
+    started_at = time.time()
+    try:
+        with monitor_job(run_dir, paths, env):
+            subprocess.run(cmd, cwd=root, env=env, check=True)
+    finally:
+        try:
+            summary = summarize_telemetry(run_dir, state_dir / "last_run_summary.json", started_at=started_at)
+            print("MinerU performance: " + json.dumps(summary, sort_keys=True), flush=True)
+        except Exception as exc:
+            print(f"Warning: MinerU telemetry summary unavailable: {exc}", file=sys.stderr, flush=True)
 
 
 def execute_stage(plan: dict[str, Any]) -> None:

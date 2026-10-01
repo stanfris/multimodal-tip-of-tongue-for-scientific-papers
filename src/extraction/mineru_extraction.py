@@ -1237,6 +1237,7 @@ def print_progress(stats: ExtractionStats) -> None:
     print(
         "progress "
         f"completed={snapshot['completed']} failed={snapshot['failed']} "
+        f"pages={snapshot['pages']} "
         f"in_flight={snapshot['in_flight']} remaining={snapshot['remaining']} "
         f"papers/s={snapshot['papers_per_second']} "
         f"pages/s={snapshot['pages_per_second']}",

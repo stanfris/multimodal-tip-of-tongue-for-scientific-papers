@@ -13,6 +13,12 @@ launcher:
   model_cache: ${oc.env:HF_HOME,${launcher.cache_root}/huggingface}
   python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
   environment:
+    MINERU_INTRA_OP_NUM_THREADS: '4'
+    MINERU_INTER_OP_NUM_THREADS: '1'
+    OMP_NUM_THREADS: '4'
+    MKL_NUM_THREADS: '4'
+    OPENBLAS_NUM_THREADS: '4'
+    NUMEXPR_NUM_THREADS: '4'
     VLLM_USE_FLASHINFER_SAMPLER: '0'
     # vLLM 0.21 can warm up optional DeepGEMM for this BF16 model even when
     # deep_gemm is absent; use its supported fallback on PBS H200 nodes.
