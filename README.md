@@ -199,17 +199,20 @@ stages. Reduction and extraction also accept `split=train+test`. MinerU
 extraction also accepts `split=other` to process PDFs absent from both indexed
 splits. The file
 `config/split/all.yaml` currently also resolves to `train+test`, so use the
-explicit name. Scheduler profiles use scratch defaults; for a different
-corpus pass all relevant paths, for example:
+explicit name. Launchers default to the repository's `data/` directory.
+Set `VTT_DATA_ROOT` or override `launcher.dataset_root` to move the corpus;
+PDFs, the split index, processed output, preprocessing output, and caches
+follow that root. For example:
 
 ```bash
-launcher.dataset_root=/scratch/project launcher.pdf_dir=/scratch/project/pdf_datasets launcher.processed_root=/scratch/project/processed dataset.preprocessed=/scratch/project/preprocessed launcher.split_index=/scratch/project/splits/pdf_dataset_split.json launcher.log_root=/scratch/project/logs
+launcher.dataset_root=/scratch/project launcher.log_root=/scratch/project/logs
 ```
 
 Append those path overrides to a Hydra command below, replacing the example
-paths. `dataset.query_output=/scratch/project/query_collections` separately
-controls query output. The canonical split index is required for indexed
-extraction and should be set for split-aware preprocessing and generation.
+paths. Individual `launcher.pdf_dir`, `launcher.processed_root`, and
+`launcher.split_index` overrides remain available. `dataset.query_output`
+separately controls query output. Indexed extraction requires the split index;
+full-folder MinerU extraction with `stage.all_domain_pdfs=true` ignores it.
 
 The reduction, figure, textual, query, and judge wrappers put `stage=...`
 **before** user arguments. For their Slurm calls, put overrides before `-m`,
@@ -284,6 +287,7 @@ scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200 s
 scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200 dry_run=true
 scripts/extraction/run_mineru_full_extraction.sh -m split=train launcher=slurm_a100
 scripts/extraction/run_mineru_full_extraction.sh -m split=other launcher=slurm_a100
+scripts/extraction/run_mineru_full_extraction.sh -m split=train+test launcher=slurm_a100 stage.all_domain_pdfs=true 'stage.domains=[ACL]'
 ```
 
 Set `dataset.pdf_dir`, `dataset.processed_root`, and `dataset.split_index`
@@ -296,10 +300,17 @@ splits require the canonical PDF split JSON. For `split=other`, extraction scans
 and marks selected papers as `other`. Paper output is
 `<dataset.processed_root>/papers/<subset>/<paper_id>/`. The files `run_config.json`,
 `last_run_summary.json`, `resume_report.json`, `incomplete_documents.json`,
-and `failures.jsonl` remain at the processed root. The Hydra run directory
+and `failures.jsonl` remain at the processed root for runs without a single
+domain filter. A single-domain run writes those files under
+`<dataset.processed_root>/_runs/<domain>/`, so separate domain jobs do not
+replace each other's reports or retry manifests. Paper output remains under
+`<dataset.processed_root>/papers/`. The Hydra run directory
 contains `plan.json` with both concurrency settings, plus `mineru.server.log`
 and `mineru.caller.log` from the allocated node. `run_config.json` also records
 the server and client concurrency used by the extraction caller.
+For a full-folder scan, the caller uses the selected launcher's PDF and
+processed paths but does not open its split-index path. Use `dry_run=true` to
+check these resolved paths before submitting a scheduler job.
 
 MinerU parses through the end of each selected PDF by default. Set
 `stage.end_page_id=N` (or `--end-page-id N` with the direct CLI) to stop at a

@@ -7,7 +7,7 @@ launcher:
   dataset_root: ${oc.env:VTT_DATA_ROOT,./data}
   processed_root: ${launcher.dataset_root}/processed
   pdf_dir: ${launcher.dataset_root}/pdf_datasets
-  split_index: null
+  split_index: ${launcher.dataset_root}/splits/pdf_dataset_split.json
   log_root: ${oc.env:VTT_LOG_ROOT,./logs}
   cache_root: ${oc.env:VTT_CACHE_ROOT,${launcher.dataset_root}/cache}
   model_cache: ${oc.env:HF_HOME,${launcher.cache_root}/huggingface}

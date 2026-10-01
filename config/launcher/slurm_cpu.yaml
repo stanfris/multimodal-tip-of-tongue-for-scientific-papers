@@ -4,7 +4,7 @@ defaults:
   - override /hydra/launcher: submitit_slurm
 launcher:
   kind: slurm
-  dataset_root: ${oc.env:VTT_DATA_ROOT,/scratch-shared/sfris1}
+  dataset_root: ${oc.env:VTT_DATA_ROOT,./data}
   processed_root: ${launcher.dataset_root}/processed
   pdf_dir: ${launcher.dataset_root}/pdf_datasets
   split_index: ${launcher.dataset_root}/splits/pdf_dataset_split.json

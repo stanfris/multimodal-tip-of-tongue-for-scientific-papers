@@ -93,8 +93,9 @@ def test_extraction_run_config_records_both_concurrency_limits(tmp_path: Path, m
     output_dir = tmp_path / "processed"
     monkeypatch.setenv("MINERU_API_MAX_CONCURRENT_REQUESTS", "32")
 
-    async def fake_extract_many(pdfs, output, options):
+    async def fake_extract_many(pdfs, output, options, *, state_dir):
         assert options.max_in_flight == 24
+        assert state_dir == output_dir
         return mineru_extraction.ExtractionStats(total=len(pdfs))
 
     monkeypatch.setattr(mineru_extraction, "extract_many", fake_extract_many)
@@ -285,6 +286,13 @@ def test_resolve_split_index_requires_canonical_index_for_train_test_union() -> 
     )
 
 
+def test_resolve_split_index_uses_custom_input_root_for_indexed_runs(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "custom" / "pdf_datasets"
+    assert resolve_split_index(pdf_dir, None, "train") == (
+        tmp_path / "custom" / "splits" / "pdf_dataset_split.json"
+    )
+
+
 def test_other_split_requires_index_and_cannot_bypass_it() -> None:
     input_dir = Path("data/pdf_datasets")
     assert resolve_split_index(input_dir, None, "other") == Path("data/splits/pdf_dataset_split.json")
@@ -304,6 +312,116 @@ def test_resolve_split_index_can_be_bypassed_for_complete_domain_folders() -> No
         )
         is None
     )
+
+
+def test_full_domain_run_does_not_read_missing_index_and_uses_selected_output_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "corpus" / "pdf_datasets"
+    write_pdf(input_dir / "ACL" / "paper.pdf")
+    write_pdf(input_dir / "Biology" / "other.pdf")
+    output_dir = tmp_path / "corpus" / "processed"
+
+    async def fake_extract_many(pdfs, output, options, *, state_dir):
+        assert output == output_dir
+        assert state_dir == output_dir / "_runs" / "ACL"
+        assert [pdf.relative_path.as_posix() for pdf in pdfs] == ["ACL/paper.pdf"]
+        return mineru_extraction.ExtractionStats(total=len(pdfs))
+
+    monkeypatch.setattr(mineru_extraction, "extract_many", fake_extract_many)
+    args = build_extract_parser().parse_args([
+        "--input-dir", str(input_dir), "--output-dir", str(output_dir),
+        "--split", "train+test", "--split-index", str(tmp_path / "missing.json"),
+        "--all-domain-pdfs", "--domains", "ACL",
+    ])
+    mineru_extraction.run_extract(args)
+    saved = json.loads((output_dir / "_runs" / "ACL" / "run_config.json").read_text())
+    assert saved["split_index"] is None
+    assert saved["all_domain_pdfs"] is True
+    assert saved["output_dir"] == str(output_dir)
+    assert saved["state_dir"] == str(output_dir / "_runs" / "ACL")
+    assert not (tmp_path / "corpus" / "splits").exists()
+
+
+def test_missing_indexed_input_reports_launcher_derived_path_before_writing(tmp_path: Path) -> None:
+    input_dir = tmp_path / "corpus" / "pdf_datasets"
+    write_pdf(input_dir / "ACL" / "paper.pdf")
+    output_dir = tmp_path / "corpus" / "processed"
+    args = build_extract_parser().parse_args([
+        "--input-dir", str(input_dir), "--output-dir", str(output_dir), "--split", "train",
+    ])
+    with pytest.raises(FileNotFoundError, match="corpus/splits/pdf_dataset_split.json"):
+        mineru_extraction.run_extract(args)
+    assert not output_dir.exists()
+
+
+def test_full_domain_run_rejects_wrong_pdf_root_before_writing(tmp_path: Path) -> None:
+    input_dir = tmp_path / "corpus" / "pdf_datasets"
+    write_pdf(input_dir / "Biology" / "paper.pdf")
+    output_dir = tmp_path / "corpus" / "processed"
+    args = build_extract_parser().parse_args([
+        "--input-dir", str(input_dir), "--output-dir", str(output_dir),
+        "--split", "train+test", "--all-domain-pdfs", "--domains", "ACL",
+    ])
+    with pytest.raises(FileNotFoundError, match="No PDFs found for domains"):
+        mineru_extraction.run_extract(args)
+    assert not output_dir.exists()
+
+
+def test_domain_run_reports_do_not_replace_each_other(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    input_dir = tmp_path / "pdf_datasets"
+    for domain in ("ACL", "Biology"):
+        write_pdf(input_dir / domain / "paper.pdf")
+    output_dir = tmp_path / "processed"
+
+    async def fake_extract_many(pdfs, output, options, *, state_dir):
+        return mineru_extraction.ExtractionStats(total=len(pdfs))
+
+    monkeypatch.setattr(mineru_extraction, "extract_many", fake_extract_many)
+    for domain in ("ACL", "Biology"):
+        args = build_extract_parser().parse_args([
+            "--input-dir", str(input_dir), "--output-dir", str(output_dir),
+            "--split", "train+test", "--all-domain-pdfs", "--domains", domain,
+        ])
+        mineru_extraction.run_extract(args)
+
+    for domain in ("ACL", "Biology"):
+        state_dir = output_dir / "_runs" / domain
+        saved = json.loads((state_dir / "run_config.json").read_text())
+        assert saved["domains"] == [domain]
+        assert (state_dir / "last_run_summary.json").exists()
+        assert (state_dir / "incomplete_documents.json").exists()
+    assert not (output_dir / "run_config.json").exists()
+
+
+def test_domain_state_preserves_completed_paper_and_reads_legacy_retry_state(tmp_path: Path) -> None:
+    input_dir = tmp_path / "pdf_datasets"
+    write_pdf(input_dir / "ACL" / "done.pdf")
+    write_pdf(input_dir / "ACL" / "retry.pdf")
+    pdfs = discover_pdfs(input_dir, domains=["ACL"])
+    output_dir = tmp_path / "processed"
+    state_dir = output_dir / "_runs" / "ACL"
+    done = next(pdf for pdf in pdfs if pdf.relative_path.name == "done.pdf")
+    done_dir = paper_output_dir(output_dir, done)
+    done_dir.mkdir(parents=True)
+    (done_dir / "markdown.md").write_text("# Original\n", encoding="utf-8")
+    (done_dir / "paper.json").write_text(
+        json.dumps({"markdown_relpath": "markdown.md", "figures": []}), encoding="utf-8",
+    )
+    (done_dir / "_SUCCESS").touch()
+    (output_dir / "incomplete_documents.json").write_text(
+        json.dumps({"documents": [{"source_pdf_relpath": "ACL/retry.pdf"}]}), encoding="utf-8",
+    )
+
+    selected = filter_pdfs_for_retry(pdfs, output_dir, state_dir=state_dir)
+    assert [pdf.relative_path.as_posix() for pdf in selected] == ["ACL/retry.pdf"]
+    stats = asyncio.run(mineru_extraction.extract_many(
+        [done], output_dir, MinerUOptions(), state_dir=state_dir,
+    ))
+    assert stats.already_complete == 1
+    assert stats.submitted == 0
+    assert (done_dir / "markdown.md").read_text() == "# Original\n"
+    assert (state_dir / "incomplete_documents.json").exists()
 
 
 def test_resolve_split_index_leaves_custom_all_split_discovery_unsplit(tmp_path: Path) -> None:

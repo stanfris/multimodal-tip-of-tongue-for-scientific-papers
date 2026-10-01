@@ -128,8 +128,8 @@ def build_extract_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optional JSON split index with train/test PDF paths relative to --input-dir. "
-            f"When omitted, {DEFAULT_SPLIT_INDEX} is used automatically only when "
-            "--split is train, test, train+test, or other."
+            "When omitted for an indexed split, use the sibling splits/ directory "
+            "of --input-dir. Full-folder scans do not need an index."
         ),
     )
     parser.add_argument(
@@ -234,34 +234,46 @@ def options_from_args(args: argparse.Namespace) -> MinerUOptions:
 
 
 def run_extract(args: argparse.Namespace) -> Path:
+    if not args.input_dir.exists():
+        raise FileNotFoundError(f"PDF input path does not exist: {args.input_dir}")
     split_index = resolve_split_index(
         args.input_dir,
         args.split_index,
         args.split,
         all_domain_pdfs=args.all_domain_pdfs,
     )
+    if split_index is not None and not split_index.is_file():
+        raise FileNotFoundError(
+            f"PDF split index does not exist: {split_index}. "
+            "Use --all-domain-pdfs to scan the full PDF folder, or set --split-index."
+        )
     output_dir = resolve_extraction_output_dir(args.output_dir, args.domains)
+    state_dir = resolve_extraction_state_dir(output_dir, args.domains)
+    discovered = discover_pdfs(
+        args.input_dir, split_index=split_index, split=args.split, domains=args.domains,
+    )
+    if args.all_domain_pdfs and args.domains and not discovered:
+        raise FileNotFoundError(
+            f"No PDFs found for domains {args.domains} under {args.input_dir}"
+        )
     pdfs = select_pdfs(
-        discover_pdfs(
-            args.input_dir,
-            split_index=split_index,
-            split=args.split,
-            domains=args.domains,
-        ),
+        discovered,
         start_index=args.start_index,
         end_index=args.end_index,
         limit=args.limit,
     )
     if args.retry_incomplete_only:
-        pdfs = filter_pdfs_for_retry(pdfs, output_dir)
+        pdfs = filter_pdfs_for_retry(pdfs, output_dir, state_dir=state_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
     resume_report = build_extraction_resume_report(
         output_dir,
         pdfs,
         retry_incomplete_only=args.retry_incomplete_only,
+        state_dir=state_dir,
     )
-    write_json(output_dir / "resume_report.json", resume_report)
-    write_extraction_incomplete_manifest(output_dir, pdfs)
+    write_json(state_dir / "resume_report.json", resume_report)
+    write_extraction_incomplete_manifest(output_dir, pdfs, state_dir=state_dir)
     print(
         "resume "
         f"mode={resume_report['mode']} selected={resume_report['selected']} "
@@ -276,11 +288,12 @@ def run_extract(args: argparse.Namespace) -> Path:
     print(f"concurrency server={server_concurrency or 'external/unknown'} "
           f"client_max_in_flight={args.max_in_flight}", flush=True)
     write_json(
-        output_dir / "run_config.json",
+        state_dir / "run_config.json",
         {
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "input_dir": str(args.input_dir),
             "output_dir": str(output_dir),
+            "state_dir": str(state_dir),
             "output_base_dir": str(args.output_dir),
             "api_url": args.api_url,
             "backend": args.backend,
@@ -315,9 +328,10 @@ def run_extract(args: argparse.Namespace) -> Path:
             "split": args.split if split_index else None,
         },
     )
-    stats = asyncio.run(extract_many(pdfs, output_dir, options_from_args(args)))
-    summary = {"output": str(output_dir), "resume": resume_report, "stats": stats.snapshot()}
-    write_json(output_dir / "last_run_summary.json", summary)
+    stats = asyncio.run(extract_many(pdfs, output_dir, options_from_args(args), state_dir=state_dir))
+    summary = {"output": str(output_dir), "state_dir": str(state_dir),
+               "resume": resume_report, "stats": stats.snapshot()}
+    write_json(state_dir / "last_run_summary.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return output_dir
 
@@ -326,6 +340,12 @@ def resolve_extraction_output_dir(output_dir: Path, domains: Iterable[str] | Non
     """Keep one output root; individual papers are grouped by source dataset."""
 
     return output_dir
+
+
+def resolve_extraction_state_dir(output_dir: Path, domains: Iterable[str] | None) -> Path:
+    """Keep domain-run reports separate while papers share the processed root."""
+    selected = list(domains) if domains is not None else []
+    return output_dir / "_runs" / selected[0] if len(selected) == 1 else output_dir
 
 
 def run_benchmark(args: argparse.Namespace) -> Path:
@@ -416,7 +436,7 @@ def resolve_split_index(
     if split_index is not None:
         return split_index
     if split != "all":
-        return DEFAULT_SPLIT_INDEX
+        return input_dir.parent / "splits" / DEFAULT_SPLIT_INDEX.name
     return None
 
 
@@ -444,7 +464,11 @@ def probe_environment() -> dict[str, Any]:
     return env
 
 
-async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOptions) -> ExtractionStats:
+async def extract_many(
+    pdfs: list[PDFInput], output_dir: Path, options: MinerUOptions, *, state_dir: Path | None = None,
+) -> ExtractionStats:
+    state_dir = state_dir or output_dir
+    state_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "papers").mkdir(exist_ok=True)
     (output_dir / "_tmp").mkdir(exist_ok=True)
@@ -452,13 +476,13 @@ async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOp
     pending = [pdf for pdf in pdfs if not is_complete(output_dir, pdf)]
     stats.already_complete = len(pdfs) - len(pending)
     if not pending:
-        write_extraction_incomplete_manifest(output_dir, pdfs)
+        write_extraction_incomplete_manifest(output_dir, pdfs, state_dir=state_dir)
         return stats
 
     timeout = httpx.Timeout(options.request_timeout, read=options.request_timeout)
     async with httpx.AsyncClient(base_url=options.api_url, timeout=timeout, follow_redirects=True) as client:
         health = await get_health(client)
-        write_json(output_dir / "mineru_health.json", health)
+        write_json(state_dir / "mineru_health.json", health)
         queue: asyncio.Queue[PDFInput | None] = asyncio.Queue(maxsize=options.max_in_flight * 2)
 
         async def worker() -> None:
@@ -473,7 +497,7 @@ async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOp
                     record = await extract_one_with_retries(client, pdf_input, output_dir, options)
                 except ExtractionError as exc:
                     stats.failed += 1
-                    append_failure(output_dir, pdf_input, exc.error_type, str(exc), exc.attempts)
+                    append_failure(state_dir, pdf_input, exc.error_type, str(exc), exc.attempts)
                     print(
                         f"failure paper_id={pdf_input.paper_id} error_type={exc.error_type} "
                         f"attempts={exc.attempts} message={exc}",
@@ -495,7 +519,7 @@ async def extract_many(pdfs: list[PDFInput], output_dir: Path, options: MinerUOp
             await queue.put(None)
         await queue.join()
         await asyncio.gather(*workers)
-    write_extraction_incomplete_manifest(output_dir, pdfs)
+    write_extraction_incomplete_manifest(output_dir, pdfs, state_dir=state_dir)
     return stats
 
 
@@ -1026,8 +1050,9 @@ def build_extraction_resume_report(
     pdfs: list[PDFInput],
     *,
     retry_incomplete_only: bool = False,
+    state_dir: Path | None = None,
 ) -> dict[str, Any]:
-    latest_failures = load_latest_failures(output_dir / "failures.jsonl")
+    latest_failures = extraction_failures(output_dir, state_dir)
     complete = 0
     prior_failures = 0
     for pdf in pdfs:
@@ -1049,8 +1074,12 @@ def build_extraction_resume_report(
     }
 
 
-def filter_pdfs_for_retry(pdfs: list[PDFInput], output_dir: Path) -> list[PDFInput]:
+def filter_pdfs_for_retry(
+    pdfs: list[PDFInput], output_dir: Path, *, state_dir: Path | None = None,
+) -> list[PDFInput]:
     retry_keys = retry_document_keys(output_dir)
+    if state_dir is not None and state_dir != output_dir:
+        retry_keys.update(retry_document_keys(state_dir))
     if not retry_keys:
         return []
     return [pdf for pdf in pdfs if pdf_retry_keys(pdf) & retry_keys]
@@ -1088,8 +1117,11 @@ def pdf_retry_keys(pdf: PDFInput) -> set[str]:
     return {pdf.paper_id, pdf.relative_path.as_posix(), str(pdf.path.resolve())}
 
 
-def write_extraction_incomplete_manifest(output_dir: Path, pdfs: list[PDFInput]) -> Path:
-    latest_failures = load_latest_failures(output_dir / "failures.jsonl")
+def write_extraction_incomplete_manifest(
+    output_dir: Path, pdfs: list[PDFInput], *, state_dir: Path | None = None,
+) -> Path:
+    state_dir = state_dir or output_dir
+    latest_failures = extraction_failures(output_dir, state_dir)
     documents = []
     for pdf in pdfs:
         if is_complete(output_dir, pdf):
@@ -1109,7 +1141,15 @@ def write_extraction_incomplete_manifest(output_dir: Path, pdfs: list[PDFInput])
                 "attempts": failure.get("attempts") if failure else None,
             }
         )
-    return write_incomplete_documents(output_dir, documents, stage="extraction", source="mineru")
+    return write_incomplete_documents(state_dir, documents, stage="extraction", source="mineru")
+
+
+def extraction_failures(output_dir: Path, state_dir: Path | None) -> dict[str, dict[str, Any]]:
+    """Read legacy root failures before domain-specific failures for resume."""
+    failures = load_latest_failures(output_dir / "failures.jsonl")
+    if state_dir is not None and state_dir != output_dir:
+        failures.update(load_latest_failures(state_dir / "failures.jsonl"))
+    return failures
 
 
 def load_latest_failures(path: Path) -> dict[str, dict[str, Any]]:

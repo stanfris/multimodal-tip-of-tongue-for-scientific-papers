@@ -92,6 +92,8 @@ def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = N
     if name == "extract_mineru" and int(launcher["gpus"]) < 1:
         raise ValueError("extract_mineru requires a GPU launcher (launcher.gpus>=1)")
     if name == "extract_mineru":
+        if stage["all_domain_pdfs"] and split == "other":
+            raise ValueError("split=other cannot be combined with stage.all_domain_pdfs=true")
         port = int(stage["server_port"])
         if not 0 <= port <= 65535:
             raise ValueError("stage.server_port must be 0 or a valid TCP port")
@@ -179,7 +181,7 @@ def mineru_caller_args(plan: dict[str, Any], api_url: str) -> list[str]:
     args = ["--input-dir", str(absolute(dataset["pdf_dir"], root)),
             "--output-dir", str(absolute(dataset["processed_root"], root)),
             "--api-url", api_url, "--split", plan["split"]]
-    if dataset["split_index"]:
+    if dataset["split_index"] and not stage["all_domain_pdfs"]:
         args += ["--split-index", str(absolute(dataset["split_index"], root))]
     for key in ("backend", "max_in_flight", "retries", "start_index", "effort",
                 "parse_method", "lang", "start_page_id", "poll_interval",

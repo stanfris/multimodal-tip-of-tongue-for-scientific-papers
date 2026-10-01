@@ -45,13 +45,12 @@ def test_stage_default_models_and_explicit_override() -> None:
 
 
 def test_launcher_paths_override_dataset_defaults() -> None:
-    for profile in ("local_gpu", "slurm_a100", "slurm_cpu", "pbs_rt_hg", "pbs_rt_hc"):
+    for profile in ("local_gpu", "slurm_a100", "slurm_cpu", "pbs_h200", "pbs_rt_hg", "pbs_rt_hc"):
         cfg = config(f"launcher={profile}")
         assert cfg["dataset"]["root"] == cfg["launcher"]["dataset_root"]
         assert cfg["dataset"]["processed_root"] == cfg["launcher"]["processed_root"]
         assert cfg["dataset"]["pdf_dir"] == cfg["launcher"]["pdf_dir"]
-        if profile != "local_gpu":
-            assert cfg["dataset"]["split_index"] == f"{cfg['dataset']['root']}/splits/pdf_dataset_split.json"
+        assert cfg["dataset"]["split_index"] == f"{cfg['dataset']['root']}/splits/pdf_dataset_split.json"
         assert cfg["launcher"]["cache_root"]
     cfg = config("launcher=slurm_a100", "launcher.dataset_root=/tmp/corpus")
     assert cfg["dataset"]["root"] == "/tmp/corpus"
@@ -66,13 +65,56 @@ def test_launcher_paths_override_dataset_defaults() -> None:
     assert settings["dataset"]["split_index"] == "/scratch-shared/sfris1/splits/pdf_dataset_split.json"
 
 
-def test_pbs_defaults_to_repository_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launchers_default_to_repository_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VTT_DATA_ROOT", raising=False)
-    for profile in ("pbs_rt_hg", "pbs_rt_hc"):
+    for profile in ("local_gpu", "slurm_a100", "slurm_cpu", "pbs_h200", "pbs_rt_hg", "pbs_rt_hc"):
         plan, settings = build_plan(config(f"launcher={profile}"), tmp_path)
         assert plan["data_root"] == str(tmp_path / "data")
         assert settings["dataset"]["preprocessed"] == str(tmp_path / "data/preprocessed")
         assert settings["dataset"]["split_index"] == str(tmp_path / "data/splits/pdf_dataset_split.json")
+
+
+@pytest.mark.parametrize("profile", ["local_gpu", "slurm_a100", "pbs_h200"])
+def test_launcher_data_root_environment_override_moves_all_mineru_paths(
+    profile: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corpus = tmp_path / "corpus"
+    monkeypatch.setenv("VTT_DATA_ROOT", str(corpus))
+    cfg = config("stage=extract_mineru", f"launcher={profile}")
+    plan, _ = build_plan(cfg, ROOT)
+    assert plan["data_root"] == str(corpus)
+    assert plan["dataset"]["pdf_dir"] == str(corpus / "pdf_datasets")
+    assert plan["dataset"]["processed_root"] == str(corpus / "processed")
+    assert plan["dataset"]["split_index"] == str(corpus / "splits/pdf_dataset_split.json")
+    args = mineru_caller_args(plan, "http://127.0.0.1:8002")
+    assert args[args.index("--input-dir") + 1] == str(corpus / "pdf_datasets")
+    assert args[args.index("--output-dir") + 1] == str(corpus / "processed")
+    assert args[args.index("--split-index") + 1] == str(corpus / "splits/pdf_dataset_split.json")
+
+
+@pytest.mark.parametrize("profile", ["local_gpu", "slurm_a100", "pbs_h200"])
+def test_mineru_full_scan_uses_launcher_paths_without_split_index(profile: str, tmp_path: Path) -> None:
+    cfg = config("stage=extract_mineru", f"launcher={profile}", "split=train+test",
+                 "stage.all_domain_pdfs=true", "stage.domains=[ACL]",
+                 f"launcher.dataset_root={tmp_path / 'corpus'}")
+    plan, _ = build_plan(cfg, ROOT)
+    args = mineru_caller_args(plan, "http://127.0.0.1:8002")
+    assert args[args.index("--input-dir") + 1] == str(tmp_path / "corpus/pdf_datasets")
+    assert args[args.index("--output-dir") + 1] == str(tmp_path / "corpus/processed")
+    assert "--split-index" not in args
+    assert "--all-domain-pdfs" in args
+    assert args[args.index("--domains") + 1] == "ACL"
+
+
+@pytest.mark.parametrize("profile", ["local_gpu", "slurm_a100", "pbs_h200"])
+def test_mineru_indexed_scan_uses_launchers_index_and_output(profile: str, tmp_path: Path) -> None:
+    cfg = config("stage=extract_mineru", f"launcher={profile}", "split=train",
+                 f"launcher.dataset_root={tmp_path / 'corpus'}")
+    plan, _ = build_plan(cfg, ROOT)
+    args = mineru_caller_args(plan, "http://127.0.0.1:8002")
+    assert args[args.index("--split-index") + 1] == str(tmp_path / "corpus/splits/pdf_dataset_split.json")
+    assert args[args.index("--output-dir") + 1] == str(tmp_path / "corpus/processed")
+    assert "--all-domain-pdfs" not in args
 
 
 def test_managed_settings_resolves_relative_split_override_once(tmp_path: Path) -> None:
@@ -136,6 +178,12 @@ def test_mineru_default_has_no_page_cutoff() -> None:
     plan, _ = build_plan(config("stage=extract_mineru", "launcher=slurm_a100"), ROOT)
     assert plan["stage"]["end_page_id"] is None
     assert "--end-page-id" not in mineru_caller_args(plan, "http://127.0.0.1:8002")
+
+
+def test_mineru_rejects_other_split_with_full_folder_scan_before_submission() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        build_plan(config("stage=extract_mineru", "launcher=pbs_h200", "split=other",
+                          "stage.all_domain_pdfs=true"), ROOT)
 
 
 def test_mineru_requires_gpu_and_describes_one_job() -> None:
