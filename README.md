@@ -284,6 +284,9 @@ provide a GPU UUID in `CUDA_VISIBLE_DEVICES`, the Hydra worker resolves that
 UUID through `nvidia-smi` before starting MinerU. This keeps the job on its
 assigned GPU while supplying the numeric index required by the pinned vLLM
 runtime. An unresolved UUID stops the worker before it submits papers.
+The H200 launcher also disables optional vLLM DeepGEMM kernels because the
+dedicated MinerU environment does not install DeepGEMM; vLLM's supported
+fallback retains the BF16 model and extraction settings.
 
 ```bash
 scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200

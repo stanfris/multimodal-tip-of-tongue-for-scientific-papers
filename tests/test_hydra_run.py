@@ -157,6 +157,7 @@ def test_h200_job_disables_flashinfer_sampling_without_nvcc() -> None:
     plan, _ = build_plan(config("launcher=pbs_h200", "model.provider=vllm"), ROOT)
     script = job_script(Path("/tmp/plan.json"), plan)
     assert "export VLLM_USE_FLASHINFER_SAMPLER=0" in script
+    assert "export VLLM_USE_DEEP_GEMM=0" in script
     assert "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" in script
 
 

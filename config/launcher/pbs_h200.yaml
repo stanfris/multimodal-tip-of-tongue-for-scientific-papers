@@ -14,6 +14,9 @@ launcher:
   python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
   environment:
     VLLM_USE_FLASHINFER_SAMPLER: '0'
+    # vLLM 0.21 can warm up optional DeepGEMM for this BF16 model even when
+    # deep_gemm is absent; use its supported fallback on PBS H200 nodes.
+    VLLM_USE_DEEP_GEMM: '0'
     PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
   queue: ${oc.env:VTT_PBS_QUEUE,rt_HG}
   gpus: 1
