@@ -59,7 +59,7 @@ class MinerUOptions:
     table: bool = True
     image_analysis: bool | None = None
     start_page_id: int = 0
-    end_page_id: int = 9
+    end_page_id: int | None = None
     max_in_flight: int = 4
     poll_interval: float = 2.0
     request_timeout: float = 120.0
@@ -129,15 +129,16 @@ def build_extract_parser() -> argparse.ArgumentParser:
         help=(
             "Optional JSON split index with train/test PDF paths relative to --input-dir. "
             f"When omitted, {DEFAULT_SPLIT_INDEX} is used automatically only when "
-            "--split is train, test, or train+test."
+            "--split is train, test, train+test, or other."
         ),
     )
     parser.add_argument(
         "--split",
-        choices=["train", "test", "train+test", "all"],
+        choices=["train", "test", "train+test", "other", "all"],
         default="all",
         help=(
             "Split-index membership to process. 'train+test' is the explicit union; "
+            "'other' processes PDFs absent from both indexed splits; "
             "'all' processes every discovered PDF unless --split-index is supplied explicitly."
         ),
     )
@@ -176,7 +177,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
         "--max-in-flight-values",
         nargs="+",
         type=int,
-        default=[1, 2, 4, 8],
+        default=[4, 8, 16, 24, 32],
         help="Client-side in-flight task counts to benchmark.",
     )
     return parser
@@ -191,7 +192,7 @@ def add_common_args(parser: argparse.ArgumentParser, *, include_max_in_flight: b
     parser.add_argument("--parse-method", default="auto", choices=["auto", "txt", "ocr"], help="MinerU parse method.")
     parser.add_argument("--lang", default="ch", help="OCR language hint for pipeline/hybrid backends.")
     parser.add_argument("--start-page-id", type=int, default=0, help="Zero-based first PDF page to parse.")
-    parser.add_argument("--end-page-id", type=int, default=9, help="Zero-based last PDF page to parse.")
+    parser.add_argument("--end-page-id", type=int, default=None, help="Optional zero-based last PDF page to parse; by default parse through the end.")
     if include_max_in_flight:
         parser.add_argument("--max-in-flight", type=int, default=4, help="Maximum submitted MinerU tasks in flight.")
     else:
@@ -221,7 +222,7 @@ def options_from_args(args: argparse.Namespace) -> MinerUOptions:
         table=not args.no_table,
         image_analysis=args.image_analysis,
         start_page_id=max(args.start_page_id, 0),
-        end_page_id=max(args.end_page_id, max(args.start_page_id, 0)),
+        end_page_id=max(args.end_page_id, max(args.start_page_id, 0)) if args.end_page_id is not None else None,
         max_in_flight=max(args.max_in_flight, 1),
         poll_interval=args.poll_interval,
         request_timeout=args.request_timeout,
@@ -271,6 +272,9 @@ def run_extract(args: argparse.Namespace) -> Path:
         "incomplete_policy=replace_after_successful_retry",
         flush=True,
     )
+    server_concurrency = os.environ.get("MINERU_API_MAX_CONCURRENT_REQUESTS")
+    print(f"concurrency server={server_concurrency or 'external/unknown'} "
+          f"client_max_in_flight={args.max_in_flight}", flush=True)
     write_json(
         output_dir / "run_config.json",
         {
@@ -284,6 +288,7 @@ def run_extract(args: argparse.Namespace) -> Path:
             "parse_method": args.parse_method,
             "lang": args.lang,
             "max_in_flight": args.max_in_flight,
+            "server_concurrency": int(server_concurrency) if server_concurrency else None,
             "poll_interval": args.poll_interval,
             "request_timeout": args.request_timeout,
             "result_timeout": args.result_timeout,
@@ -353,6 +358,8 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     report = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "api_url": args.api_url,
+        "server_concurrency": int(os.environ["MINERU_API_MAX_CONCURRENT_REQUESTS"])
+        if os.environ.get("MINERU_API_MAX_CONCURRENT_REQUESTS") else None,
         "backend": args.backend,
         "effort": "medium",
         "sample_pdfs": [str(pdf.path) for pdf in pdfs],
@@ -366,12 +373,12 @@ def run_benchmark(args: argparse.Namespace) -> Path:
 
 
 def recommend_benchmark_result(results: list[dict[str, Any]]) -> dict[str, Any] | None:
-    successful = [row for row in results if row.get("completed", 0) > 0 and row.get("failed", 0) == 0]
-    candidates = successful or [row for row in results if row.get("completed", 0) > 0]
-    if not candidates:
+    stable = [row for row in results if row.get("completed", 0) > 0
+              and row.get("completed") == row.get("pdfs") and row.get("failed", 0) == 0]
+    if not stable:
         return None
     best = max(
-        candidates,
+        stable,
         key=lambda row: (
             float(row.get("papers_per_second", 0.0)),
             float(row.get("pages_per_second", 0.0)),
@@ -402,6 +409,8 @@ def resolve_split_index(
     train/test union, while ``--all-domain-pdfs`` always bypasses the index.
     """
 
+    if all_domain_pdfs and split == "other":
+        raise ValueError("--split other cannot be combined with --all-domain-pdfs")
     if all_domain_pdfs:
         return None
     if split_index is not None:
@@ -585,8 +594,9 @@ async def submit_task(client: httpx.AsyncClient, pdf: Path, options: MinerUOptio
         "return_original_file": "false",
         "client_side_output_generation": "false",
         "start_page_id": str(options.start_page_id),
-        "end_page_id": str(options.end_page_id),
     }
+    if options.end_page_id is not None:
+        data["end_page_id"] = str(options.end_page_id)
     if options.image_analysis is not None:
         data["image_analysis"] = str(options.image_analysis).lower()
     with pdf.open("rb") as handle:
@@ -839,6 +849,8 @@ def discover_pdfs(
     into ``paper.json`` as ``source_paper_dataset``.
     """
 
+    if split == "other" and split_index is None:
+        raise ValueError("The 'other' split requires a train/test split index")
     splits_by_path: dict[Path, str] | None = None
     if split_index is not None:
         paths, splits_by_path = discover_split_pdfs(input_dir, split_index, split, domains=domains)
@@ -861,6 +873,24 @@ def discover_split_pdfs(
     domains: Iterable[str] | None = None,
 ) -> tuple[list[Path], dict[Path, str]]:
     index = read_json(split_index)
+    if split == "other":
+        excluded: set[Path] = set()
+        for split_name in ("train", "test"):
+            rows = index.get(split_name)
+            if not isinstance(rows, list):
+                raise ValueError(f"Split index {split_index} does not contain a list for {split_name!r}")
+            for row in rows:
+                if not isinstance(row, str):
+                    raise ValueError(f"Split index {split_index} has a non-string path in {split_name!r}: {row!r}")
+                excluded.add(Path(row))
+        selected_domains = set(domains) if domains is not None else None
+        paths = sorted(
+            path for path in input_dir.rglob("*.pdf")
+            if path.is_file()
+            and path.relative_to(input_dir) not in excluded
+            and (selected_domains is None or path.relative_to(input_dir).parts[0] in selected_domains)
+        )
+        return paths, {path: "other" for path in paths}
     split_names = ["train", "test"] if split in {"all", "train+test"} else [split]
     selected_domains = set(domains) if domains is not None else None
     paths: list[Path] = []

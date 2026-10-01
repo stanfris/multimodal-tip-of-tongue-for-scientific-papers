@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
 
+import httpx
+import pytest
 from PIL import Image
 
+import extraction.mineru_extraction as mineru_extraction
 from extraction.mineru_extraction import build_pdf_inputs
+from extraction.mineru_extraction import build_benchmark_parser
 from extraction.mineru_extraction import build_extraction_resume_report
 from extraction.mineru_extraction import build_extract_parser
 from extraction.mineru_extraction import discover_pdfs
@@ -13,8 +18,10 @@ from extraction.mineru_extraction import filter_pdfs_for_retry
 from extraction.mineru_extraction import paper_output_dir
 from extraction.mineru_extraction import resolve_extraction_output_dir
 from extraction.mineru_extraction import resolve_split_index
+from extraction.mineru_extraction import options_from_args, submit_task
+from extraction.mineru_extraction import recommend_benchmark_result
 from extraction.mineru_extraction import write_extraction_incomplete_manifest
-from extraction.mineru_extraction import PDFInput, normalize_figures
+from extraction.mineru_extraction import MinerUOptions, PDFInput, normalize_figures
 
 
 def test_normalize_figures_reads_nested_mineru_image_source(tmp_path: Path) -> None:
@@ -57,6 +64,66 @@ def test_extract_parser_accepts_explicit_split_union_and_domains() -> None:
     assert args.split == "train+test"
     assert args.domains == ["ACL", "Biology"]
     assert args.all_domain_pdfs is False
+
+
+def test_extract_parser_accepts_other_split() -> None:
+    assert build_extract_parser().parse_args(["--split", "other"]).split == "other"
+
+
+def test_extraction_defaults_to_no_last_page() -> None:
+    args = build_extract_parser().parse_args([])
+    assert options_from_args(args).end_page_id is None
+
+
+def test_benchmark_covers_high_concurrency_and_recommends_only_stable_runs() -> None:
+    assert build_benchmark_parser().parse_args([]).max_in_flight_values == [4, 8, 16, 24, 32]
+    results = [
+        {"pdfs": 20, "completed": 20, "failed": 0, "max_in_flight": 16,
+         "papers_per_second": 1.0, "pages_per_second": 10.0},
+        {"pdfs": 20, "completed": 19, "failed": 1, "max_in_flight": 32,
+         "papers_per_second": 2.0, "pages_per_second": 20.0},
+    ]
+    assert recommend_benchmark_result(results)["max_in_flight"] == 16
+    assert recommend_benchmark_result(results[1:]) is None
+
+
+def test_extraction_run_config_records_both_concurrency_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    input_dir = tmp_path / "pdfs"
+    write_pdf(input_dir / "ACL" / "paper.pdf")
+    output_dir = tmp_path / "processed"
+    monkeypatch.setenv("MINERU_API_MAX_CONCURRENT_REQUESTS", "32")
+
+    async def fake_extract_many(pdfs, output, options):
+        assert options.max_in_flight == 24
+        return mineru_extraction.ExtractionStats(total=len(pdfs))
+
+    monkeypatch.setattr(mineru_extraction, "extract_many", fake_extract_many)
+    args = build_extract_parser().parse_args([
+        "--input-dir", str(input_dir), "--output-dir", str(output_dir), "--max-in-flight", "24",
+    ])
+    mineru_extraction.run_extract(args)
+    run_config = json.loads((output_dir / "run_config.json").read_text())
+    assert run_config["server_concurrency"] == 32
+    assert run_config["max_in_flight"] == 24
+
+
+def test_submission_omits_page_cutoff_by_default(tmp_path: Path) -> None:
+    pdf = tmp_path / "paper.pdf"
+    write_pdf(pdf)
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"task_id": "task-1"})
+
+    async def submit(options: MinerUOptions) -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="http://mineru") as client:
+            assert await submit_task(client, pdf, options) == "task-1"
+
+    asyncio.run(submit(MinerUOptions()))
+    assert b'name="end_page_id"' not in requests[-1].content
+    asyncio.run(submit(MinerUOptions(end_page_id=3)))
+    assert b'name="end_page_id"' in requests[-1].content
 
 
 def test_extract_parser_accepts_retry_incomplete_only() -> None:
@@ -158,6 +225,27 @@ def test_discover_pdfs_can_select_train_and_test_for_one_domain(tmp_path: Path) 
     ]
 
 
+def test_discover_pdfs_selects_only_documents_outside_train_and_test(tmp_path: Path) -> None:
+    input_dir = tmp_path / "pdf_datasets"
+    for relative_path in (
+        "ACL/train.pdf", "ACL/test.pdf", "ACL/other.pdf",
+        "ACL/nested/extra.pdf", "Biology/other.pdf",
+    ):
+        write_pdf(input_dir / relative_path)
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(json.dumps({
+        "train": ["ACL/train.pdf"],
+        "test": ["ACL/test.pdf"],
+    }), encoding="utf-8")
+
+    pdfs = discover_pdfs(input_dir, split_index=split_index, split="other", domains=["ACL"])
+
+    assert [(pdf.relative_path.as_posix(), pdf.split) for pdf in pdfs] == [
+        ("ACL/nested/extra.pdf", "other"),
+        ("ACL/other.pdf", "other"),
+    ]
+
+
 def test_discover_pdfs_can_select_all_pdfs_in_domain_folder(tmp_path: Path) -> None:
     input_dir = tmp_path / "pdf_datasets"
     write_pdf(input_dir / "Biology" / "one.pdf")
@@ -195,6 +283,15 @@ def test_resolve_split_index_requires_canonical_index_for_train_test_union() -> 
     assert resolve_split_index(Path("data/pdf_datasets"), None, "train+test") == Path(
         "data/splits/pdf_dataset_split.json"
     )
+
+
+def test_other_split_requires_index_and_cannot_bypass_it() -> None:
+    input_dir = Path("data/pdf_datasets")
+    assert resolve_split_index(input_dir, None, "other") == Path("data/splits/pdf_dataset_split.json")
+    with pytest.raises(ValueError, match="requires a train/test split index"):
+        discover_pdfs(input_dir, split="other")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        resolve_split_index(input_dir, None, "other", all_domain_pdfs=True)
 
 
 def test_resolve_split_index_can_be_bypassed_for_complete_domain_folders() -> None:

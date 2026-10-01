@@ -79,22 +79,26 @@ def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = N
     if name not in STAGES:
         raise ValueError(f"Unsupported stage: {name}")
     split = config["split"]["name"]
-    if split not in {"train", "test", "train+test"}:
+    if split not in {"train", "test", "train+test", "other"}:
         raise ValueError(f"Unsupported split: {split}")
+    if name != "extract_mineru" and split == "other":
+        raise ValueError("split=other is supported only for extract_mineru")
     if name not in {"reduce_and_compact", "extract_mineru"} and split == "train+test":
         raise ValueError("Generation stages require split=train or split=test")
     launcher = config["launcher"]
     kind = launcher["kind"]
     if kind not in {"local", "slurm", "pbs"}:
         raise ValueError(f"Unsupported launcher kind: {kind}")
-    if name == "extract_mineru" and (kind != "slurm" or int(launcher["gpus"]) < 1):
-        raise ValueError("extract_mineru requires a GPU Slurm launcher (launcher=slurm_a100)")
+    if name == "extract_mineru" and int(launcher["gpus"]) < 1:
+        raise ValueError("extract_mineru requires a GPU launcher (launcher.gpus>=1)")
     if name == "extract_mineru":
         port = int(stage["server_port"])
         if not 0 <= port <= 65535:
             raise ValueError("stage.server_port must be 0 or a valid TCP port")
         if int(stage["server_startup_timeout"]) < 1 or int(stage["server_concurrency"]) < 1:
             raise ValueError("MinerU server timeout and concurrency must be positive")
+        if int(stage["max_in_flight"]) < 1:
+            raise ValueError("MinerU max_in_flight must be positive")
     data_root = absolute(config["dataset"]["root"], repo_root)
     run_root = absolute(launcher["log_root"], repo_root)
     run_dir = run_dir or run_root / name
@@ -112,8 +116,13 @@ def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = N
         plan["execution"] = {
             "jobs": 1, "components": ["MinerU server", "extraction caller"],
             "gpu_required": True,
-            "resources": {key: launcher[key] for key in ("partition", "gpus", "cpus", "memory", "walltime")},
+            "resources": {key: launcher[key] for key in ("gpus", "cpus", "memory", "walltime")},
+            "server_concurrency": int(stage["server_concurrency"]),
+            "max_in_flight": int(stage["max_in_flight"]),
         }
+        for key in ("partition", "queue", "project"):
+            if key in launcher:
+                plan["execution"]["resources"][key] = launcher[key]
     settings = managed_settings(config, data_root, repo_root) if name not in {"reduce_and_compact", "extract_mineru"} else None
     return plan, settings
 
@@ -173,10 +182,10 @@ def mineru_caller_args(plan: dict[str, Any], api_url: str) -> list[str]:
     if dataset["split_index"]:
         args += ["--split-index", str(absolute(dataset["split_index"], root))]
     for key in ("backend", "max_in_flight", "retries", "start_index", "effort",
-                "parse_method", "lang", "start_page_id", "end_page_id", "poll_interval",
+                "parse_method", "lang", "start_page_id", "poll_interval",
                 "request_timeout", "result_timeout", "min_markdown_chars"):
         args += ["--" + key.replace("_", "-"), str(stage[key])]
-    for key in ("limit", "end_index"):
+    for key in ("limit", "end_index", "end_page_id"):
         if stage[key] is not None:
             args += ["--" + key.replace("_", "-"), str(stage[key])]
     if stage["domains"]:
@@ -191,7 +200,7 @@ def mineru_caller_args(plan: dict[str, Any], api_url: str) -> list[str]:
 
 
 def run_mineru_job(plan: dict[str, Any]) -> None:
-    """Run server and caller together inside the single Submitit allocation."""
+    """Run server and caller together inside one GPU allocation."""
     root = Path(plan["repo_root"])
     stage = plan["stage"]
     port = int(stage["server_port"])
@@ -202,8 +211,10 @@ def run_mineru_job(plan: dict[str, Any]) -> None:
     if not 1 <= port <= 65535:
         raise ValueError("stage.server_port must be 0 or a valid TCP port")
     run_dir = Path(plan["run_dir"])
-    run_id = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
-    temp_base = Path(os.environ.get("SLURM_TMPDIR", f"/tmp/{os.environ.get('USER', 'mineru')}/mineru_{run_id}"))
+    run_id = os.environ.get("SLURM_JOB_ID") or os.environ.get("PBS_JOBID") or str(os.getpid())
+    scratch_root = Path(os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR") or
+                        f"/tmp/{os.environ.get('USER', 'mineru')}")
+    temp_base = scratch_root / f"mineru_{run_id}"
     temp_dir = temp_base / "tmp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -220,7 +231,9 @@ def run_mineru_job(plan: dict[str, Any]) -> None:
     if stage["server_command"]:
         cmd += ["--server-cmd", stage["server_command"].replace("{port}", str(port))]
     cmd += ["--", *mineru_caller_args(plan, f"http://127.0.0.1:{port}")]
-    print(f"One GPU Slurm job: MinerU server and caller; temp={temp_dir}", flush=True)
+    print(f"One GPU {plan['launcher']['kind']} job: MinerU server and caller; "
+          f"server_concurrency={stage['server_concurrency']} "
+          f"max_in_flight={stage['max_in_flight']} temp={temp_dir}", flush=True)
     subprocess.run(cmd, cwd=root, env=env, check=True)
 
 

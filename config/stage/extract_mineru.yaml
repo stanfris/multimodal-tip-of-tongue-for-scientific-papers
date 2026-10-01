@@ -5,11 +5,11 @@ stage:
   limit: null
   server_port: 0
   server_startup_timeout: 600
-  server_concurrency: 8
+  server_concurrency: 32
   mineru_venv: .venv-mineru
   server_command: null
   backend: hybrid-engine
-  max_in_flight: 8
+  max_in_flight: 32
   retries: 2
   start_index: 0
   end_index: null
@@ -20,7 +20,7 @@ stage:
   parse_method: auto
   lang: ch
   start_page_id: 0
-  end_page_id: 9
+  end_page_id: null
   poll_interval: 2.0
   request_timeout: 120.0
   result_timeout: 3600.0

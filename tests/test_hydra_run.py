@@ -114,7 +114,8 @@ def test_pbs_job_preserves_venv_python_symlink(tmp_path: Path) -> None:
 def test_h200_job_disables_flashinfer_sampling_without_nvcc() -> None:
     plan, _ = build_plan(config("launcher=pbs_h200", "model.provider=vllm"), ROOT)
     script = job_script(Path("/tmp/plan.json"), plan)
-    assert "export VLLM_USE_FLASHINFER_SAMPLER=0\nexec " in script
+    assert "export VLLM_USE_FLASHINFER_SAMPLER=0" in script
+    assert "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" in script
 
 
 def test_invalid_generation_split_rejected() -> None:
@@ -122,10 +123,29 @@ def test_invalid_generation_split_rejected() -> None:
         build_plan(config("stage=generate_queries", "split=all"), ROOT)
 
 
-def test_mineru_requires_gpu_slurm_and_describes_one_job() -> None:
-    for profile in ("slurm_cpu", "local_gpu", "pbs_rt_hg"):
-        with pytest.raises(ValueError, match="GPU Slurm launcher"):
+def test_other_split_is_available_for_mineru() -> None:
+    plan, _ = build_plan(config("stage=extract_mineru", "split=other", "launcher=slurm_a100"), ROOT)
+    args = mineru_caller_args(plan, "http://127.0.0.1:8002")
+    assert args[args.index("--split") + 1] == "other"
+    assert "--split-index" in args
+    with pytest.raises(ValueError, match="only for extract_mineru"):
+        build_plan(config("stage=reduce_and_compact", "split=other"), ROOT)
+
+
+def test_mineru_default_has_no_page_cutoff() -> None:
+    plan, _ = build_plan(config("stage=extract_mineru", "launcher=slurm_a100"), ROOT)
+    assert plan["stage"]["end_page_id"] is None
+    assert "--end-page-id" not in mineru_caller_args(plan, "http://127.0.0.1:8002")
+
+
+def test_mineru_requires_gpu_and_describes_one_job() -> None:
+    for profile in ("slurm_cpu", "pbs_rt_hc"):
+        with pytest.raises(ValueError, match="requires a GPU launcher"):
             build_plan(config("stage=extract_mineru", f"launcher={profile}"), ROOT)
+    for profile in ("local_gpu", "pbs_h200", "pbs_rt_hg"):
+        plan, _ = build_plan(config("stage=extract_mineru", f"launcher={profile}"), ROOT)
+        assert plan["execution"]["jobs"] == 1
+        assert plan["execution"]["resources"]["gpus"] == 1
     plan, _ = build_plan(config("stage=extract_mineru", "launcher=slurm_a100"), ROOT)
     assert plan["execution"]["jobs"] == 1
     assert plan["execution"]["components"] == ["MinerU server", "extraction caller"]
@@ -135,6 +155,58 @@ def test_mineru_requires_gpu_slurm_and_describes_one_job() -> None:
         composed = compose(config_name="config", overrides=["stage=extract_mineru", "launcher=slurm_a100"],
                            return_hydra_config=True)
     assert "module load CUDA/12.6.0" in list(composed.hydra.launcher.setup)
+
+
+def test_h200_mineru_defaults_propagate_through_plan_and_caller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = config("stage=extract_mineru", "launcher=pbs_h200")
+    plan, _ = build_plan(cfg, ROOT, tmp_path / "run")
+    assert plan["stage"]["server_concurrency"] == 32
+    assert plan["stage"]["max_in_flight"] == 32
+    assert plan["execution"]["server_concurrency"] == 32
+    assert plan["execution"]["max_in_flight"] == 32
+    assert plan["execution"]["resources"]["queue"] == cfg["launcher"]["queue"]
+    assert "--max-in-flight" in mineru_caller_args(plan, "http://127.0.0.1:8002")
+    calls = []
+    monkeypatch.setattr("hydra_run.subprocess.run", lambda cmd, **kwargs: calls.append((cmd, kwargs)))
+    monkeypatch.setattr("hydra_run.socket.socket", lambda *args: FakeSocket())
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "pbs-tmp"))
+    monkeypatch.delenv("SLURM_TMPDIR", raising=False)
+    execute_stage(plan)
+    cmd, kwargs = calls[0]
+    assert cmd.count("--max-in-flight") == 1
+    assert cmd[cmd.index("--max-in-flight") + 1] == "32"
+    assert kwargs["env"]["MINERU_API_MAX_CONCURRENT_REQUESTS"] == "32"
+    assert Path(kwargs["env"]["TMPDIR"]).parent.parent == tmp_path / "pbs-tmp"
+    assert Path(kwargs["env"]["TMPDIR"]).name == "tmp"
+
+
+def test_h200_mineru_submits_one_pbs_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="123.server\n", stderr="")
+
+    monkeypatch.setattr("hydra_run.subprocess.run", fake_run)
+    run_dir = tmp_path / "mineru-job"
+    launch(config("stage=extract_mineru", "launcher=pbs_h200"), ROOT, hydra_run_dir=run_dir)
+    assert len(commands) == 1
+    assert commands[0][0] == "qsub"
+    assert "select=1:ncpus=16:mem=160gb:ngpus=1" in commands[0]
+    assert "-m hydra_run --worker" in (run_dir / "job.sh").read_text()
+    saved = json.loads((run_dir / "plan.json").read_text())
+    assert saved["execution"]["jobs"] == 1
+    assert saved["execution"]["server_concurrency"] == 32
+    assert saved["execution"]["max_in_flight"] == 32
+
+
+def test_mineru_concurrency_hydra_overrides_remain_independent() -> None:
+    plan, _ = build_plan(config("stage=extract_mineru", "launcher=pbs_h200",
+                                "stage.server_concurrency=24", "stage.max_in_flight=16"), ROOT)
+    assert plan["execution"]["server_concurrency"] == 24
+    assert plan["execution"]["max_in_flight"] == 16
+    args = mineru_caller_args(plan, "http://127.0.0.1:8002")
+    assert args[args.index("--max-in-flight") + 1] == "16"
 
 
 def test_reduce_and_compact_preserves_mineru_output_and_compacts_copy(tmp_path: Path) -> None:

@@ -37,7 +37,7 @@ while (($#)); do
       ;;
     --split)
       if (($# < 2)); then
-        echo "--split requires one of: full, train, test, train+test." >&2
+        echo "--split requires one of: full, train, test, train+test, other." >&2
         exit 2
       fi
       SPLIT_ARG="$2"
@@ -157,7 +157,7 @@ case "$EXTRACTION_SCOPE" in
     CALLER_CMD+=(--split all --all-domain-pdfs)
     SCOPE_DESCRIPTION="the full dataset (every discovered PDF)"
     ;;
-  train|test|train+test|train-test)
+  train|test|train+test|train-test|other)
     if [[ "$EXTRACTION_SCOPE" == "train-test" ]]; then
       EXTRACTION_SCOPE="train+test"
     fi
@@ -168,7 +168,7 @@ case "$EXTRACTION_SCOPE" in
     SCOPE_DESCRIPTION="the indexed $EXTRACTION_SCOPE split"
     ;;
   *)
-    echo "Unsupported SPLIT value: $EXTRACTION_SCOPE (expected full, train, test, or train+test)." >&2
+    echo "Unsupported SPLIT value: $EXTRACTION_SCOPE (expected full, train, test, train+test, or other)." >&2
     exit 2
     ;;
 esac

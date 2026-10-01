@@ -16,7 +16,7 @@ from hydra_run import launch
 def main(cfg: DictConfig) -> None:
     config = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(config, dict)
-    if config["stage"]["name"] == "extract_mineru":
+    if config["stage"]["name"] == "extract_mineru" and config["launcher"]["kind"] == "slurm":
         hydra_launcher = HydraConfig.get().launcher
         allocated_gpus = int(hydra_launcher.get("gpus_per_node", 0))
         if allocated_gpus < 1:

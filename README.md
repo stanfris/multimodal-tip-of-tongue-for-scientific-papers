@@ -195,7 +195,9 @@ compatible GPU are needed for real vLLM measurements.
 `src/cli.py` routes operational subcommands to argparse and all other calls
 to Hydra. Stage wrappers embed their own `stage=...`; do not add a second stage
 override. `split=train` or `split=test` selects a canonical split for model
-stages. Reduction and extraction also accept `split=train+test`. The file
+stages. Reduction and extraction also accept `split=train+test`. MinerU
+extraction also accepts `split=other` to process PDFs absent from both indexed
+splits. The file
 `config/split/all.yaml` currently also resolves to `train+test`, so use the
 explicit name. Scheduler profiles use scratch defaults; for a different
 corpus pass all relevant paths, for example:
@@ -270,32 +272,42 @@ flushed line after each completed clue batch or query.
 
 ### MinerU extraction
 
-The general Hydra wrapper is intended to submit a **single GPU Slurm job**
-that runs the server and caller on the allocated node. The login node needs
-no visible CUDA device for submission. The direct GPU script, if invoked
-manually, requires a visible CUDA device on the machine where it is invoked.
-In this checkout, `src/hydra_run.py` calls
-`scripts/extraction/run_mineru_full_extraction_gpu.sh`, but that file is
-**missing**. Consequently, the Hydra command below composes and can submit,
-but its worker cannot complete extraction until the script is restored or the
-worker is fixed. Do not treat a Submitit “submitted” message as success.
+The Hydra wrapper runs the MinerU server and extraction caller inside one GPU
+allocation. `launcher=pbs_h200` submits one PBS job; `launcher=slurm_a100 -m`
+uses Hydra Submitit. The login node needs no visible CUDA device to submit.
+The dedicated `.venv-mineru` must be available on the worker node. The direct
+GPU script requires a visible CUDA device where it runs.
 
 ```bash
+scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200
+scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200 stage.server_concurrency=24 stage.max_in_flight=24
+scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200 dry_run=true
 scripts/extraction/run_mineru_full_extraction.sh -m split=train launcher=slurm_a100
-scripts/extraction/run_mineru_full_extraction.sh split=train launcher=slurm_a100 dry_run=true
-uv run --no-sync dataset-generation stage=extract_mineru split=train launcher=slurm_a100 --cfg job --resolve
+scripts/extraction/run_mineru_full_extraction.sh -m split=other launcher=slurm_a100
 ```
 
 Set `dataset.pdf_dir`, `dataset.processed_root`, and `dataset.split_index`
-for a nondefault corpus; `stage.max_in_flight=2`, `stage.limit=20`, and
-`stage.retry_incomplete_only=true` are optional caller controls. Indexed
-splits require the canonical PDF split JSON. Paper output is
+for a nondefault corpus. The default server concurrency and client in-flight
+count are both 32. Override them independently with
+`stage.server_concurrency=N` and `stage.max_in_flight=N`; use `stage.limit=20`
+or `stage.retry_incomplete_only=true` for a smaller or retry run. Indexed
+splits require the canonical PDF split JSON. For `split=other`, extraction scans
+`dataset.pdf_dir`, excludes every path in the index's train and test lists,
+and marks selected papers as `other`. Paper output is
 `<dataset.processed_root>/papers/<subset>/<paper_id>/`. The files `run_config.json`,
 `last_run_summary.json`, `resume_report.json`, `incomplete_documents.json`,
-and `failures.jsonl` remain at the processed root. The Hydra run directory is
-`<launcher.log_root>/extraction/extract_mineru/<timestamp>/0/` for the
-Slurm sweep, containing `plan.json`, `.hydra/`, and on the allocated node
-`mineru.server.log` and `mineru.caller.log` if it reaches the worker.
+and `failures.jsonl` remain at the processed root. The Hydra run directory
+contains `plan.json` with both concurrency settings, plus `mineru.server.log`
+and `mineru.caller.log` from the allocated node. `run_config.json` also records
+the server and client concurrency used by the extraction caller.
+
+MinerU parses through the end of each selected PDF by default. Set
+`stage.end_page_id=N` (or `--end-page-id N` with the direct CLI) to stop at a
+specific zero-based page. Completed papers are skipped on subsequent runs.
+With a MinerU server running, benchmark client in-flight counts with
+`scripts/extraction/benchmark_mineru_extraction.sh --max-in-flight-values 4 8 16 24 32`.
+The report includes papers/sec and pages/sec and recommends only a run that
+completed every sampled paper without extraction failures.
 
 Use the job ID from Submitit to inspect the scheduler and logs, or cancel a
 still running job. Interrupting the local waiting process with Ctrl-C may
