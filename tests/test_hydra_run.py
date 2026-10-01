@@ -200,6 +200,20 @@ def test_h200_mineru_submits_one_pbs_worker(tmp_path: Path, monkeypatch: pytest.
     assert saved["execution"]["max_in_flight"] == 32
 
 
+def test_h200_mineru_cli_accepts_full_domain_pbs_launch() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "cli", "launcher=pbs_h200", "split=train+test",
+         "stage.all_domain_pdfs=true", "stage.domains=[ACL]", "dry_run=true",
+         "stage=extract_mineru"],
+        cwd=ROOT, text=True, capture_output=True, check=True,
+    )
+    output = json.loads(result.stdout)
+    assert output["submission"][0] == "qsub"
+    assert output["plan"]["execution"]["jobs"] == 1
+    assert output["plan"]["stage"]["all_domain_pdfs"] is True
+    assert output["plan"]["stage"]["domains"] == ["ACL"]
+
+
 def test_mineru_concurrency_hydra_overrides_remain_independent() -> None:
     plan, _ = build_plan(config("stage=extract_mineru", "launcher=pbs_h200",
                                 "stage.server_concurrency=24", "stage.max_in_flight=16"), ROOT)
