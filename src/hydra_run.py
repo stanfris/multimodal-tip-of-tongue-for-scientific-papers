@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import contextlib
 import json
 import os
@@ -201,6 +202,43 @@ def mineru_caller_args(plan: dict[str, Any], api_url: str) -> list[str]:
     return args
 
 
+def normalize_mineru_cuda_visibility(env: dict[str, str]) -> None:
+    """Convert scheduler GPU UUID masks to indices accepted by pinned vLLM."""
+    visible = env.get("CUDA_VISIBLE_DEVICES")
+    if not visible:
+        return
+    requested = [device.strip() for device in visible.split(",")]
+    if any(not device for device in requested):
+        raise RuntimeError(f"Invalid CUDA_VISIBLE_DEVICES for MinerU: {visible!r}")
+    if all(device.isdecimal() for device in requested):
+        return
+    if any(not (device.isdecimal() or device.startswith("GPU-")) for device in requested):
+        raise RuntimeError(f"Unsupported CUDA_VISIBLE_DEVICES for MinerU: {visible!r}")
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
+            text=True, capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("Cannot map CUDA_VISIBLE_DEVICES GPU UUIDs with nvidia-smi") from exc
+    devices = [(row[0].strip(), row[1].strip()) for row in csv.reader(result.stdout.splitlines())
+               if len(row) >= 2]
+    mapped = []
+    for device in requested:
+        if device.isdecimal():
+            mapped.append(device)
+            continue
+        matches = [index for index, uuid in devices if uuid == device or uuid.startswith(device)]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"CUDA_VISIBLE_DEVICES UUID {device!r} matched {len(matches)} GPUs in nvidia-smi; "
+                "refusing to select another GPU"
+            )
+        mapped.append(matches[0])
+    env["CUDA_VISIBLE_DEVICES"] = ",".join(mapped)
+    print(f"MinerU CUDA_VISIBLE_DEVICES: {visible} -> {env['CUDA_VISIBLE_DEVICES']}", flush=True)
+
+
 def run_mineru_job(plan: dict[str, Any]) -> None:
     """Run server and caller together inside one GPU allocation."""
     root = Path(plan["repo_root"])
@@ -220,6 +258,7 @@ def run_mineru_job(plan: dict[str, Any]) -> None:
     temp_dir = temp_base / "tmp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    normalize_mineru_cuda_visibility(env)
     env.update({
         "TMPDIR": str(temp_dir), "MINERU_PORT": str(port),
         "MINERU_VENV": str(absolute(stage["mineru_venv"], root)),

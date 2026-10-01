@@ -13,7 +13,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import pytest
 
-from hydra_run import build_plan, job_script, scheduler_command, mineru_caller_args, execute_stage, execute_worker, launch, stage_log
+from hydra_run import build_plan, job_script, scheduler_command, mineru_caller_args, normalize_mineru_cuda_visibility, execute_stage, execute_worker, launch, stage_log
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -219,6 +219,7 @@ def test_h200_mineru_defaults_propagate_through_plan_and_caller(tmp_path: Path, 
     monkeypatch.setattr("hydra_run.socket.socket", lambda *args: FakeSocket())
     monkeypatch.setenv("TMPDIR", str(tmp_path / "pbs-tmp"))
     monkeypatch.delenv("SLURM_TMPDIR", raising=False)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     execute_stage(plan)
     cmd, kwargs = calls[0]
     assert cmd.count("--max-in-flight") == 1
@@ -226,6 +227,50 @@ def test_h200_mineru_defaults_propagate_through_plan_and_caller(tmp_path: Path, 
     assert kwargs["env"]["MINERU_API_MAX_CONCURRENT_REQUESTS"] == "32"
     assert Path(kwargs["env"]["TMPDIR"]).parent.parent == tmp_path / "pbs-tmp"
     assert Path(kwargs["env"]["TMPDIR"]).name == "tmp"
+
+
+def test_mineru_pbs_gpu_uuid_is_mapped_before_starting_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, _ = build_plan(config("stage=extract_mineru", "launcher=pbs_h200"), ROOT, tmp_path / "run")
+    gpu_uuid = "GPU-765a1d87-07a5-a69c-dcce-56244d200dbe"
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if cmd[0] == "nvidia-smi":
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"0, GPU-other\n3, {gpu_uuid}\n")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("hydra_run.subprocess.run", fake_run)
+    monkeypatch.setattr("hydra_run.socket.socket", lambda *args: FakeSocket())
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", gpu_uuid)
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "pbs-tmp"))
+    monkeypatch.delenv("SLURM_TMPDIR", raising=False)
+    execute_stage(plan)
+    assert calls[0][0] == ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"]
+    assert calls[1][1]["env"]["CUDA_VISIBLE_DEVICES"] == "3"
+    assert calls[1][1]["env"]["MINERU_API_MAX_CONCURRENT_REQUESTS"] == "32"
+    assert calls[1][0][calls[1][0].index("--max-in-flight") + 1] == "32"
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == gpu_uuid
+
+
+def test_mineru_numeric_gpu_visibility_is_left_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("hydra_run.subprocess.run", lambda *args, **kwargs: pytest.fail("unexpected nvidia-smi"))
+    env = {"CUDA_VISIBLE_DEVICES": "1,0"}
+    normalize_mineru_cuda_visibility(env)
+    assert env["CUDA_VISIBLE_DEVICES"] == "1,0"
+
+
+def test_mineru_unknown_gpu_uuid_fails_before_starting_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="0, GPU-available\n")
+
+    monkeypatch.setattr("hydra_run.subprocess.run", fake_run)
+    env = {"CUDA_VISIBLE_DEVICES": "GPU-missing"}
+    with pytest.raises(RuntimeError, match="matched 0 GPUs"):
+        normalize_mineru_cuda_visibility(env)
+    assert env["CUDA_VISIBLE_DEVICES"] == "GPU-missing"
 
 
 def test_h200_mineru_submits_one_pbs_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

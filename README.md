@@ -279,7 +279,11 @@ The Hydra wrapper runs the MinerU server and extraction caller inside one GPU
 allocation. `launcher=pbs_h200` submits one PBS job; `launcher=slurm_a100 -m`
 uses Hydra Submitit. The login node needs no visible CUDA device to submit.
 The dedicated `.venv-mineru` must be available on the worker node. The direct
-GPU script requires a visible CUDA device where it runs.
+GPU script requires a visible CUDA device where it runs. On PBS workers that
+provide a GPU UUID in `CUDA_VISIBLE_DEVICES`, the Hydra worker resolves that
+UUID through `nvidia-smi` before starting MinerU. This keeps the job on its
+assigned GPU while supplying the numeric index required by the pinned vLLM
+runtime. An unresolved UUID stops the worker before it submits papers.
 
 ```bash
 scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200
