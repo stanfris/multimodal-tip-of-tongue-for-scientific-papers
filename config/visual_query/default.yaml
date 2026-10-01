@@ -38,7 +38,6 @@ judgement:
 selection:
   modes:
   - visual-and-text
-  - visual-only
   visual_component_budget: 3
   textual_component_budget: 3
   allow_partial_components: false

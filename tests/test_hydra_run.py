@@ -38,6 +38,7 @@ def test_stage_split_model_and_limit_compose() -> None:
 
 def test_stage_default_models_and_explicit_override() -> None:
     assert config("stage=generate_queries")["model"]["name"] == "microsoft/phi-4"
+    assert config("stage=generate_queries")["visual_query"]["selection"]["modes"] == ["visual-and-text"]
     assert config("stage=describe_textual_clues")["model"]["name"] == "Qwen/Qwen3-4B"
     assert config("stage=judge_queries")["visual_query"]["judgement"]["model"] == "google/gemma-3-27b-it"
     assert config("stage=describe_figures", "model=qwen3_text")["model"]["name"] == "Qwen/Qwen3-4B"

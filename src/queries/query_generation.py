@@ -92,7 +92,7 @@ class QueryGenerationConfig:
     judgement_attn_implementation: str | None = "sdpa"
     judgement_batch_size: int = 1
     judgement_runtime: dict[str, Any] = field(default_factory=dict)
-    modes: tuple[QueryMode, ...] = ("visual-and-text", "visual-only")
+    modes: tuple[QueryMode, ...] = ("visual-and-text",)
     seed: int = 13
     visual_component_budget: int = DEFAULT_VISUAL_COMPONENT_BUDGET
     textual_component_budget: int = DEFAULT_TEXTUAL_COMPONENT_BUDGET
@@ -847,7 +847,7 @@ def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGe
     query_sets = section(visual_query, "query_sets")
     selected_set = section(query_sets, query_set)
     judgement = visual_query.get("judgement") if isinstance(visual_query.get("judgement"), dict) else {}
-    modes = tuple(selection.get("modes", ["visual-and-text", "visual-only"]))
+    modes = tuple(selection.get("modes", ["visual-and-text"]))
     return QueryGenerationConfig(
         dataset=resolve_dataset_path(dataset, "preprocessed", config_dir),
         visual_interpretations=resolve_optional_dataset_path(dataset, "visual_interpretations", config_dir),
