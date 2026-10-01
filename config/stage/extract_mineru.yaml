@@ -5,11 +5,11 @@ stage:
   limit: null
   server_port: 0
   server_startup_timeout: 600
-  server_concurrency: 32
+  server_concurrency: 8
   mineru_venv: .venv-mineru
   server_command: null
   backend: hybrid-engine
-  max_in_flight: 32
+  max_in_flight: 8
   retries: 2
   start_index: 0
   end_index: null
