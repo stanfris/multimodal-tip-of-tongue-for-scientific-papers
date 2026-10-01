@@ -247,6 +247,22 @@ def test_h200_mineru_defaults_propagate_through_plan_and_caller(tmp_path: Path, 
     assert kwargs["env"]["MINERU_INTER_OP_NUM_THREADS"] == "1"
 
 
+def test_mineru_usage_monitor_can_be_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = config("stage=extract_mineru", "launcher=pbs_h200", "stage.monitor_usage=false")
+    plan, _ = build_plan(cfg, ROOT, tmp_path / "run")
+    commands = []
+    monkeypatch.setattr("hydra_run.subprocess.run", lambda cmd, **kwargs: commands.append(cmd))
+    monkeypatch.setattr("hydra_run.socket.socket", lambda *args: FakeSocket())
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    execute_stage(plan)
+
+    assert plan["stage"]["monitor_usage"] is False
+    assert len(commands) == 1
+    assert commands[0][0].endswith("run_mineru_full_extraction_gpu.sh")
+    for name in ("gpu_usage.csv", "cpu_usage.log", "process_usage.log", "performance_summary.json"):
+        assert not (tmp_path / "run" / name).exists()
+
+
 def test_mineru_pbs_gpu_uuid_is_mapped_before_starting_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

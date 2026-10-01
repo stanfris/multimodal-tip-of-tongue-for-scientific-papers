@@ -282,6 +282,10 @@ def run_mineru_job(plan: dict[str, Any]) -> None:
     print(f"One GPU {plan['launcher']['kind']} job: MinerU server and caller; "
           f"server_concurrency={stage['server_concurrency']} "
           f"max_in_flight={stage['max_in_flight']} temp={temp_dir}", flush=True)
+    if not stage["monitor_usage"]:
+        subprocess.run(cmd, cwd=root, env=env, check=True)
+        return
+
     from extraction.mineru_telemetry import monitor_job, summarize_telemetry
 
     paths = {

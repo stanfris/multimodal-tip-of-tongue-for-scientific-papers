@@ -327,6 +327,8 @@ process diagnostics about every 15 seconds. The CPU log is JSON Lines with
 one record per allocated logical CPU and an aggregate record. It uses
 `mpstat` when available and `/proc/stat` otherwise. An active core has more
 than 50% utilization. Missing monitoring tools do not stop extraction.
+Set `stage.monitor_usage=false` to skip GPU, CPU, and process sampling and
+the derived performance summary. MinerU server and caller logs remain enabled.
 For a full-folder scan, the caller uses the selected launcher's PDF and
 processed paths but does not open its split-index path. Use `dry_run=true` to
 check these resolved paths before submitting a scheduler job.

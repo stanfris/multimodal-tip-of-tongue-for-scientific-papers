@@ -6,6 +6,7 @@ stage:
   server_port: 0
   server_startup_timeout: 600
   server_concurrency: 32
+  monitor_usage: true
   mineru_venv: .venv-mineru
   server_command: null
   backend: hybrid-engine
