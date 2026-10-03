@@ -25,6 +25,7 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "kaggle>=2.2.4",
     "scikit-learn>=1.9.1",
+    "vllm>=0.26.0",
 ]
 
 [project.scripts]
