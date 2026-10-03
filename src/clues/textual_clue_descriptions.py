@@ -157,7 +157,9 @@ def iter_samples_from_preprocessed_dataset(
     split_name: str | None = None,
 ) -> list[TextSample]:
     papers = filter_papers_by_split(
-        read_preprocessed_papers(dataset_dir),
+        read_preprocessed_papers(
+            dataset_dir, split_index=split_index, split_name=split_name, include_figures=False,
+        ),
         split_index_path=split_index,
         split_name=split_name,
     )
@@ -500,7 +502,10 @@ def run(args: argparse.Namespace) -> Path:
         completed.update(
             _completed_textual_keys_from_clues(
                 output_dir,
-                read_preprocessed_papers(dataset_dir),
+                read_preprocessed_papers(
+                    dataset_dir, split_index=args.split_index, split_name=args.split,
+                    include_figures=False,
+                ),
                 model=model_name,
                 prompt_id=args.prompt_id,
                 prompt_version=args.prompt_version,

@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from preprocessing import preprocessed as preprocessed_module
 from preprocessing.preprocessed import iter_preprocessed_paper_dirs, read_preprocessed_papers
 from preprocessing.preprocessed import select_preprocessed_paper_dirs
 from document_splits.document_splits import filter_papers_by_split
 from clues.vl_figure_descriptions import iter_samples_from_preprocessed_dataset
+from clues.textual_clue_descriptions import iter_samples_from_preprocessed_dataset as iter_text_samples
 
 
 def write_paper(root: Path, subset: str, paper_id: str) -> Path:
@@ -61,6 +65,80 @@ def test_existing_paper_json_with_empty_figures_uses_images_for_visual_samples(t
         images_dir / "first.jpg",
         images_dir / "second.png",
     ]
+
+
+def test_markdown_and_images_only_match_pdf_split_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "preprocessed"
+    for paper_id in ("ACL_train", "ACL_test"):
+        paper_dir = root / "ACL" / paper_id
+        images_dir = paper_dir / "images"
+        images_dir.mkdir(parents=True)
+        (paper_dir / "markdown.md").write_text(f"# {paper_id}\n", encoding="utf-8")
+        (images_dir / "figure.png").write_bytes(b"image")
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(
+        json.dumps({"train": ["ACL/train.pdf"], "test": ["ACL/test.pdf"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        preprocessed_module, "iter_preprocessed_paper_dirs",
+        lambda *args, **kwargs: pytest.fail("PDF-indexed clue generation must not scan every paper"),
+    )
+
+    for split in ("train", "test"):
+        visual = iter_samples_from_preprocessed_dataset(
+            root, limit=None, split_index=split_index, split_name=split,
+        )
+        textual = iter_text_samples(
+            root, limit=None, max_markdown_chars=12000,
+            split_index=split_index, split_name=split,
+        )
+        assert [sample.metadata["paper_id"] for sample in visual] == [f"ACL_{split}"]
+        assert [sample.metadata["paper_id"] for sample in textual] == [f"ACL_{split}"]
+        assert visual[0].image_path == root / "ACL" / f"ACL_{split}" / "images" / "figure.png"
+
+
+def test_visual_samples_allow_images_without_markdown_or_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "preprocessed"
+    images_dir = root / "ACL" / "ACL_train" / "images"
+    images_dir.mkdir(parents=True)
+    (images_dir / "figure.png").write_bytes(b"image")
+    (images_dir / "nested").mkdir()
+    (images_dir / "nested" / "another.jpg").write_bytes(b"image")
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(json.dumps({"train": ["ACL/train.pdf"], "test": []}), encoding="utf-8")
+
+    samples = iter_samples_from_preprocessed_dataset(
+        root, limit=None, split_index=split_index, split_name="train",
+    )
+
+    assert [sample.image_path for sample in samples] == [
+        images_dir / "figure.png", images_dir / "nested" / "another.jpg",
+    ]
+    assert [sample.record_id for sample in samples] == ["figure", "nested_another"]
+
+
+def test_textual_samples_allow_markdown_without_images_or_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "preprocessed"
+    paper_dir = root / "ACL" / "ACL_train"
+    paper_dir.mkdir(parents=True)
+    (paper_dir / "markdown.md").write_text("# Train paper\n", encoding="utf-8")
+    split_index = tmp_path / "pdf_dataset_split.json"
+    split_index.write_text(json.dumps({"train": ["ACL/train.pdf"], "test": []}), encoding="utf-8")
+    monkeypatch.setattr(
+        preprocessed_module, "_figures_from_images",
+        lambda *args: pytest.fail("Textual clue generation must not inspect images"),
+    )
+
+    samples = iter_text_samples(
+        root, limit=None, max_markdown_chars=12000,
+        split_index=split_index, split_name="train",
+    )
+
+    assert [sample.record_id for sample in samples] == ["ACL_train"]
+    assert samples[0].markdown == "# Train paper\n"
 
 
 def test_snellius_processed_layout_uses_pdf_split_paths(tmp_path: Path) -> None:

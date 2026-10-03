@@ -27,19 +27,28 @@ class PreprocessedPaperSelection:
     missing_documents: list[dict[str, Any]]
 
 
-def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR) -> list[dict[str, Any]]:
+def read_preprocessed_papers(
+    path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR, *, include_image_only: bool = False,
+    split_index: Path | None = None, split_name: str | None = None,
+    include_figures: bool = True,
+) -> list[dict[str, Any]]:
     root = Path(path)
     if not root.exists():
         raise FileNotFoundError(f"Preprocessed papers directory does not exist: {root}")
 
+    paper_dirs = _indexed_preprocessed_paper_dirs(root, split_index, split_name, include_image_only)
+    if paper_dirs is None:
+        paper_dirs = iter_preprocessed_paper_dirs(root, include_image_only=include_image_only)
     papers = []
-    for paper_dir in iter_preprocessed_paper_dirs(root):
+    for paper_dir in paper_dirs:
         paper_json_path = paper_dir / "paper.json"
         markdown_path = paper_dir / "markdown.md"
-        if not markdown_path.exists():
+        if not markdown_path.exists() and not (include_image_only and (paper_dir / "images").is_dir()):
             continue
         if paper_json_path.exists():
             paper = json.loads(paper_json_path.read_text(encoding="utf-8"))
+        elif not include_figures:
+            paper = {"paper_id": paper_dir.name, **_metadata_from_paper_id(paper_dir.name)}
         else:
             paper = _minimal_paper_record(paper_dir)
         paper_id = str(paper.get("paper_id") or paper_dir.name).strip()
@@ -50,18 +59,62 @@ def read_preprocessed_papers(path: str | Path = DEFAULT_PREPROCESSED_PAPERS_DIR)
         paper["source_paper_dataset"] = paper.get("source_paper_dataset") or (
             paper_dir.parent.parent.name if paper_dir.parent.name == "papers" else paper_dir.parent.name
         )
-        paper["markdown_path"] = str(markdown_path)
-        figures = paper.get("figures") or _figures_from_images(paper_dir)
-        paper["figures"] = _resolve_figures(paper_dir, figures)
+        paper["markdown_path"] = str(markdown_path) if markdown_path.exists() else None
+        if include_figures:
+            figures = paper.get("figures") or _figures_from_images(paper_dir)
+            paper["figures"] = _resolve_figures(paper_dir, figures)
+        else:
+            paper["figures"] = []
         papers.append(paper)
     return papers
 
 
-def iter_preprocessed_paper_dirs(path: str | Path) -> list[Path]:
+def _indexed_preprocessed_paper_dirs(
+    root: Path, split_index: Path | None, split_name: str | None, include_image_only: bool,
+) -> list[Path] | None:
+    """Locate PDF-indexed papers by path, without walking the full collection."""
+    if split_index is None or split_name is None:
+        return None
+    index = json.loads(Path(split_index).read_text(encoding="utf-8"))
+    entries = index.get(split_name)
+    if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
+        raise ValueError(f"Split index {split_index} does not contain a string list for {split_name!r}")
+    if not all(entry.lower().endswith(".pdf") for entry in entries):
+        return None
+    paper_dirs: list[Path] = []
+    for entry in entries:
+        pdf_path = Path(entry)
+        subset = safe_path_name(pdf_path.parts[0] if len(pdf_path.parts) > 1 else "Unknown")
+        paper_id = safe_path_name(pdf_path.with_suffix("").as_posix())
+        collision_id = f"{paper_id}.{sha256(pdf_path.as_posix().encode()).hexdigest()[:12]}"
+        for candidate_id in (paper_id, collision_id):
+            paths = (
+                root / "papers" / subset / candidate_id,
+                root / subset / "papers" / candidate_id,
+                root / subset / "papers" / subset / candidate_id,
+                root / subset / candidate_id,
+                root / candidate_id,
+            )
+            required_name = "images" if include_image_only else "markdown.md"
+            paper_dir = next(
+                (path for path in paths if (path / required_name).is_dir()), None,
+            ) if include_image_only else next(
+                (path for path in paths if (path / required_name).is_file()), None,
+            )
+            if paper_dir is not None:
+                paper_dirs.append(paper_dir)
+                break
+    return paper_dirs
+
+
+def iter_preprocessed_paper_dirs(path: str | Path, *, include_image_only: bool = False) -> list[Path]:
     root = _paper_root(Path(path))
     if not root.exists():
         return []
-    return sorted({markdown_path.parent for markdown_path in root.rglob("markdown.md")})
+    paper_dirs = {markdown_path.parent for markdown_path in root.rglob("markdown.md")}
+    if include_image_only:
+        paper_dirs.update(images_dir.parent for images_dir in root.rglob("images") if images_dir.is_dir())
+    return sorted(paper_dirs)
 
 
 def select_preprocessed_paper_dirs(
@@ -157,13 +210,14 @@ def _minimal_paper_record(paper_dir: Path) -> dict[str, Any]:
 
 
 def _figures_from_images(paper_dir: Path) -> list[dict[str, str]]:
+    images_dir = paper_dir / "images"
     return [
         {
-            "figure_id": image_path.stem,
+            "figure_id": safe_path_name(image_path.relative_to(images_dir).with_suffix("").as_posix()),
             "filename": image_path.name,
             "image_relpath": str(image_path.relative_to(paper_dir)),
         }
-        for image_path in _iter_image_files(paper_dir / "images")
+        for image_path in _iter_image_files(images_dir)
     ]
 
 
@@ -172,7 +226,7 @@ def _iter_image_files(images_dir: Path) -> list[Path]:
         return []
     return sorted(
         image_path
-        for image_path in images_dir.iterdir()
+        for image_path in images_dir.rglob("*")
         if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS
     )
 

@@ -31,7 +31,7 @@ def test_visual_stage_batches_pending_and_resumes(monkeypatch: pytest.MonkeyPatc
     backend = FakeBackend()
     monkeypatch.setattr(stage, "iter_samples_from_dataset", lambda *args, **kwargs: samples)
     monkeypatch.setattr(stage, "read_completed_interpretation_keys", lambda *args, **kwargs: completed)
-    monkeypatch.setattr(stage, "read_preprocessed_papers", lambda *args: [])
+    monkeypatch.setattr(stage, "read_preprocessed_papers", lambda *args, **kwargs: [])
     monkeypatch.setattr(stage, "load_backend", lambda *args, **kwargs: backend)
     args = stage.build_parser().parse_args(["--all", "--resume", "--backend", "vllm",
                                             "--batch-size", "3", "--prompt", str(prompt),
@@ -61,7 +61,7 @@ def test_text_stage_batches_pending_and_handles_one_failure(monkeypatch: pytest.
     backend = FailingBackend()
     monkeypatch.setattr(stage, "iter_samples_from_dataset", lambda *args, **kwargs: samples)
     monkeypatch.setattr(stage, "read_completed_interpretation_keys", lambda *args, **kwargs: completed)
-    monkeypatch.setattr(stage, "read_preprocessed_papers", lambda *args: [])
+    monkeypatch.setattr(stage, "read_preprocessed_papers", lambda *args, **kwargs: [])
     monkeypatch.setattr(stage, "load_backend", lambda *args, **kwargs: backend)
     args = stage.build_parser().parse_args(["--all", "--resume", "--backend", "vllm",
                                             "--batch-size", "3", "--prompt", str(prompt),
@@ -141,7 +141,7 @@ def test_judgement_stage_batches_and_preserves_ids(monkeypatch: pytest.MonkeyPat
             return [GenerationResult(request.request_id, '{"grounded": true}') for request in requests]
 
     backend = JudgeBackend()
-    monkeypatch.setattr(stage, "read_preprocessed_papers", lambda dataset: papers)
+    monkeypatch.setattr(stage, "read_preprocessed_papers", lambda dataset, **kwargs: papers)
     monkeypatch.setattr(stage, "load_query_judge", lambda config: backend)
     args = stage.build_parser().parse_args(["--dataset", str(tmp_path), "--input-dir", str(tmp_path / "queries"),
                                             "--mode", "visual-only", "--prompt", str(prompt),

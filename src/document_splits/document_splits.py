@@ -7,8 +7,11 @@ import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Iterable
+
+from preprocessing.preprocessed import safe_path_name
 
 
 DEFAULT_SPLIT_SEED = 42
@@ -174,7 +177,15 @@ def filter_papers_by_split(
     entries = read_split_paper_ids(split_index_path, split_name)
     pdf_index = all(entry.lower().endswith(".pdf") for entry in entries)
     for paper_id in entries:
-        paper = by_source_pdf.get(paper_id) if pdf_index else by_id.get(paper_id)
+        if pdf_index:
+            paper = by_source_pdf.get(paper_id)
+            if paper is None:
+                pdf_path = Path(paper_id)
+                inferred_id = safe_path_name(pdf_path.with_suffix("").as_posix())
+                collision_id = f"{inferred_id}.{sha256(pdf_path.as_posix().encode()).hexdigest()[:12]}"
+                paper = by_id.get(inferred_id) or by_id.get(collision_id)
+        else:
+            paper = by_id.get(paper_id)
         if paper is None:
             if not pdf_index:
                 missing.append(paper_id)
