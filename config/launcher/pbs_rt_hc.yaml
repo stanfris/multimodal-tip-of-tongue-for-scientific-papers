@@ -4,6 +4,7 @@ defaults:
   - override /hydra/launcher: basic
 launcher:
   kind: pbs
+  project: ${oc.env:VTT_PBS_PROJECT,gcb50357}
   dataset_root: ${oc.env:VTT_DATA_ROOT,./data}
   processed_root: ${launcher.dataset_root}/processed
   pdf_dir: ${launcher.dataset_root}/pdf_datasets
@@ -14,8 +15,8 @@ launcher:
   python: ${oc.env:VTT_PYTHON,./.venv/bin/python}
   queue: rt_HC
   gpus: 0
-  cpus: 16
-  memory: 32gb
+  cpus: 32
+  memory: 320gb
   walltime: 03:00:00
   device_map: cpu
   dtype: float32

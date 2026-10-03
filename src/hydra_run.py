@@ -80,6 +80,8 @@ def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = N
     name = stage["name"]
     if name not in STAGES:
         raise ValueError(f"Unsupported stage: {name}")
+    if name == "reduce_and_compact" and stage.get("output_format", "full") not in {"full", "markdown_images"}:
+        raise ValueError("stage.output_format must be full or markdown_images")
     split = config["split"]["name"]
     if split not in {"train", "test", "train+test", "other"}:
         raise ValueError(f"Unsupported split: {split}")
@@ -138,8 +140,8 @@ def scheduler_command(plan: dict[str, Any], script: Path, log_dir: Path) -> list
         raise ValueError("launcher.cpus must be positive and launcher.gpus nonnegative")
     if launcher["kind"] != "pbs":
         raise ValueError("Only PBS uses the custom scheduler adapter")
-    select = f"select=1:ncpus={cpus}:mem={launcher['memory']}"
-    if gpus:
+    select = "select=1" if launcher["queue"] == "rt_HC" else f"select=1:ncpus={cpus}:mem={launcher['memory']}"
+    if gpus and launcher["queue"] != "rt_HC":
         select += f":ngpus={gpus}"
     return [
         "qsub",
@@ -342,13 +344,21 @@ def execute_stage(plan: dict[str, Any]) -> None:
     elif name == "reduce_and_compact":
         from preprocessing.reduce_preprocessed_collection import main as reduce
         from preprocessing.compact_preprocessed_collection import main as compact
-        from preprocessing.stage_preprocessed import copy_completed_papers
+        from preprocessing.stage_preprocessed import copy_completed_papers, copy_markdown_and_images
         dataset, stage = plan["dataset"], plan["stage"]
         repo_root = Path(plan["repo_root"])
         processed = absolute(dataset["processed_root"], repo_root)
         preprocessed = absolute(dataset["preprocessed"], repo_root)
         pdf_dir = absolute(dataset["pdf_dir"], repo_root)
         split_index = absolute(dataset["split_index"], repo_root) if dataset["split_index"] else None
+        domains = stage.get("domains")
+        if stage.get("output_format", "full") == "markdown_images":
+            count = copy_markdown_and_images(
+                processed, preprocessed, split_index=split_index, split=split,
+                domains=domains, dry_run=bool(stage["dry_run"]), workers=int(stage["workers"]),
+            )
+            print(f"{'Would stage' if stage['dry_run'] else 'Staged'} {count} markdown/image papers in {preprocessed}", flush=True)
+            return
         if stage["dry_run"]:
             work_dir = processed
         else:

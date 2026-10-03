@@ -255,8 +255,16 @@ Reduction copies completed papers from `dataset.processed_root` to
 remain in `processed`. The stage also reads `dataset.pdf_dir`
 and the optional `dataset.split_index`; it writes `preprocessed_analysis_report.json`
 beside the preprocessed root, and
-`incomplete_documents.json` and `compaction_failures.jsonl` within it. Figure
-and textual stages read those papers and write
+`incomplete_documents.json` and `compaction_failures.jsonl` within it.
+For a lean domain export containing only `markdown.md` and files under `images/`,
+use `stage.output_format=markdown_images` and `stage.domains=[DOMAIN]` with
+`dataset.split_index=null`. This reads completed papers from
+`data/processed/papers/DOMAIN/<paper_id>/` and stages them atomically at
+`data/preprocessed/DOMAIN/<paper_id>/`. Existing lean destinations are skipped.
+This mode does not need source PDFs or write JSON metadata into paper directories.
+On ABCI, use `launcher=pbs_rt_hc launcher.walltime=05:00:00` and set
+`VTT_PBS_PROJECT` to your ABCI group when it differs from the configured default.
+Figure and textual stages read those papers and write
 `<dataset.root>/clues/<domain>/<paper_id>/images/<figure_id>.jsonl` and
 `<dataset.root>/clues/<domain>/<paper_id>/base/textual_clues.jsonl`. Query generation
 writes `<dataset.query_output>/<domain>/query_generation_train/` (or
