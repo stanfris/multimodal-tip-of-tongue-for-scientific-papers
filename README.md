@@ -725,8 +725,12 @@ The data root must contain `preprocessed/`, `clues/`, `query_collections/`, and
 `splits/`. Preprocessed and clues must each contain domain folders such as
 `ACL/` and `Biology/`. The command packages their contents as uncompressed TAR
 shards under `preprocessed/<DOMAIN>/` and `clues/<DOMAIN>/`, preserving paths
-within each domain. It uploads `query_collections/` and `splits/` as ordinary
-folders, without TAR packaging. Set `VTT_DATA_ROOT` to the dataset root visible
+within each domain. Root-level metadata files in `preprocessed/` or `clues/`
+are uploaded as ordinary files at the same relative path. On rerun, TAR paths
+already present on the Hub are skipped before local archives are built; use the
+same shard size, file limit, and source layout when resuming. It uploads
+`query_collections/` and `splits/` as ordinary folders, without TAR packaging.
+Set `VTT_DATA_ROOT` to the dataset root visible
 on the compute node. The command scans each domain incrementally, starts building
 TAR shards as soon as it has enough files, and overlaps scanning, packaging, and
 uploads. It uses four concurrent workers by default; tune this with
@@ -740,9 +744,8 @@ compression can slow packaging and many source files are already compressed.
 For a new upload with many small files, `--additional-max-files-per-shard 10000`
 can start uploads before a shard reaches its byte target. Leave it unset when
 resuming an existing upload, since changing shard boundaries changes TAR contents.
-Each shard is sent through `hf upload`'s folder path so an unchanged TAR already
-committed to the Hub is skipped on rerun. The local TAR is still rebuilt to
-check its content against the remote copy.
+Each new shard is sent through `hf upload`'s folder path. Existing remote TAR
+paths are treated as complete and are not rebuilt or uploaded on rerun.
 On PBS nodes, uploads use `PBS_LOCALDIR/hf-xet-cache` for Xet scratch data unless
 `HF_XET_CACHE` is already set; this also applies to PDF package uploads.
 The wrapper uses the existing `.venv` without syncing packages.

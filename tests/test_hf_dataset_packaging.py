@@ -12,6 +12,7 @@ import pytest
 from dataset_packaging.hf_dataset_packaging import SourceSpec
 from dataset_packaging.hf_dataset_packaging import build_parser
 from dataset_packaging.hf_dataset_packaging import hf_cli_command
+from dataset_packaging.hf_dataset_packaging import list_existing_hf_paths
 from dataset_packaging.hf_dataset_packaging import prepare_dataset
 from dataset_packaging.hf_dataset_packaging import prepare_additional_data
 from dataset_packaging.hf_dataset_packaging import run
@@ -243,6 +244,7 @@ def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(
     (data_root / "preprocessed" / "ACL" / "paper-1" / "markdown.md").write_text("paper")
     (data_root / "clues" / "ACL" / "paper-1" / "base").mkdir(parents=True)
     (data_root / "clues" / "ACL" / "paper-1" / "base" / "textual_clues.jsonl").write_text("{}\n")
+    (data_root / "clues" / "metadata.json").write_text("{}")
     (data_root / "query_collections" / "ACL" / "set-1").mkdir(parents=True)
     (data_root / "query_collections" / "ACL" / "set-1" / "queries.jsonl").write_text("{}\n")
     (data_root / "splits").mkdir()
@@ -257,7 +259,7 @@ def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(
     assert pdf_shard.read_bytes() == b"existing PDF package"
     assert (output_dir / "metadata.parquet").read_bytes() == b"existing metadata"
     assert {upload.remote_path for upload in uploads} == {
-        "preprocessed/ACL/shard-00000.tar", "clues/ACL/shard-00000.tar", "query_collections", "splits"
+        "preprocessed/ACL/shard-00000.tar", "clues/metadata.json", "clues/ACL/shard-00000.tar", "query_collections", "splits"
     }
     assert not (tmp_path / "package_additional").exists()
     assert [upload.source for upload in uploads[-2:]] == [data_root / "query_collections", data_root / "splits"]
@@ -273,8 +275,8 @@ def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(
             with tarfile.open(shard) as tar:
                 assert tar.getnames() == (["paper-1/markdown.md"] if cmd[4].startswith("preprocessed") else ["paper-1/base/textual_clues.jsonl"])
     monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", fake_upload)
-    upload_additional_data(uploads=uploads, repo_id="owner/dataset", hf_cli="hf")
-    assert len(commands) == 4
+    upload_additional_data(uploads=uploads, repo_id="owner/dataset", hf_cli="hf", existing_paths=set())
+    assert len(commands) == 5
     assert all(not shard.exists() for shard in temporary_shards)
     assert all(cmd[:3] == ["hf", "upload", "owner/dataset"] for cmd in commands)
     assert all(cmd[4] not in {"data", ".", "metadata.parquet", "README.md"} for cmd in commands)
@@ -350,8 +352,56 @@ def test_additional_uploads_run_concurrently(tmp_path, monkeypatch) -> None:
         repo_id="owner/dataset",
         hf_cli="hf",
         workers=2,
+        existing_paths=set(),
     )
     assert paths == ["preprocessed/ACL/shard-00000.tar", "preprocessed/ACL/shard-00001.tar"]
+
+
+def test_additional_upload_skips_existing_tar_before_building(tmp_path, monkeypatch) -> None:
+    from dataset_packaging.hf_dataset_packaging import AdditionalUpload
+
+    source = tmp_path / "ACL"
+    source.mkdir()
+    paper = source / "paper.md"
+    paper.write_text("paper")
+    local_temp = tmp_path / "node-local"
+    local_temp.mkdir()
+    monkeypatch.setenv("PBS_LOCALDIR", str(local_temp))
+    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", lambda *args, **kwargs: pytest.fail("Existing TAR must not be uploaded"))
+    remote_path = "preprocessed/ACL/shard-00000.tar"
+    paths = upload_additional_data(
+        uploads=[AdditionalUpload(source, remote_path, (paper,))],
+        repo_id="owner/dataset",
+        hf_cli="hf",
+        existing_paths={remote_path},
+    )
+    assert paths == [remote_path]
+    assert not list(local_temp.glob("hf-additional-*"))
+
+
+def test_existing_shard_lookup_only_reads_additional_collections(monkeypatch) -> None:
+    import huggingface_hub
+
+    calls = []
+
+    class FakeApi:
+        def list_repo_tree(self, repo_id, *, path_in_repo, recursive, repo_type):
+            calls.append((repo_id, path_in_repo, recursive, repo_type))
+            if path_in_repo == "preprocessed":
+                return [
+                    huggingface_hub.RepoFile(path="preprocessed/ACL/shard-00000.tar", size=10, oid="abc"),
+                    huggingface_hub.RepoFile(path="preprocessed/metadata.json", size=2, oid="def"),
+                ]
+            return [huggingface_hub.RepoFile(path="clues/ACL/shard-00000.tar", size=10, oid="ghi")]
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+    assert list_existing_hf_paths("owner/dataset") == {
+        "preprocessed/ACL/shard-00000.tar", "clues/ACL/shard-00000.tar"
+    }
+    assert calls == [
+        ("owner/dataset", "preprocessed", True, "dataset"),
+        ("owner/dataset", "clues", True, "dataset"),
+    ]
 
 
 def test_additional_upload_rejects_flat_paper_layout(tmp_path) -> None:
@@ -359,7 +409,7 @@ def test_additional_upload_rejects_flat_paper_layout(tmp_path) -> None:
     for name in ("preprocessed", "clues", "query_collections", "splits"):
         (data_root / name).mkdir(parents=True)
     (data_root / "preprocessed" / "paper-1.json").write_text("{}")
-    with pytest.raises(ValueError, match="domain directories only"):
+    with pytest.raises(ValueError, match="at least one domain directory"):
         list(prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1024))
 
 
@@ -405,6 +455,7 @@ def test_additional_upload_cleans_node_local_shard_after_failure(tmp_path, monke
             uploads=[AdditionalUpload(source, "preprocessed/ACL/shard-00000.tar", (paper,))],
             repo_id="owner/dataset",
             hf_cli="hf",
+            existing_paths=set(),
         )
     assert not seen[0].exists()
     assert (local_temp / "hf-xet-cache").is_dir()
@@ -425,6 +476,7 @@ def test_additional_upload_preserves_explicit_xet_cache(tmp_path, monkeypatch) -
         repo_id="owner/dataset",
         hf_cli="hf",
         workers=1,
+        existing_paths=set(),
     )
     assert seen == [str(tmp_path / "custom-cache")]
 
@@ -447,5 +499,6 @@ def test_additional_upload_starts_before_scanning_later_domains(tmp_path, monkey
             uploads=prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1024),
             repo_id="owner/dataset",
             hf_cli="hf",
+            existing_paths=set(),
         )
     assert [cmd[4] for cmd in commands] == ["preprocessed/ACL"]

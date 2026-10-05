@@ -977,10 +977,19 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
             raise FileNotFoundError(f"Expected {name} directory: {root}")
     for name in ("preprocessed", "clues"):
         root = roots[name]
-        LOGGER.info("Scanning %s for domain folders", root)
-        domains = sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink())
-        if not domains or any(path.is_file() or path.is_symlink() for path in root.iterdir()):
-            raise ValueError(f"{root} must contain domain directories only")
+        LOGGER.info("Scanning %s for domain folders and root-level files", root)
+        children = sorted(root.iterdir())
+        if any(path.is_symlink() for path in children):
+            raise ValueError(f"Symlinks are not supported under {root}")
+        domains = [path for path in children if path.is_dir()]
+        if not domains:
+            raise ValueError(f"{root} must contain at least one domain directory")
+        for path in children:
+            if path.is_file():
+                LOGGER.info("Queued root-level file %s", path)
+                yield AdditionalUpload(path, f"{name}/{path.name}")
+            elif not path.is_dir():
+                raise ValueError(f"Unsupported entry under {root}: {path}")
         for domain in domains:
             if domain.name != normalize_source_name(domain.name):
                 raise ValueError(f"Unsafe domain name: {domain.name}")
@@ -1015,10 +1024,33 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
         yield AdditionalUpload(root, name)
 
 
-def upload_additional_data(*, uploads: Iterable[AdditionalUpload], repo_id: str, hf_cli: str, workers: int = 4) -> list[str]:
+def list_existing_hf_paths(repo_id: str) -> set[str]:
+    """Read committed paths once so resumed runs do not rebuild existing TARs."""
+    from huggingface_hub import HfApi, RepoFile
+    from huggingface_hub.errors import RemoteEntryNotFoundError
+
+    api = HfApi()
+    existing: set[str] = set()
+    for collection in ("preprocessed", "clues"):
+        try:
+            existing.update(
+                entry.path
+                for entry in api.list_repo_tree(repo_id, path_in_repo=collection, recursive=True, repo_type="dataset")
+                if isinstance(entry, RepoFile) and entry.path.endswith(".tar")
+            )
+        except RemoteEntryNotFoundError:
+            pass
+    return existing
+
+
+def upload_additional_data(*, uploads: Iterable[AdditionalUpload], repo_id: str, hf_cli: str, workers: int = 4, existing_paths: set[str] | None = None) -> list[str]:
     """Bound the in-flight shard count while scanning, building, and uploading overlap."""
     if workers < 1:
         raise ValueError("--additional-workers must be positive")
+    if existing_paths is None:
+        LOGGER.info("Checking existing files in Hugging Face dataset %s", repo_id)
+        existing_paths = list_existing_hf_paths(repo_id)
+    LOGGER.info("Found %s existing additional TAR shards", len(existing_paths))
     hf_cmd = hf_cli_command(hf_cli)
     env = hf_upload_environment()
     temp_root = Path(env["PBS_LOCALDIR"]) if env.get("PBS_LOCALDIR") else Path(tempfile.gettempdir())
@@ -1027,6 +1059,9 @@ def upload_additional_data(*, uploads: Iterable[AdditionalUpload], repo_id: str,
     LOGGER.info("Using %s workers and temporary directory %s", workers, temp_root)
 
     def upload_one(upload: AdditionalUpload, index: int) -> str:
+        if upload.members and upload.remote_path in existing_paths:
+            LOGGER.info("Skipping existing TAR %s (item %s)", upload.remote_path, index)
+            return upload.remote_path
         if not upload.members:
             LOGGER.info("Uploading %s to %s (item %s)", upload.source, upload.remote_path, index)
             subprocess.run(
