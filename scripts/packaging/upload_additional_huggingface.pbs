@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#PBS -N vtt-hf-additional
+#PBS -q rt_HC
+#PBS -l select=1:ncpus=32
+#PBS -l walltime=03:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+: "${VTT_DATA_ROOT:?Pass VTT_DATA_ROOT to qsub with -v}"
+cd "${PBS_O_WORKDIR:?Submit this job from the repository root}"
+
+for name in preprocessed clues query_collections splits; do
+  if [[ ! -d "$VTT_DATA_ROOT/$name" ]]; then
+    echo "Missing required directory: $VTT_DATA_ROOT/$name" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -x .venv/bin/python || ! -x .venv/bin/hf ]]; then
+  echo "The repository .venv must provide python and hf on the compute node" >&2
+  exit 1
+fi
+
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export HF_XET_HIGH_PERFORMANCE="${HF_XET_HIGH_PERFORMANCE:-1}"
+
+echo "Starting additional dataset upload at $(date -Is)"
+echo "Data root: $VTT_DATA_ROOT"
+echo "Repository: ${HF_REPO_ID:-kasys/open-source-scientific-documents}"
+echo "Workers: 8; maximum files per shard: 100000; walltime: 03:00:00"
+
+.venv/bin/python -m dataset_packaging.prepare_hf_dataset \
+  --additional-only \
+  --data-root "$VTT_DATA_ROOT" \
+  --output-dir huggingface_dataset \
+  --repo-id "${HF_REPO_ID:-kasys/open-source-scientific-documents}" \
+  --hf-cli "$PWD/.venv/bin/hf" \
+  --additional-shard-size-gb 1 \
+  --additional-max-files-per-shard 100000 \
+  --additional-workers 8
+
+echo "Finished additional dataset upload at $(date -Is)"

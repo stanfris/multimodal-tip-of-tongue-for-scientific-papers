@@ -706,11 +706,17 @@ To add processed data to an existing Hugging Face dataset without uploading or
 changing the PDF shards, metadata, or dataset card, run:
 
 ```bash
-qsub -I -P "${VTT_PBS_PROJECT:?Set your ABCI group}" -q rt_HC -l select=1 -l walltime=03:00:00
-# On the allocated compute node, from the repository root:
-scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset \
-  --additional-only --data-root "${VTT_DATA_ROOT:?Set the actual dataset root}"
+cd /path/to/this/repository
+qsub -P "${VTT_PBS_PROJECT:?Set your ABCI group}" \
+  -v "VTT_DATA_ROOT=${VTT_DATA_ROOT:?Set the actual dataset root}" \
+  scripts/packaging/upload_additional_huggingface.pbs
 ```
+
+The PBS job requests one `rt_HC` node for three hours and uses eight upload
+workers with at most 100,000 files per TAR shard. It uploads the four additional
+folders only. Use `-v "VTT_DATA_ROOT=...,HF_REPO_ID=..."` to target another dataset
+repository. Authentication must already be available to `hf` on the compute
+node (or pass `HF_TOKEN` to PBS through your site's approved secret mechanism).
 
 The data root must contain `preprocessed/`, `clues/`, `query_collections/`, and
 `splits/`. Preprocessed and clues must each contain domain folders such as
