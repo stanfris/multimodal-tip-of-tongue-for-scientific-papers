@@ -15,7 +15,7 @@ HF_REPO_ID="${HF_REPO_ID:-kasys/open-source-scientific-documents}"
 HF_CLI="${HF_CLI:-hf}"
 export HF_XET_HIGH_PERFORMANCE="${HF_XET_HIGH_PERFORMANCE:-1}"
 
-COMMAND=(uv run python -m dataset_packaging.prepare_hf_dataset
+COMMAND=(uv run --no-sync python -m dataset_packaging.prepare_hf_dataset
   --output-dir "$DATASET_DIR"
   --repo-id "$HF_REPO_ID"
   --hf-cli "$HF_CLI")

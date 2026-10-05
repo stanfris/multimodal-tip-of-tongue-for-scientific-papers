@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import tarfile
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -232,6 +233,7 @@ def test_upload_only_can_skip_local_validation(tmp_path, monkeypatch) -> None:
 
 def test_hf_cli_command_accepts_uv_run_hf() -> None:
     assert hf_cli_command("uv run hf") == ["uv", "run", "hf"]
+    assert build_parser().parse_args(["--additional-only"]).additional_shard_size_gb == 1.0
 
 
 def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(tmp_path, monkeypatch) -> None:
@@ -250,24 +252,96 @@ def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(
     pdf_shard.write_bytes(b"existing PDF package")
     (output_dir / "metadata.parquet").write_bytes(b"existing metadata")
 
-    uploads = prepare_additional_data(data_root=data_root, output_dir=output_dir, shard_size_bytes=1024)
+    uploads = list(prepare_additional_data(data_root=data_root, output_dir=output_dir, shard_size_bytes=1024))
     assert pdf_shard.read_bytes() == b"existing PDF package"
     assert (output_dir / "metadata.parquet").read_bytes() == b"existing metadata"
-    assert {remote for _, remote in uploads} == {
+    assert {upload.remote_path for upload in uploads} == {
         "preprocessed/ACL/shard-00000.tar", "clues/ACL/shard-00000.tar", "query_collections", "splits"
     }
-    for local, remote in uploads[:2]:
-        assert not local.is_relative_to(output_dir)
-        with tarfile.open(local) as tar:
-            assert tar.getnames() == (["paper-1/markdown.md"] if remote.startswith("preprocessed") else ["paper-1/base/textual_clues.jsonl"])
-    assert uploads[-2:] == [(data_root / "query_collections", "query_collections"), (data_root / "splits", "splits")]
+    assert not (tmp_path / "package_additional").exists()
+    assert [upload.source for upload in uploads[-2:]] == [data_root / "query_collections", data_root / "splits"]
 
     commands = []
-    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", lambda cmd, **kwargs: commands.append(cmd))
+    temporary_shards = []
+    def fake_upload(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[3].endswith(".tar"):
+            shard = Path(cmd[3])
+            temporary_shards.append(shard)
+            assert shard.exists()
+            with tarfile.open(shard) as tar:
+                assert tar.getnames() == (["paper-1/markdown.md"] if cmd[4].startswith("preprocessed") else ["paper-1/base/textual_clues.jsonl"])
+    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", fake_upload)
     upload_additional_data(uploads=uploads, repo_id="owner/dataset", hf_cli="hf")
     assert len(commands) == 4
+    assert all(not shard.exists() for shard in temporary_shards)
     assert all(cmd[:3] == ["hf", "upload", "owner/dataset"] for cmd in commands)
     assert all(cmd[4] not in {"data", ".", "metadata.parquet", "README.md"} for cmd in commands)
+
+
+def test_additional_scan_yields_before_finishing_a_domain(tmp_path) -> None:
+    data_root = tmp_path / "dataset"
+    for name in ("preprocessed", "clues", "query_collections", "splits"):
+        (data_root / name).mkdir(parents=True)
+    domain = data_root / "preprocessed" / "ACL"
+    domain.mkdir()
+    (domain / "a.txt").write_text("a")
+    (domain / "b.txt").write_text("b")
+    (domain / "z-link").symlink_to(domain / "a.txt")
+    uploads = prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1)
+    assert next(iter(uploads)).members == (domain / "a.txt",)
+    with pytest.raises(ValueError, match="Symlinks"):
+        list(uploads)
+
+
+def test_additional_file_limit_starts_small_shards_early(tmp_path) -> None:
+    data_root = tmp_path / "dataset"
+    for name in ("preprocessed", "clues", "query_collections", "splits"):
+        (data_root / name).mkdir(parents=True)
+    domain = data_root / "preprocessed" / "ACL"
+    domain.mkdir()
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (domain / name).write_text("x")
+    (domain / "z-link").symlink_to(domain / "a.txt")
+    uploads = prepare_additional_data(
+        data_root=data_root,
+        output_dir=tmp_path / "package",
+        shard_size_bytes=1024,
+        max_files_per_shard=2,
+    )
+    assert next(iter(uploads)).members == (domain / "a.txt", domain / "b.txt")
+    with pytest.raises(ValueError, match="Symlinks"):
+        list(uploads)
+
+
+def test_additional_uploads_run_concurrently(tmp_path, monkeypatch) -> None:
+    from dataset_packaging.hf_dataset_packaging import AdditionalUpload
+
+    source = tmp_path / "source"
+    source.mkdir()
+    first = source / "first.txt"
+    second = source / "second.txt"
+    first.write_text("first")
+    second.write_text("second")
+    second_started = threading.Event()
+
+    def fake_upload(cmd, **kwargs):
+        if "shard-00000.tar" in cmd[4]:
+            assert second_started.wait(2), "second upload did not start while the first was running"
+        else:
+            second_started.set()
+
+    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", fake_upload)
+    paths = upload_additional_data(
+        uploads=[
+            AdditionalUpload(source, "preprocessed/ACL/shard-00000.tar", (first,)),
+            AdditionalUpload(source, "preprocessed/ACL/shard-00001.tar", (second,)),
+        ],
+        repo_id="owner/dataset",
+        hf_cli="hf",
+        workers=2,
+    )
+    assert paths == ["preprocessed/ACL/shard-00000.tar", "preprocessed/ACL/shard-00001.tar"]
 
 
 def test_additional_upload_rejects_flat_paper_layout(tmp_path) -> None:
@@ -276,4 +350,56 @@ def test_additional_upload_rejects_flat_paper_layout(tmp_path) -> None:
         (data_root / name).mkdir(parents=True)
     (data_root / "preprocessed" / "paper-1.json").write_text("{}")
     with pytest.raises(ValueError, match="domain directories only"):
-        prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1024)
+        list(prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1024))
+
+
+def test_additional_upload_cleans_node_local_shard_after_failure(tmp_path, monkeypatch) -> None:
+    from dataset_packaging.hf_dataset_packaging import AdditionalUpload
+
+    source = tmp_path / "dataset" / "preprocessed" / "ACL"
+    source.mkdir(parents=True)
+    paper = source / "paper.md"
+    paper.write_text("paper")
+    local_temp = tmp_path / "node-local"
+    local_temp.mkdir()
+    monkeypatch.setenv("PBS_LOCALDIR", str(local_temp))
+    seen = []
+
+    def fail_upload(cmd, **kwargs):
+        shard = Path(cmd[3])
+        seen.append(shard)
+        assert shard.is_relative_to(local_temp)
+        assert shard.exists()
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", fail_upload)
+    with pytest.raises(RuntimeError, match="upload failed"):
+        upload_additional_data(
+            uploads=[AdditionalUpload(source, "preprocessed/ACL/shard-00000.tar", (paper,))],
+            repo_id="owner/dataset",
+            hf_cli="hf",
+        )
+    assert not seen[0].exists()
+    assert paper.read_text() == "paper"
+
+
+def test_additional_upload_starts_before_scanning_later_domains(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "dataset"
+    for name in ("preprocessed", "clues", "query_collections", "splits"):
+        (data_root / name).mkdir(parents=True)
+    acl = data_root / "preprocessed" / "ACL"
+    acl.mkdir()
+    (acl / "paper.md").write_text("paper")
+    biology = data_root / "preprocessed" / "Biology"
+    biology.mkdir()
+    (biology / "link").symlink_to(acl / "paper.md")
+    commands = []
+    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", lambda cmd, **kwargs: commands.append(cmd))
+
+    with pytest.raises(ValueError, match="Symlinks"):
+        upload_additional_data(
+            uploads=prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1024),
+            repo_id="owner/dataset",
+            hf_cli="hf",
+        )
+    assert [cmd[4] for cmd in commands] == ["preprocessed/ACL/shard-00000.tar"]

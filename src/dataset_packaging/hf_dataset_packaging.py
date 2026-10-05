@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -32,6 +33,8 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_REPO_ID = "kasys/open-source-scientific-documents"
 DEFAULT_OUTPUT_DIR = Path("huggingface_dataset")
 DEFAULT_SHARD_SIZE_GB = 1.0
+DEFAULT_ADDITIONAL_SHARD_SIZE_GB = 1.0
+DEFAULT_ADDITIONAL_MAX_FILES_PER_SHARD = 10_000
 PDF_BUFFER_SIZE = 1024 * 1024
 METADATA_COLUMNS = [
     "document_id",
@@ -100,6 +103,13 @@ class ShardPlan:
         return str(PurePosixPath("data") / normalize_source_name(self.source) / self.path.name)
 
 
+@dataclass(frozen=True)
+class AdditionalUpload:
+    source: Path
+    remote_path: str
+    members: tuple[Path, ...] = ()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -131,7 +141,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force-rebuild", action="store_true", help="Rebuild completed shards instead of reusing them.")
     parser.add_argument("--additional-only", action="store_true", help="Package and upload preprocessed, clues, query collections, and splits without touching the PDF corpus.")
     parser.add_argument("--data-root", type=Path, help="Root containing preprocessed, clues, query_collections, and splits. Defaults to dataset.root from settings.")
-    parser.add_argument("--additional-shard-size-gb", type=float, default=DEFAULT_SHARD_SIZE_GB)
+    parser.add_argument("--additional-shard-size-gb", type=float, default=DEFAULT_ADDITIONAL_SHARD_SIZE_GB)
+    parser.add_argument("--additional-max-files-per-shard", type=int, default=DEFAULT_ADDITIONAL_MAX_FILES_PER_SHARD, help="Start a shard after this many files even if its byte target is not reached (default: 10000).")
+    parser.add_argument("--additional-workers", type=int, default=4, help="Concurrent additional-data TAR builds and uploads (default: 4).")
     parser.add_argument(
         "--hf-cli",
         default="hf",
@@ -151,15 +163,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if args.prepare_only or args.upload_only or args.validate_only or args.skip_validation or args.dry_run:
             raise ValueError("--additional-only cannot be combined with other modes")
         data_root = resolve_data_root(args.settings, args.data_root)
-        LOGGER.info("Additional upload: scanning and packaging local files under %s", data_root)
+        LOGGER.info("Additional upload: scanning local files under %s", data_root)
         uploads = prepare_additional_data(
             data_root=data_root,
             output_dir=output_dir,
             shard_size_bytes=shard_size_bytes(args.additional_shard_size_gb),
+            max_files_per_shard=args.additional_max_files_per_shard,
         )
-        LOGGER.info("Additional upload: staging complete; starting %s Hugging Face uploads", len(uploads))
-        upload_additional_data(uploads=uploads, repo_id=args.repo_id, hf_cli=args.hf_cli)
-        return {"output_dir": str(output_dir), "uploaded_to": args.repo_id, "additional_paths": [remote for _, remote in uploads]}
+        uploaded_paths = upload_additional_data(uploads=uploads, repo_id=args.repo_id, hf_cli=args.hf_cli, workers=args.additional_workers)
+        return {"output_dir": str(output_dir), "uploaded_to": args.repo_id, "additional_paths": uploaded_paths}
     if args.skip_validation:
         if not args.upload_only or args.dry_run or args.validate_only or args.prepare_only:
             raise ValueError("--skip-validation requires --upload-only and cannot be combined with other modes")
@@ -925,19 +937,34 @@ def hf_cli_command(hf_cli: str) -> list[str]:
     return command
 
 
-def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int) -> list[tuple[Path, str]]:
-    """Stage the non-PDF artifacts under paths distinct from the existing PDF corpus."""
+def walk_additional_files(root: Path) -> Iterable[tuple[Path, int]]:
+    """Walk in stable path order without retaining a whole domain in memory."""
+    with os.scandir(root) as scan:
+        children = sorted(scan, key=lambda item: item.name)
+    for child in children:
+        if child.is_symlink():
+            raise ValueError(f"Symlinks are not supported under {root}")
+        path = Path(child.path)
+        if child.is_dir(follow_symlinks=False):
+            yield from walk_additional_files(path)
+        elif child.is_file(follow_symlinks=False):
+            yield path, child.stat(follow_symlinks=False).st_size
+
+
+def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int, max_files_per_shard: int = DEFAULT_ADDITIONAL_MAX_FILES_PER_SHARD) -> Iterable[AdditionalUpload]:
+    """Plan shards as files are found, allowing builds to start during the scan."""
     data_root = data_root.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     if output_dir == data_root or output_dir.is_relative_to(data_root):
         raise ValueError("--output-dir must be outside --data-root")
     if shard_size_bytes <= 0:
         raise ValueError("Additional shard size must be positive")
+    if max_files_per_shard <= 0:
+        raise ValueError("--additional-max-files-per-shard must be positive")
     roots = {name: data_root / name for name in ("preprocessed", "clues", "query_collections", "splits")}
     for name, root in roots.items():
         if not root.is_dir() or root.is_symlink():
             raise FileNotFoundError(f"Expected {name} directory: {root}")
-    uploads: list[tuple[Path, str]] = []
     for name in ("preprocessed", "clues"):
         root = roots[name]
         LOGGER.info("Scanning %s for domain folders", root)
@@ -947,72 +974,85 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
         for domain in domains:
             if domain.name != normalize_source_name(domain.name):
                 raise ValueError(f"Unsafe domain name: {domain.name}")
-            LOGGER.info("Scanning %s", domain)
-            paths_under_domain = list(domain.rglob("*"))
-            if any(path.is_symlink() for path in paths_under_domain):
-                raise ValueError(f"Symlinks are not supported under {domain}")
-            files = sorted(path for path in paths_under_domain if path.is_file())
-            if not files:
-                raise ValueError(f"{domain} contains no files")
-            batches: list[list[Path]] = []
             batch: list[Path] = []
             batch_size = 0
-            for path in files:
-                size = path.stat().st_size
-                if batch and batch_size + size > shard_size_bytes:
-                    batches.append(batch)
+            shard_index = 0
+            file_count = 0
+            started = time.monotonic()
+            LOGGER.info("Scanning and planning %s/%s", name, domain.name)
+            for path, size in walk_additional_files(domain):
+                file_count += 1
+                if batch and (batch_size + size > shard_size_bytes or len(batch) >= max_files_per_shard):
+                    yield AdditionalUpload(domain, f"{name}/{domain.name}/shard-{shard_index:05d}.tar", tuple(batch))
+                    shard_index += 1
                     batch = []
                     batch_size = 0
                 batch.append(path)
                 batch_size += size
+            if not file_count:
+                raise ValueError(f"{domain} contains no files")
             if batch:
-                batches.append(batch)
-            LOGGER.info("Packaging %s/%s: %s files into %s TAR shards", name, domain.name, len(files), len(batches))
-            # Keep staging outside the PDF package: the legacy upload mode sends
-            # output_dir wholesale and must never include these extra files.
-            shard_dir = output_dir.parent / f"{output_dir.name}_additional" / name / domain.name
-            shard_dir.mkdir(parents=True, exist_ok=True)
-            for index, paths in enumerate(batches):
-                shard = shard_dir / f"shard-{index:05d}.tar"
-                LOGGER.info("Writing %s (%s/%s, %s files)", shard, index + 1, len(batches), len(paths))
-                with tempfile.NamedTemporaryFile(prefix=f".{shard.name}.", suffix=".tmp", dir=shard_dir, delete=False) as tmp:
-                    tmp_path = Path(tmp.name)
-                try:
-                    with tarfile.open(tmp_path, "w") as tar:
-                        for path in paths:
-                            tar.add(path, arcname=path.relative_to(domain).as_posix(), recursive=False)
-                    with tarfile.open(tmp_path, "r") as tar:
-                        if tar.getnames() != [path.relative_to(domain).as_posix() for path in paths]:
-                            raise ValueError(f"TAR member mismatch: {tmp_path}")
-                    os.replace(tmp_path, shard)
-                finally:
-                    tmp_path.unlink(missing_ok=True)
-                uploads.append((shard, f"{name}/{domain.name}/{shard.name}"))
+                yield AdditionalUpload(domain, f"{name}/{domain.name}/shard-{shard_index:05d}.tar", tuple(batch))
+            LOGGER.info("Planned %s/%s: %s files, %s shards in %.1fs", name, domain.name, file_count, shard_index + 1, time.monotonic() - started)
     for name in ("query_collections", "splits"):
         root = roots[name]
         LOGGER.info("Scanning %s for direct upload", root)
-        paths_under_root = list(root.rglob("*"))
-        if any(path.is_symlink() for path in paths_under_root):
-            raise ValueError(f"Symlinks are not supported under {root}")
-        files = sorted(path for path in paths_under_root if path.is_file())
-        if not files:
+        started = time.monotonic()
+        file_count = sum(1 for _ in walk_additional_files(root))
+        if not file_count:
             raise ValueError(f"{root} contains no files")
-        LOGGER.info("Queued %s files under %s for direct upload", len(files), root)
-        uploads.append((root, name))
-    return uploads
+        LOGGER.info("Queued %s files under %s for direct upload in %.1fs", file_count, root, time.monotonic() - started)
+        yield AdditionalUpload(root, name)
 
 
-def upload_additional_data(*, uploads: list[tuple[Path, str]], repo_id: str, hf_cli: str) -> None:
-    """Upload only new remote paths; never upload the prepared PDF directory."""
+def upload_additional_data(*, uploads: Iterable[AdditionalUpload], repo_id: str, hf_cli: str, workers: int = 4) -> list[str]:
+    """Bound the in-flight shard count while scanning, building, and uploading overlap."""
+    if workers < 1:
+        raise ValueError("--additional-workers must be positive")
     hf_cmd = hf_cli_command(hf_cli)
     env = os.environ.copy()
-    for local_path, remote_path in uploads:
-        LOGGER.info("Uploading %s to %s", local_path, remote_path)
-        subprocess.run(
-            [*hf_cmd, "upload", repo_id, str(local_path), remote_path, "--repo-type", "dataset"],
-            check=True,
-            env=env,
-        )
+    temp_root = Path(env["PBS_LOCALDIR"]) if env.get("PBS_LOCALDIR") else Path(tempfile.gettempdir())
+    if not temp_root.is_dir():
+        raise FileNotFoundError(f"Temporary directory does not exist: {temp_root}")
+    LOGGER.info("Using %s workers and temporary directory %s", workers, temp_root)
+
+    def upload_one(upload: AdditionalUpload, index: int) -> str:
+        if not upload.members:
+            LOGGER.info("Uploading %s to %s (item %s)", upload.source, upload.remote_path, index)
+            subprocess.run(
+                [*hf_cmd, "upload", repo_id, str(upload.source), upload.remote_path, "--repo-type", "dataset"],
+                check=True,
+                env=env,
+            )
+            return upload.remote_path
+        # Each worker owns one temporary archive, cleaned up even on failure.
+        with tempfile.TemporaryDirectory(prefix="hf-additional-", dir=temp_root) as staging:
+            shard = Path(staging) / Path(upload.remote_path).name
+            LOGGER.info("Building %s (item %s, %s files)", upload.remote_path, index, len(upload.members))
+            with tarfile.open(shard, "w") as tar:
+                for path in upload.members:
+                    tar.add(path, arcname=path.relative_to(upload.source).as_posix(), recursive=False)
+            LOGGER.info("Uploading %s to %s (item %s)", shard, upload.remote_path, index)
+            subprocess.run(
+                [*hf_cmd, "upload", repo_id, str(shard), upload.remote_path, "--repo-type", "dataset"],
+                check=True,
+                env=env,
+            )
+            return upload.remote_path
+
+    pending: dict[concurrent.futures.Future[str], int] = {}
+    completed: dict[int, str] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for index, upload in enumerate(uploads, start=1):
+            future = pool.submit(upload_one, upload, index)
+            pending[future] = index
+            if len(pending) >= workers * 2:
+                done, _ = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+                for finished in done:
+                    completed[pending.pop(finished)] = finished.result()
+        for finished in concurrent.futures.as_completed(pending):
+            completed[pending[finished]] = finished.result()
+    return [completed[index] for index in sorted(completed)]
 
 
 def upload_dataset(*, output_dir: Path, repo_id: str, hf_cli: str) -> None:

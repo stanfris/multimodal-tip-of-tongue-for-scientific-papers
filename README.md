@@ -706,8 +706,10 @@ To add processed data to an existing Hugging Face dataset without uploading or
 changing the PDF shards, metadata, or dataset card, run:
 
 ```bash
+qsub -I -P "${VTT_PBS_PROJECT:?Set your ABCI group}" -q rt_HC -l select=1 -l walltime=03:00:00
+# On the allocated compute node, from the repository root:
 scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset \
-  --additional-only --data-root /path/to/dataset-root
+  --additional-only --data-root "${VTT_DATA_ROOT:?Set the actual dataset root}"
 ```
 
 The data root must contain `preprocessed/`, `clues/`, `query_collections/`, and
@@ -715,12 +717,22 @@ The data root must contain `preprocessed/`, `clues/`, `query_collections/`, and
 `ACL/` and `Biology/`. The command packages their contents as uncompressed TAR
 shards under `preprocessed/<DOMAIN>/` and `clues/<DOMAIN>/`, preserving paths
 within each domain. It uploads `query_collections/` and `splits/` as ordinary
-folders, without TAR packaging. The local TARs are staged in
-`huggingface_dataset_additional/`; the upload targets only these four remote
-paths and leaves the existing `data/` PDF corpus untouched. Adjust shard size
-with `--additional-shard-size-gb` (default: 1).
+folders, without TAR packaging. Set `VTT_DATA_ROOT` to the dataset root visible
+on the compute node. The command scans each domain incrementally, starts building
+TAR shards as soon as it has enough files, and overlaps scanning, packaging, and
+uploads. It uses four concurrent workers by default; tune this with
+`--additional-workers N` according to available network bandwidth and temporary
+disk space. Each worker keeps at most one TAR shard in `PBS_LOCALDIR` on ABCI
+(otherwise the system temporary directory) and removes it after upload. Peak
+temporary space is roughly `N` times the shard size. The command does not modify
+the source dataset or the existing `data/` PDF corpus. Adjust shard size with
+`--additional-shard-size-gb` (default: 1). TAR shards remain uncompressed;
+compression can slow packaging and many source files are already compressed.
+For folders with many small files, `--additional-max-files-per-shard` (default:
+10,000) starts uploads before a shard reaches its byte target.
+The wrapper uses the existing `.venv` without syncing packages.
 
-Before upload, validation scans the source folders, checks TAR members, and
+For PDF uploads, validation scans the source folders, checks TAR members, and
 recomputes SHA-256 for every source PDF. The command logs each stage, periodic
 file and byte counts, and elapsed time. Once `starting hf upload` appears,
 transfer progress is reported by the Hugging Face CLI.
