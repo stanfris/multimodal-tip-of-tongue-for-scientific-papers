@@ -100,3 +100,36 @@ def test_managed_judgement_reads_and_writes_each_domain_collection(tmp_path: Pat
     for domain in ("ACL", "Biology"):
         path = output / domain / "managed_test" / "visual_only" / "query_judgements.jsonl"
         assert json.loads(path.read_text().splitlines()[0])["paper_id"] == f"{domain}_paper"
+
+
+def test_judgement_reads_staged_paper_with_pdf_split_index(tmp_path: Path, monkeypatch) -> None:
+    data_root = tmp_path / "data"
+    paper_dir = data_root / "preprocessed" / "Physics" / "Physics_paper"
+    (paper_dir / "images").mkdir(parents=True)
+    (paper_dir / "markdown.md").write_text("# Staged paper\n", encoding="utf-8")
+    (paper_dir / "images" / "figure.png").write_bytes(b"image")
+    split_index = data_root / "splits" / "index.json"
+    split_index.parent.mkdir(parents=True)
+    split_index.write_text(json.dumps({"train": ["Physics/paper.pdf"]}), encoding="utf-8")
+    query_dir = data_root / "query_collections" / "Physics" / "query_generation_train" / "visual_only"
+    query_dir.mkdir(parents=True)
+    (query_dir / "queries.jsonl").write_text(json.dumps({
+        "query_id": "q1", "query": "Find the figure", "relevant_ids": ["Physics_paper"],
+        "metadata": {"paper_id": "Physics_paper", "selected_components": []},
+    }) + "\n", encoding="utf-8")
+
+    seen = []
+    monkeypatch.setattr(judge_queries, "load_query_judge", lambda config: None)
+
+    def fake_judge(mode, paper, selected, query, config, backend):
+        seen.append((paper["markdown_path"], paper["figures"][0]["image_path"]))
+        return {"grounded": True}
+
+    monkeypatch.setattr(judge_queries, "judge_query", fake_judge)
+    args = judge_queries.build_parser().parse_args([
+        "--data-dir", str(data_root), "--split-index", str(split_index), "--mode", "visual-only",
+    ])
+    assert judge_queries.main(args) == 0
+    assert seen == [(str(paper_dir / "markdown.md"), str((paper_dir / "images" / "figure.png").resolve()))]
+    judgement_path = query_dir / "query_judgements.jsonl"
+    assert json.loads(judgement_path.read_text(encoding="utf-8").splitlines()[0])["judgement"]["grounded"] is True
