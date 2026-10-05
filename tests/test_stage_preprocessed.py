@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from preprocessing.stage_preprocessed import copy_completed_papers, copy_markdown_and_images
+from preprocessing.stage_preprocessed import copy_markdown_and_images
 
 
 def write_paper(root: Path, *, complete: bool = True) -> Path:
@@ -16,64 +16,6 @@ def write_paper(root: Path, *, complete: bool = True) -> Path:
     if complete:
         (paper / "_SUCCESS").touch()
     return paper
-
-
-def test_copy_completed_mineru_papers_to_direct_preprocessed_layout(tmp_path: Path) -> None:
-    processed = tmp_path / "processed"
-    paper = write_paper(processed)
-    destination = tmp_path / "preprocessed" / "ACL" / "ACL_paper"
-
-    assert copy_completed_papers(processed, tmp_path / "preprocessed", split_index=None, split="train") == 1
-    assert (paper / "_SUCCESS").exists()
-    assert (destination / "_SUCCESS").exists()
-    assert copy_completed_papers(processed, tmp_path / "preprocessed", split_index=None, split="train") == 0
-
-
-def test_copy_leaves_incomplete_papers_for_mineru_retry(tmp_path: Path) -> None:
-    processed = tmp_path / "processed"
-    paper = write_paper(processed, complete=False)
-
-    assert copy_completed_papers(processed, tmp_path / "preprocessed", split_index=None, split="train") == 0
-    assert paper.exists()
-
-
-def test_copy_also_accepts_domain_directly_under_processed(tmp_path: Path) -> None:
-    processed = tmp_path / "processed"
-    paper = write_paper(processed)
-    direct_paper = processed / "ACL" / "ACL_paper"
-    direct_paper.parent.mkdir()
-    paper.rename(direct_paper)
-
-    assert copy_completed_papers(processed, tmp_path / "preprocessed", split_index=None, split="train") == 1
-    assert direct_paper.exists()
-    assert (tmp_path / "preprocessed" / "ACL" / "ACL_paper" / "_SUCCESS").exists()
-
-
-def test_copy_preserves_existing_preprocessed_paper(tmp_path: Path) -> None:
-    processed = tmp_path / "processed"
-    paper = write_paper(processed)
-    destination = tmp_path / "preprocessed" / "ACL" / "ACL_paper"
-    destination.mkdir(parents=True)
-    (destination / "_SUCCESS").touch()
-    (destination / "paper.json").write_text("{}", encoding="utf-8")
-    (destination / "markdown.md").write_text("# Existing\n", encoding="utf-8")
-
-    marker = destination / "marker"
-    marker.touch()
-    assert copy_completed_papers(processed, tmp_path / "preprocessed", split_index=None, split="train") == 0
-    assert marker.exists()
-    assert paper.exists()
-
-
-def test_copy_rejects_incomplete_existing_destination(tmp_path: Path) -> None:
-    processed = tmp_path / "processed"
-    paper = write_paper(processed)
-    destination = tmp_path / "preprocessed" / "ACL" / "ACL_paper"
-    destination.mkdir(parents=True)
-
-    with pytest.raises(FileExistsError, match="Incomplete preprocessed paper"):
-        copy_completed_papers(processed, tmp_path / "preprocessed", split_index=None, split="train")
-    assert paper.exists()
 
 
 def test_markdown_images_domain_layout_and_idempotence(tmp_path: Path) -> None:
@@ -90,7 +32,7 @@ def test_markdown_images_domain_layout_and_idempotence(tmp_path: Path) -> None:
     (other / "markdown.md").write_text("Other", encoding="utf-8")
     target = tmp_path / "preprocessed"
 
-    options = dict(split_index=None, split="train+test", domains=["ACL"], workers=2)
+    options = dict(domains=["ACL"], workers=2)
     assert copy_markdown_and_images(processed, target, dry_run=True, **options) == 1
     assert not target.exists()
     assert copy_markdown_and_images(processed, target, **options) == 1
@@ -100,3 +42,21 @@ def test_markdown_images_domain_layout_and_idempotence(tmp_path: Path) -> None:
     assert [path.name for path in (destination / "images").iterdir()] == ["fig.png"]
     assert not (target / "Physics").exists()
     assert (paper / "paper.json").exists()
+
+
+def test_markdown_images_rejects_incomplete_existing_destination(tmp_path: Path) -> None:
+    processed = tmp_path / "processed"
+    write_paper(processed)
+    destination = tmp_path / "preprocessed" / "ACL" / "ACL_paper"
+    destination.mkdir(parents=True)
+
+    with pytest.raises(FileExistsError, match="Incomplete or incompatible destination"):
+        copy_markdown_and_images(processed, tmp_path / "preprocessed", domains=["ACL"])
+
+
+def test_markdown_images_requires_completed_paper(tmp_path: Path) -> None:
+    processed = tmp_path / "processed"
+    write_paper(processed, complete=False)
+
+    with pytest.raises(ValueError, match="No completed papers"):
+        copy_markdown_and_images(processed, tmp_path / "preprocessed", domains=["ACL"])

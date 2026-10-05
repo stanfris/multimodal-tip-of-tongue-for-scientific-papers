@@ -146,14 +146,22 @@ def test_pbs_adapter_receives_resources() -> None:
 
 def test_pbs_rt_hc_five_hour_domain_submission() -> None:
     plan, _ = build_plan(config("stage=reduce_and_compact", "launcher=pbs_rt_hc",
-                                "launcher.walltime=05:00:00", "dataset.split_index=null",
-                                "stage.output_format=markdown_images", "stage.domains=[ACL]"), ROOT)
+                                "launcher.walltime=05:00:00", "stage.domains=[ACL]"), ROOT)
     submission = scheduler_command(plan, Path("/tmp/job.sh"), Path("/tmp/logs"))
     assert submission[submission.index("-P") + 1] == plan["launcher"]["project"]
     assert submission[submission.index("-q") + 1] == "rt_HC"
     assert "select=1" in submission
     assert "walltime=05:00:00" in submission
     assert plan["stage"]["domains"] == ["ACL"]
+    assert plan["dataset"]["split_index"] is None
+    assert plan["stage"]["output_format"] == "markdown_images"
+
+
+def test_reduce_and_compact_rejects_legacy_inputs() -> None:
+    with pytest.raises(ValueError, match="output_format must be markdown_images"):
+        build_plan(config("stage=reduce_and_compact", "stage.output_format=full"), ROOT)
+    with pytest.raises(ValueError, match="dataset.split_index=null"):
+        build_plan(config("stage=reduce_and_compact", "dataset.split_index=/tmp/split.json"), ROOT)
 
 
 def test_pbs_job_preserves_venv_python_symlink(tmp_path: Path) -> None:
@@ -365,39 +373,7 @@ def test_mineru_concurrency_hydra_overrides_remain_independent() -> None:
     assert args[args.index("--max-in-flight") + 1] == "16"
 
 
-def test_reduce_and_compact_preserves_mineru_output_and_compacts_copy(tmp_path: Path) -> None:
-    source = tmp_path / "processed" / "papers" / "ACL" / "ACL_paper"
-    content = source / "mineru" / "raw" / "hybrid_auto" / "paper_content_list_v2.json"
-    content.parent.mkdir(parents=True)
-    content.write_text(json.dumps([[{"type": "text", "text": "Paper text"}]]), encoding="utf-8")
-    (source / "markdown.md").write_text("# Paper\n", encoding="utf-8")
-    (source / "paper.json").write_text(json.dumps({
-        "paper_id": "ACL_paper",
-        "source_pdf_relpath": "ACL/paper.pdf",
-        "source_paper_dataset": "ACL",
-        "figures": [],
-        "structured_outputs": {"v2": "mineru/raw/hybrid_auto/paper_content_list_v2.json"},
-    }), encoding="utf-8")
-    (source / "figures.json").write_text("[]", encoding="utf-8")
-    (source / "_SUCCESS").touch()
-    pdf = tmp_path / "pdf_datasets" / "ACL" / "paper.pdf"
-    pdf.parent.mkdir(parents=True)
-    pdf.write_bytes(b"%PDF-1.7\n")
-
-    cfg = config("stage=reduce_and_compact", "launcher=local_gpu",
-                 f"launcher.dataset_root={tmp_path}", "dataset.split_index=null")
-    plan, _ = build_plan(cfg, ROOT, tmp_path / "run")
-    execute_stage(plan)
-
-    destination = tmp_path / "preprocessed" / "ACL" / "ACL_paper"
-    assert (source / "mineru").exists()
-    assert json.loads((source / "paper.json").read_text(encoding="utf-8"))["structured_outputs"]
-    assert (destination / "paper.pdf").read_bytes() == b"%PDF-1.7\n"
-    assert (destination / "images").is_dir()
-    assert not (destination / "mineru").exists()
-
-
-def test_reduce_and_compact_markdown_images_mode_needs_no_pdf(tmp_path: Path) -> None:
+def test_reduce_and_compact_default_needs_no_pdf_or_split_index(tmp_path: Path) -> None:
     source = tmp_path / "processed" / "papers" / "Biology" / "paper_1"
     image = source / "mineru" / "raw" / "images" / "figure.png"
     image.parent.mkdir(parents=True)
@@ -407,14 +383,18 @@ def test_reduce_and_compact_markdown_images_mode_needs_no_pdf(tmp_path: Path) ->
     (source / "figures.json").write_text("[]", encoding="utf-8")
     (source / "_SUCCESS").touch()
     cfg = config("stage=reduce_and_compact", "launcher=local_gpu",
-                 f"launcher.dataset_root={tmp_path}", "dataset.split_index=null",
-                 "stage.output_format=markdown_images", "stage.domains=[Biology]")
+                 f"launcher.dataset_root={tmp_path}", "stage.domains=[Biology]")
     plan, _ = build_plan(cfg, ROOT, tmp_path / "run")
     execute_stage(plan)
     target = tmp_path / "preprocessed" / "Biology" / "paper_1"
     assert {path.name for path in target.iterdir()} == {"markdown.md", "images"}
     assert (target / "images" / "figure.png").read_bytes() == b"PNG"
     assert (source / "_SUCCESS").exists()
+    assert not (tmp_path / "preprocessed_analysis_report.json").exists()
+    assert not (tmp_path / "preprocessed" / "incomplete_documents.json").exists()
+    assert not (tmp_path / "preprocessed" / "compaction_failures.jsonl").exists()
+    execute_stage(plan)
+    assert {path.name for path in target.iterdir()} == {"markdown.md", "images"}
 
 
 def test_mineru_worker_propagates_overrides_to_one_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

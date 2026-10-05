@@ -80,8 +80,10 @@ def build_plan(config: dict[str, Any], repo_root: Path, run_dir: Path | None = N
     name = stage["name"]
     if name not in STAGES:
         raise ValueError(f"Unsupported stage: {name}")
-    if name == "reduce_and_compact" and stage.get("output_format", "full") not in {"full", "markdown_images"}:
-        raise ValueError("stage.output_format must be full or markdown_images")
+    if name == "reduce_and_compact" and stage.get("output_format") != "markdown_images":
+        raise ValueError("stage.output_format must be markdown_images")
+    if name == "reduce_and_compact" and config["dataset"]["split_index"] is not None:
+        raise ValueError("reduce_and_compact requires dataset.split_index=null")
     split = config["split"]["name"]
     if split not in {"train", "test", "train+test", "other"}:
         raise ValueError(f"Unsupported split: {split}")
@@ -342,34 +344,16 @@ def execute_stage(plan: dict[str, Any]) -> None:
     elif name == "judge_queries":
         judge_queries(judge_parser().parse_args(["--settings", settings, "--set", split]))
     elif name == "reduce_and_compact":
-        from preprocessing.reduce_preprocessed_collection import main as reduce
-        from preprocessing.compact_preprocessed_collection import main as compact
-        from preprocessing.stage_preprocessed import copy_completed_papers, copy_markdown_and_images
+        from preprocessing.stage_preprocessed import copy_markdown_and_images
         dataset, stage = plan["dataset"], plan["stage"]
         repo_root = Path(plan["repo_root"])
         processed = absolute(dataset["processed_root"], repo_root)
         preprocessed = absolute(dataset["preprocessed"], repo_root)
-        pdf_dir = absolute(dataset["pdf_dir"], repo_root)
-        split_index = absolute(dataset["split_index"], repo_root) if dataset["split_index"] else None
-        domains = stage.get("domains")
-        if stage.get("output_format", "full") == "markdown_images":
-            count = copy_markdown_and_images(
-                processed, preprocessed, split_index=split_index, split=split,
-                domains=domains, dry_run=bool(stage["dry_run"]), workers=int(stage["workers"]),
-            )
-            print(f"{'Would stage' if stage['dry_run'] else 'Staged'} {count} markdown/image papers in {preprocessed}", flush=True)
-            return
-        if stage["dry_run"]:
-            work_dir = processed
-        else:
-            copied = copy_completed_papers(processed, preprocessed, split_index=split_index, split=split)
-            print(f"Copied {copied} completed MinerU papers to {preprocessed}", flush=True)
-            work_dir = preprocessed
-        common = dict(preprocessed_dir=work_dir, split_index=split_index, split=split,
-                      workers=int(stage["workers"]), dry_run=bool(stage["dry_run"]),
-                      fail_fast=bool(stage["fail_fast"]), progress_every=int(stage["progress_every"]))
-        reduce(argparse.Namespace(**common, report=preprocessed.parent / "preprocessed_analysis_report.json"))
-        compact(argparse.Namespace(**common, root_dir=Path(plan["data_root"]), pdf_dir=pdf_dir))
+        count = copy_markdown_and_images(
+            processed, preprocessed, domains=stage.get("domains"),
+            dry_run=bool(stage["dry_run"]), workers=int(stage["workers"]),
+        )
+        print(f"{'Would stage' if stage['dry_run'] else 'Staged'} {count} markdown/image papers in {preprocessed}", flush=True)
 
 
 def execute_worker(plan_path: Path) -> int:

@@ -4,11 +4,11 @@ stage:
   name: reduce_and_compact
   limit: null
   workers: ${launcher.cpus}
-  progress_every: 100
-  fail_fast: false
   dry_run: false
   domains: null
-  output_format: full
+  output_format: markdown_images
+dataset:
+  split_index: null
 hydra:
   job:
     name: reduce_and_compact
