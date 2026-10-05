@@ -35,9 +35,6 @@ def load_backend(provider: str, model: str, *, runtime: dict[str, Any] | None = 
     if provider == "transformers":
         from inference.transformers import TransformersBackend
         return TransformersBackend(model, runtime or {}, image or {})
-    if provider == "mlx":
-        from inference.mlx import MLXBackend
-        return MLXBackend(model, runtime or {}, image or {})
     if provider == "vllm":
         from inference.vllm import VLLMBackend
         return VLLMBackend(model, runtime or {}, image or {})

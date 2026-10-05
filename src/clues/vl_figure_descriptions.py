@@ -37,7 +37,6 @@ from inference.base import ordered_results
 
 
 DEFAULT_MODELS = {
-    "mlx": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
     "transformers": "Qwen/Qwen3-VL-4B-Instruct",
     "vllm": "Qwen/Qwen3-VL-4B-Instruct",
 }
@@ -56,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Qwen-VL visual descriptions for scientific figures.")
     parser.add_argument("--settings", type=Path, default=None, help="Managed settings YAML for standard full runs.")
     parser.add_argument("--set", choices=["train", "test"], default="train", help="Managed dataset split to process.")
-    parser.add_argument("--backend", choices=sorted(DEFAULT_MODELS), default="mlx")
+    parser.add_argument("--backend", choices=sorted(DEFAULT_MODELS), default="transformers")
     parser.add_argument("--model", default=None, help="Model name. Defaults depend on --backend.")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Local data root.")
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID, help="Interpretation artifact run ID.")
@@ -204,33 +203,6 @@ def iter_samples_from_preprocessed_dataset(
     return samples
 
 
-def load_mlx_model(model_name: str) -> dict[str, Any]:
-    from mlx_vlm import load
-    from mlx_vlm.utils import load_config
-
-    model, processor = load(model_name)
-    config = load_config(model_name)
-    return {"model": model, "processor": processor, "config": config}
-
-
-def generate_with_mlx(loaded: dict[str, Any], image_path: Path, prompt: str, max_tokens: int, temperature: float) -> str:
-    from mlx_vlm import generate
-    from mlx_vlm.prompt_utils import apply_chat_template
-
-    formatted_prompt = apply_chat_template(loaded["processor"], loaded["config"], prompt, num_images=1)
-    output = generate(
-        loaded["model"],
-        loaded["processor"],
-        formatted_prompt,
-        [str(image_path)],
-        max_tokens=max_tokens,
-        temperature=temperature,
-        verbose=False,
-    )
-    text = getattr(output, "text", output)
-    return str(text).strip()
-
-
 def load_transformers_model(
     model_name: str,
     device_map: str,
@@ -293,8 +265,6 @@ def generate_with_transformers(
 def load_generator(args: argparse.Namespace, model_name: str) -> tuple[dict[str, Any], Callable[..., str]]:
     print(f"Loading backend: {args.backend}")
     print(f"Loading model: {model_name}")
-    if args.backend == "mlx":
-        return load_mlx_model(model_name), generate_with_mlx
     return (
         load_transformers_model(
             model_name=model_name,

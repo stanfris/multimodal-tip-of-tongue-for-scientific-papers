@@ -142,20 +142,17 @@ split and is not the canonical input to extraction.
 
 The generative stages use `src/inference`: each stage submits `GenerationRequest`
 windows and receives ordered `GenerationResult` values. `transformers` performs
-padded model batches, `vllm` submits the whole window to the offline engine for
-continuous batching, and `mlx` retains the local Apple Silicon path. Backend
-packages are imported only when selected. Existing clue and query output paths,
-JSONL rows, and resume keys are unchanged.
+padded model batches, and `vllm` submits the whole window to the offline engine
+for continuous batching. Backend packages are imported only when selected.
+Existing clue and query output paths, JSONL rows, and resume keys are unchanged.
 
-Select the backend with `model.provider=transformers`, `model.provider=mlx`, or
-`model.provider=vllm`. The model choice is independent: `model=qwen3_vl`,
+Select the backend with `model.provider=transformers` or `model.provider=vllm`.
+The model choice is independent: `model=qwen3_vl`,
 `model=qwen3_text`, `model=phi4`, and `model=gemma3_judge` still work. Install
 vLLM in the H200 worker environment before submitting vLLM runs, for example
 with `uv pip install --python .venv/bin/python vllm` after the normal environment
 sync. vLLM is outside the base dependencies because its CUDA packages prevent
 installation on Apple Silicon. The local test environment does not need it.
-The MLX provider needs `mlx-lm` for text and `mlx-vlm` for figures on Apple
-Silicon.
 
 The `pbs_h200` launcher requests one GPU. Its starting `max_num_seqs` values
 are 64 for Qwen3-VL, 256 for Qwen3 text, 128 for Phi-4, and 64 for Gemma 3

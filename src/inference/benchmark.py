@@ -67,7 +67,7 @@ def representative_requests(stage: str, dataset: Path, clues_dir: Path, count: i
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", choices=MODELS)
-    parser.add_argument("--provider", choices=["vllm", "transformers", "mlx"], required=True)
+    parser.add_argument("--provider", choices=["vllm", "transformers"], required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--dataset", type=Path, default=Path("data/preprocessed"))
     parser.add_argument("--clues-dir", type=Path, default=Path("data/clues"))
@@ -88,7 +88,7 @@ def main() -> None:
                         "max_num_seqs": seq, "max_num_batched_tokens": args.max_num_batched_tokens,
                         "dtype": "bfloat16", "kv_cache_dtype": "auto", "enable_prefix_caching": True,
                         "mm_processor_cache_gb": 1} if args.provider == "vllm" else
-                       {"device_map": "auto", "dtype": "bfloat16"} if args.provider == "transformers" else {})
+                       {"device_map": "auto", "dtype": "bfloat16"})
             if args.provider == "vllm" and args.stage in {"visual", "judge"}:
                 runtime["limit_mm_per_prompt"] = {"image": 16}
             backend = load_backend(args.provider, args.model or MODELS[args.stage], runtime=runtime,

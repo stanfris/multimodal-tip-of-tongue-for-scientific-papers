@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt-id", default="query_judgement")
     parser.add_argument("--prompt-version", default="v1")
     parser.add_argument("--model", default=DEFAULT_JUDGEMENT_MODEL)
-    parser.add_argument("--provider", choices=["transformers", "vllm", "mlx"], default="transformers")
+    parser.add_argument("--provider", choices=["transformers", "vllm"], default="transformers")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=900)

@@ -39,7 +39,6 @@ from inference.base import ordered_results
 
 
 DEFAULT_MODELS: dict[str, str | None] = {
-    "mlx": "Qwen/Qwen3-1.7B-MLX-8bit",
     "transformers": "Qwen/Qwen3-4B",
     "vllm": "Qwen/Qwen3-4B",
 }
@@ -59,11 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate textual memory cues from paper markdown.")
     parser.add_argument("--settings", type=Path, default=None, help="Managed settings YAML for standard full runs.")
     parser.add_argument("--set", choices=["train", "test"], default="train", help="Managed dataset split to process.")
-    parser.add_argument("--backend", choices=sorted(DEFAULT_MODELS), default="mlx")
+    parser.add_argument("--backend", choices=sorted(DEFAULT_MODELS), default="transformers")
     parser.add_argument(
         "--model",
         default=None,
-        help="Model name. Defaults to Qwen/Qwen3-1.7B-MLX-8bit for MLX.",
+        help="Model name. Defaults depend on --backend.",
     )
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Local data root.")
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID, help="Interpretation artifact run ID.")
@@ -250,48 +249,6 @@ def extract_gpt_oss_final_text(text: str) -> str | None:
     return final_text
 
 
-def load_mlx_model(model_name: str) -> dict[str, Any]:
-    from mlx_lm import load
-
-    model, tokenizer = load(model_name)
-    return {"model": model, "tokenizer": tokenizer, "model_id": model_name}
-
-
-def generate_with_mlx(
-    loaded: dict[str, Any],
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-    thinking: bool = False,
-) -> str:
-    from mlx_lm import generate
-    from mlx_lm.sample_utils import make_sampler
-
-    tokenizer = loaded["tokenizer"]
-    gpt_oss = is_gpt_oss_model(loaded.get("model_id"))
-    if gpt_oss:
-        prompt = apply_gpt_oss_chat_template(tokenizer, prompt)
-    else:
-        prompt = apply_text_chat_template(tokenizer, prompt, thinking=thinking)
-    for token_limit in ([max_tokens, max(max_tokens * 2, 512)] if gpt_oss else [max_tokens]):
-        output = generate(
-            loaded["model"],
-            tokenizer,
-            prompt=prompt,
-            max_tokens=token_limit,
-            sampler=make_sampler(temp=temperature),
-            verbose=False,
-        )
-        text = str(output).strip()
-        if gpt_oss:
-            final_text = extract_gpt_oss_final_text(text)
-            if final_text is not None:
-                return final_text
-    if gpt_oss:
-        raise RuntimeError("gpt-oss output did not include a final channel after retry.")
-    return text if thinking else strip_thinking(text)
-
-
 def load_transformers_model(
     model_name: str,
     device_map: str,
@@ -410,8 +367,6 @@ def generate_batch_with_transformers(
 def load_generator(args: argparse.Namespace, model_name: str) -> tuple[dict[str, Any], Callable[..., str]]:
     print(f"Loading backend: {args.backend}")
     print(f"Loading model: {model_name}")
-    if args.backend == "mlx":
-        return load_mlx_model(model_name), generate_with_mlx
     return (
         load_transformers_model(
             model_name=model_name,

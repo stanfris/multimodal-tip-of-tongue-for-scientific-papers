@@ -50,7 +50,6 @@ DEFAULT_TEXTUAL_COMPONENT_BUDGET = 3
 DEFAULT_VISUAL_QUERY_NAME = "query_generation"
 DEFAULT_MODELS = {
     "null": "null",
-    "mlx": "Qwen/Qwen3-1.7B-MLX-8bit",
     "transformers": "Qwen/Qwen3-4B",
     "vllm": "microsoft/phi-4",
 }
@@ -923,7 +922,7 @@ def _validate_config(config: QueryGenerationConfig) -> None:
         raise ValueError("The null query-generation provider expects model to be 'null'.")
     if config.model_provider != "null" and config.model == "null":
         raise ValueError("Non-null query-generation providers require a real model name.")
-    if config.judgement_model_provider not in {"transformers", "vllm", "mlx"}:
+    if config.judgement_model_provider not in {"transformers", "vllm"}:
         raise ValueError("Unsupported query-judgement model provider")
     if not config.judgement_model:
         raise ValueError("judgement_model must be set")
