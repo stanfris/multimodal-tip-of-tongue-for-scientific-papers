@@ -19,7 +19,6 @@ EXPECTED_ENTRYPOINTS = {
     "scripts/extraction/probe_mineru_env.sh": "dataset-generation probe-mineru-env",
     "scripts/extraction/benchmark_mineru_extraction.sh": "dataset-generation benchmark-mineru-pdfs",
     "scripts/preprocessing/parsed_dataset_stats.sh": "dataset-generation parsed-dataset-stats",
-    "scripts/reporting/generated_artifact_stats.sh": "dataset-generation stats",
     "scripts/packaging/prepare_huggingface_dataset.sh": "dataset-generation prepare-hf-dataset",
     "scripts/packaging/restore_pdf_datasets_from_huggingface.sh": "python -m dataset_packaging.restore_hf_dataset",
 }
@@ -64,6 +63,28 @@ def test_huggingface_upload_wrapper_selects_additional_mode(tmp_path: Path) -> N
 
     subprocess.run(["bash", str(wrapper), "package"], check=True, env=env)
     assert "--upload-only" in capture.read_text().splitlines()
+
+
+def test_mineru_wrapper_places_stage_before_hydra_arguments(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CAPTURE_ARGS"\n')
+    fake_uv.chmod(0o755)
+    capture = tmp_path / "args.txt"
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "CAPTURE_ARGS": str(capture)}
+    wrapper = PROJECT_ROOT / "scripts/extraction/run_mineru_full_extraction.sh"
+
+    subprocess.run(["bash", str(wrapper), "split=train", "launcher=slurm_a100", "-m"], check=True, env=env)
+    assert capture.read_text().splitlines() == [
+        "run", "--no-sync", "dataset-generation", "stage=extract_mineru",
+        "split=train", "launcher=slurm_a100", "-m",
+    ]
+
+    subprocess.run(["bash", str(wrapper), "--help"], check=True, env=env)
+    assert capture.read_text().splitlines()[3:6] == [
+        "extract-mineru-pdfs", "--input-dir", "data/pdf_datasets",
+    ]
 
 
 def test_main_and_mineru_environment_switchers_exist() -> None:

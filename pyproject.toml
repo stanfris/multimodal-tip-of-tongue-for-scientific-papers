@@ -1,7 +1,7 @@
 [project]
 name = "dataset-generation"
 version = "0.1.0"
-description = "Build a persisted curated ACL Anthology research dataset."
+description = "Build a multimodal tip-of-the-tongue research dataset for scientific papers."
 readme = "README.md"
 authors = [
     { name = "Stan Fris", email = "stanfris2.0@gmail.com" }
@@ -25,7 +25,6 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "kaggle>=2.2.4",
     "scikit-learn>=1.9.1",
-    "vllm>=0.26.0",
 ]
 
 [project.scripts]

@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 
@@ -55,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Test PDFs to sample from each dataset folder (default: 110).",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Replace an existing split with different membership."
+    )
     parser.add_argument(
         "--datasets",
         nargs="+",
@@ -135,9 +140,38 @@ def build_pdf_dataset_split(
     }
 
 
-def write_pdf_dataset_split(split_index: dict[str, Any], output: Path) -> Path:
+def write_pdf_dataset_split(split_index: dict[str, Any], output: Path, *, overwrite: bool = False) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(split_index, indent=2, sort_keys=True), encoding="utf-8")
+    if output.exists() and not overwrite:
+        try:
+            existing = json.loads(output.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Existing split is invalid JSON: {output}; use --overwrite to replace it") from exc
+        if (
+            isinstance(existing, dict)
+            and existing.get("train") == split_index["train"]
+            and existing.get("test") == split_index["test"]
+        ):
+            if not isinstance(existing.get("metadata"), dict):
+                raise ValueError(f"Existing split lacks metadata: {output}; use --overwrite to replace it")
+            return output
+        raise FileExistsError(f"Existing split has different membership: {output}; use --overwrite to replace it")
+    with NamedTemporaryFile(
+        "w", encoding="utf-8", prefix=f".{output.name}.", suffix=".tmp",
+        dir=output.parent, delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        try:
+            json.dump(split_index, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
     return output
 
 
@@ -151,8 +185,9 @@ def main() -> int:
         test_size_per_dataset=args.test_size_per_dataset,
         seed=args.seed,
     )
-    output_path = write_pdf_dataset_split(split_index, output)
-    print(json.dumps({"output": str(output_path), **split_index["metadata"]}, indent=2, sort_keys=True))
+    output_path = write_pdf_dataset_split(split_index, output, overwrite=args.overwrite)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    print(json.dumps({"output": str(output_path), **saved["metadata"]}, indent=2, sort_keys=True))
     return 0
 
 

@@ -1,5 +1,0 @@
-Job 27295060 processes the full train+test split from /scratch-shared/sfris1/pdf_datasets.
-MinerU server and caller concurrency: 8
-MinerU server log: scripts/extraction/slurm/27295060.server.log
-MinerU caller log: scripts/extraction/slurm/27295060.caller.log
-Temporary path: /tmp/sfris1/mineru_27295060

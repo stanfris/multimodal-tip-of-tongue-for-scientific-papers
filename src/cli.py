@@ -24,7 +24,6 @@ from document_downloads.pmc_oa_subset import build_parser as build_pmc_oa_subset
 from document_downloads.pmc_oa_subset import run as run_pmc_oa_subset
 from dataset_packaging.hf_dataset_packaging import build_parser as build_hf_dataset_parser
 from dataset_packaging.hf_dataset_packaging import run as run_hf_dataset
-from dataset_packaging.storage import read_stats
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -69,9 +68,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Package, validate, and upload the shared PDF corpus to Hugging Face.",
     )
 
-    stats = subparsers.add_parser("stats", help="Print stats for a generated artifact.")
-    stats.add_argument("--dataset", required=True, help="Generated artifact directory.")
-
     parsed_stats = subparsers.add_parser(
         "parsed-dataset-stats",
         parents=[build_parsed_stats_parser()],
@@ -82,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def legacy_main(argv: list[str] | None = None) -> int:
+def operational_main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -114,10 +110,6 @@ def legacy_main(argv: list[str] | None = None) -> int:
         print(json.dumps(run_hf_dataset(args), indent=2, sort_keys=True))
         return 0
 
-    if args.command == "stats":
-        print(json.dumps(read_stats(args.dataset), indent=2, sort_keys=True))
-        return 0
-
     if args.command == "parsed-dataset-stats":
         print(json.dumps(run_parsed_stats(args), indent=2, sort_keys=True))
         return 0
@@ -128,13 +120,13 @@ def legacy_main(argv: list[str] | None = None) -> int:
 
 def main() -> None:
     """Hydra owns pipeline stages; operational utilities keep their own CLI."""
-    legacy_utilities = {
+    operational_commands = {
         "probe-mineru-env", "extract-mineru-pdfs", "benchmark-mineru-pdfs",
         "build-arxiv-open-reuse", "build-pmc-oa-subset", "download-documents",
-        "prepare-hf-dataset", "stats", "parsed-dataset-stats",
+        "prepare-hf-dataset", "parsed-dataset-stats",
     }
-    if len(sys.argv) > 1 and sys.argv[1] in legacy_utilities:
-        raise SystemExit(legacy_main())
+    if len(sys.argv) > 1 and sys.argv[1] in operational_commands:
+        raise SystemExit(operational_main())
     hydra_main()
 
 

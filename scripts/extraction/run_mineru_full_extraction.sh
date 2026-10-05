@@ -14,4 +14,4 @@ case "${1:-}" in
     ;;
 esac
 
-UV_CACHE_DIR="${UV_CACHE_DIR:-$ROOT_DIR/.uv-cache}" exec uv run --no-sync dataset-generation "$@" stage=extract_mineru
+UV_CACHE_DIR="${UV_CACHE_DIR:-$ROOT_DIR/.uv-cache}" exec uv run --no-sync dataset-generation stage=extract_mineru "$@"

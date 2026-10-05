@@ -1,3 +1,0 @@
-[2026-09-28T09:14:07Z] Starting MinerU server: /gpfs/home5/sfris1/multimodal-tip-of-tongue-for-scientific-papers/.venv-mineru/bin/mineru-router --host 127.0.0.1 --port 46625
-[2026-09-28T09:14:11Z] Received SIGTERM; cleaning up MinerU server
-[2026-09-28T09:14:11Z] Stopping MinerU server pid=3568775

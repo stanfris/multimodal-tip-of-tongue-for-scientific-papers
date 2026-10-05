@@ -565,11 +565,10 @@ def test_wrappers_forward_hydra_overrides(tmp_path: Path) -> None:
             "run", "--no-sync", "dataset-generation", f"stage={stage}", "split=test", "stage.limit=3",
         ]
     subprocess.run([str(ROOT / "scripts/extraction/run_mineru_full_extraction.sh"),
-                    "-m", "stage=extract_mineru", "split=train", "launcher=slurm_a100"],
-                   check=True, env=env)
+                    "split=train", "launcher=slurm_a100", "-m"], check=True, env=env)
     assert json.loads(capture.read_text()) == [
-        "run", "--no-sync", "dataset-generation", "-m", "stage=extract_mineru",
-        "split=train", "launcher=slurm_a100", "stage=extract_mineru"]
+        "run", "--no-sync", "dataset-generation", "stage=extract_mineru",
+        "split=train", "launcher=slurm_a100", "-m"]
     subprocess.run([str(ROOT / "scripts/extraction/run_mineru_full_extraction.sh"),
                     "--split", "train", "--limit", "3"], check=True, env=env)
     assert json.loads(capture.read_text()) == [

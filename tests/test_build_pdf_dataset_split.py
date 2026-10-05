@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from pdf_corpus.build_pdf_dataset_split import DEFAULT_DATASETS
 from pdf_corpus.build_pdf_dataset_split import DEFAULT_TEST_SIZE_PER_DATASET
 from pdf_corpus.build_pdf_dataset_split import DEFAULT_TRAIN_SIZE_PER_DATASET
-from pdf_corpus.build_pdf_dataset_split import build_parser, build_pdf_dataset_split, resolve_paths
+from pdf_corpus.build_pdf_dataset_split import build_parser, build_pdf_dataset_split, resolve_paths, write_pdf_dataset_split
 
 
 def make_pdf_dataset(root, dataset: str, count: int) -> None:
@@ -108,3 +110,31 @@ def test_build_pdf_dataset_split_requires_enough_pdfs(tmp_path) -> None:
             train_size_per_dataset=2,
             test_size_per_dataset=1,
         )
+
+
+def test_split_writer_preserves_existing_membership_until_explicit_overwrite(tmp_path) -> None:
+    output = tmp_path / "splits" / "split.json"
+    original = {"train": ["ACL/first.pdf"], "test": ["ACL/second.pdf"], "metadata": {"created_at_utc": "first"}}
+    changed = {"train": ["ACL/second.pdf"], "test": ["ACL/first.pdf"], "metadata": {"created_at_utc": "second"}}
+
+    write_pdf_dataset_split(original, output)
+    write_pdf_dataset_split({**original, "metadata": {"created_at_utc": "later"}}, output)
+    assert json.loads(output.read_text()) == original
+    with pytest.raises(FileExistsError, match="different membership"):
+        write_pdf_dataset_split(changed, output)
+    assert json.loads(output.read_text()) == original
+
+    write_pdf_dataset_split(changed, output, overwrite=True)
+    assert json.loads(output.read_text()) == changed
+    assert list(output.parent.glob("*.tmp")) == []
+
+
+def test_split_writer_rejects_partial_existing_index(tmp_path) -> None:
+    output = tmp_path / "split.json"
+    split = {"train": ["ACL/a.pdf"], "test": [], "metadata": {"seed": 42}}
+    output.write_text('{"train":')
+    with pytest.raises(ValueError, match="invalid JSON"):
+        write_pdf_dataset_split(split, output)
+    output.write_text(json.dumps({"train": split["train"], "test": split["test"]}))
+    with pytest.raises(ValueError, match="lacks metadata"):
+        write_pdf_dataset_split(split, output)

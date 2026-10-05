@@ -22,7 +22,7 @@ The PDFs form a shared retrieval corpus. Query and evaluation collections refer 
 | --- | --- |
 | `data/<SOURCE>/shard-*.tar` | Source PDFs, each paired with a JSON sidecar |
 | `metadata.parquet` | PDF index: identifiers, original paths, shard members, checksums, and available bibliographic fields |
-| `preprocessed/<DOMAIN>/shard-*.tar` | Parsed paper text, figures, and other extraction output, with paths relative to the domain |
+| `preprocessed/<DOMAIN>/shard-*.tar` | Preprocessed paper files, preserving the local paths relative to each domain; full mode has markdown, metadata, images, and a PDF, while lean mode has markdown and images |
 | `clues/<DOMAIN>/shard-*.tar` | Generated textual and visual clues, with paths relative to the domain |
 | `query_collections/` | Generated query and evaluation collections |
 | `splits/` | Split definitions and related indexes |

@@ -198,6 +198,16 @@ def test_discover_pdfs_can_follow_train_test_split_index(tmp_path: Path) -> None
     ]
 
 
+def test_discover_pdfs_rejects_split_paths_outside_corpus(tmp_path: Path) -> None:
+    input_dir = tmp_path / "pdf_datasets"
+    input_dir.mkdir()
+    split_index = tmp_path / "split.json"
+    split_index.write_text(json.dumps({"train": ["../outside.pdf"], "test": []}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid relative PDF path"):
+        discover_pdfs(input_dir, split_index=split_index, split="train")
+
+
 def test_discover_pdfs_can_select_train_and_test_for_one_domain(tmp_path: Path) -> None:
     input_dir = tmp_path / "pdf_datasets"
     write_pdf(input_dir / "ACL" / "train.pdf")

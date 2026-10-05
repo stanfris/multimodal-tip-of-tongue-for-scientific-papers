@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from common.jsonl import append_jsonl_object, read_jsonl_objects
+from common.validation import validate_pdf_split_index
 
 
 DEFAULT_DATA_DIR = Path("data")
@@ -176,13 +177,11 @@ def _completed_candidate(root: Path, subset: str, paper_ids: tuple[str, ...]) ->
 
 def _split_paper_candidates(split_index: Path, split: str) -> list[dict[str, Any]]:
     index = json.loads(split_index.read_text(encoding="utf-8"))
+    indexed_paths = validate_pdf_split_index(index, split_index)
     split_names = ("train", "test") if split in {"all", "train+test"} else (split,)
     relative_paths: list[Path] = []
     for split_name in split_names:
-        rows = index.get(split_name)
-        if not isinstance(rows, list) or not all(isinstance(row, str) for row in rows):
-            raise ValueError(f"Split index {split_index} does not contain a string list for {split_name!r}")
-        relative_paths.extend(Path(row) for row in rows)
+        relative_paths.extend(indexed_paths[split_name])
 
     candidates = []
     for path in relative_paths:

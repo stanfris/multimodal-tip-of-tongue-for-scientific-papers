@@ -17,7 +17,7 @@ src/
   preprocessing/         # Preprocessed paper readers and cleanup tools
   clues/                 # Textual and visual clue generation
   queries/               # Query generation, judgement, and test collections
-  dataset_packaging/     # Dataset schema, storage, and Hugging Face packaging
+  dataset_packaging/     # Hugging Face packaging and restoration
   review/                # Streamlit query review application
 
 scripts/
@@ -30,7 +30,6 @@ scripts/
   clue_generation/       # Clue-generation wrappers
   query_generation/      # Query-generation and judgement wrappers
   review/                # Query review application launcher
-  reporting/             # Generated-artifact reporting wrappers
   packaging/             # Hugging Face upload/download wrappers
 
 config/                   # Hydra launcher, stage, split, model, and dataset groups
@@ -127,8 +126,12 @@ Download results and reports live under `data/acl_subset/`,
 `data/arxiv_open_reuse/pdfs_by_domain/` and `data/pdf_datasets/`. The last
 command requires the five assembled PDF folders and writes
 `data/splits/pdf_dataset_split.json` (2,200 train and 110 test PDFs per
-folder by default). These utilities report progress to the terminal; they do
-not use Hydra run logs. Inspect options with, for example,
+folder by default). Rerunning the split command preserves an existing index
+when membership is unchanged and refuses to replace a different split unless
+`--overwrite` is supplied. Extraction and preprocessing reject split indexes
+with duplicate, overlapping, or out-of-corpus PDF paths. These utilities report
+progress to the terminal;
+they do not use Hydra run logs. Inspect options with, for example,
 `scripts/pdf_corpus/build_pdf_dataset_split.sh --help`. The old
 `scripts/document_splits/build_document_split.sh` is a post-extraction legacy
 split and is not the canonical input to extraction.
@@ -149,7 +152,10 @@ Select the backend with `model.provider=transformers`, `model.provider=mlx`, or
 `model=qwen3_text`, `model=phi4`, and `model=gemma3_judge` still work. Install
 vLLM in the H200 worker environment before submitting vLLM runs, for example
 with `uv pip install --python .venv/bin/python vllm` after the normal environment
-sync. The local test environment does not need it.
+sync. vLLM is outside the base dependencies because its CUDA packages prevent
+installation on Apple Silicon. The local test environment does not need it.
+The MLX provider needs `mlx-lm` for text and `mlx-vlm` for figures on Apple
+Silicon.
 
 The `pbs_h200` launcher requests one GPU. Its starting `max_num_seqs` values
 are 64 for Qwen3-VL, 256 for Qwen3 text, 128 for Phi-4, and 64 for Gemma 3
@@ -214,17 +220,13 @@ paths. Individual `launcher.pdf_dir`, `launcher.processed_root`, and
 separately controls query output. Indexed extraction requires the split index;
 full-folder MinerU extraction with `stage.all_domain_pdfs=true` ignores it.
 
-The reduction, figure, textual, query, and judge wrappers put `stage=...`
-**before** user arguments. For their Slurm calls, put overrides before `-m`,
-as shown below. The MinerU wrapper instead appends `stage=extract_mineru`
-**after** user arguments: its working form puts `-m` first, followed by
-`split=` and `launcher=`. It also switches to the direct argparse extraction
-client when its first argument begins with a recognized `--` option; that
-client requires an already running MinerU server. `-m` submits through Hydra
+All Hydra stage wrappers put `stage=...` before user arguments. For Slurm
+calls, put overrides before `-m`, as shown below. The MinerU wrapper also
+switches to the direct argparse extraction client when its first argument
+begins with a recognized `--` option. That client requires an already running
+MinerU server. `-m` submits through Hydra
 Submitit; `dry_run=true` prints a plan without creating a run or submitting.
-`--cfg job --resolve` inspects composition only. For MinerU, use the
-entrypoint directly for `--cfg` because its wrapper appends `stage=` after
-all supplied arguments, which Hydra rejects when `--cfg` is present.
+`--cfg job --resolve` inspects composition only.
 
 ```bash
 scripts/preprocessing/reduce_and_compact_preprocessed.sh split=train launcher=slurm_cpu -m
@@ -305,9 +307,9 @@ are inherited by both the MinerU server and extraction caller.
 scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200
 scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200 stage.server_concurrency=24 stage.max_in_flight=24
 scripts/extraction/run_mineru_full_extraction.sh split=train launcher=pbs_h200 dry_run=true
-scripts/extraction/run_mineru_full_extraction.sh -m split=train launcher=slurm_a100
-scripts/extraction/run_mineru_full_extraction.sh -m split=other launcher=slurm_a100
-scripts/extraction/run_mineru_full_extraction.sh -m split=train+test launcher=slurm_a100 stage.all_domain_pdfs=true 'stage.domains=[ACL]'
+scripts/extraction/run_mineru_full_extraction.sh split=train launcher=slurm_a100 -m
+scripts/extraction/run_mineru_full_extraction.sh split=other launcher=slurm_a100 -m
+scripts/extraction/run_mineru_full_extraction.sh split=train+test launcher=slurm_a100 stage.all_domain_pdfs=true 'stage.domains=[ACL]' -m
 ```
 
 Set `dataset.pdf_dir`, `dataset.processed_root`, and `dataset.split_index`
@@ -366,7 +368,7 @@ environment. From the repository root, after creating the split index and
 `.venv-mineru`, submit:
 
 ```bash
-INPUT_DIR="$PWD/data/pdf_datasets" OUTPUT_DIR="$PWD/data/preprocessed" sbatch \
+INPUT_DIR="$PWD/data/pdf_datasets" OUTPUT_DIR="$PWD/data/processed" sbatch \
   scripts/extraction/slurm/run_mineru_full_extraction_a100.job \
   --root-dir "$PWD" --split train \
   --split-index "$PWD/data/splits/pdf_dataset_split.json"
@@ -375,7 +377,8 @@ INPUT_DIR="$PWD/data/pdf_datasets" OUTPUT_DIR="$PWD/data/preprocessed" sbatch \
 This script uses
 `logs/extraction/slurm/mineru_extract_<job-id>.out` and `.err`, plus
 `<job-id>.server.log` and `.caller.log`. Check completion with `sacct`
-and the caller log as above. This path is separate from the broken Hydra worker.
+and the caller log as above. This job script is separate from the Hydra
+launcher and uses `MINERU_CONCURRENCY=8` unless overridden in its environment.
 
 ### Packaging and review
 
@@ -888,7 +891,8 @@ and writes `/scratch-shared/sfris1/splits/pdf_dataset_split.json`.
 The split contains source documents, not a guaranteed number of generated
 queries: downstream generation can emit one or more queries per selected PDF.
 Use `--train-size-per-dataset` and `--test-size-per-dataset` to override these
-document counts.
+document counts. If the selected documents change on a later run, the command
+refuses to replace the existing split unless you pass `--overwrite`.
 
 The selector/downloader uses `.part` files for atomic PDF writes, PDF header
 validation before marking success, and stable filenames derived from arXiv
@@ -924,14 +928,22 @@ argparse branch is selected only when its first argument is a recognized
 
 ## Output Schema
 
-Each preprocessed paper directory must contain:
+After the default `stage.output_format=full` reduction and compaction, each
+preprocessed paper directory contains:
 
 | Field | Description |
 | --- | --- |
 | `paper.json` | Paper metadata, including `paper_id` and extracted figures |
 | `markdown.md` | Extracted full-paper markdown |
 | `figures.json` | Extracted figure metadata |
-| `mineru/` | MinerU output files and image assets |
+| `images/` | Compacted figure and table image assets |
+| `*.pdf` | Copy of the source PDF |
+| `_SUCCESS` | MinerU completion marker preserved from the processed copy |
+
+With `stage.output_format=markdown_images`, each preprocessed paper directory
+contains only `markdown.md` and `images/`.
+The raw MinerU files remain under `data/processed/papers/` and are removed
+from the compacted preprocessed copy.
 
 ## Synthetic Test Collections
 

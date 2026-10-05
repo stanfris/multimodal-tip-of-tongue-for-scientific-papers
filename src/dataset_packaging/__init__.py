@@ -1,1 +1,1 @@
-"""Dataset validation, storage, and publishing."""
+"""Hugging Face dataset packaging, download, and restoration."""

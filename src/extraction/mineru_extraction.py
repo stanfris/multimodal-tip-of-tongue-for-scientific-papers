@@ -33,6 +33,7 @@ from typing import Any
 
 import httpx
 from PIL import Image
+from common.validation import validate_pdf_split_index
 from preprocessing.parse_tracking import INCOMPLETE_DOCUMENTS_FILENAME
 from preprocessing.parse_tracking import read_incomplete_documents
 from preprocessing.parse_tracking import write_incomplete_documents
@@ -897,16 +898,9 @@ def discover_split_pdfs(
     domains: Iterable[str] | None = None,
 ) -> tuple[list[Path], dict[Path, str]]:
     index = read_json(split_index)
+    indexed_paths = validate_pdf_split_index(index, split_index)
     if split == "other":
-        excluded: set[Path] = set()
-        for split_name in ("train", "test"):
-            rows = index.get(split_name)
-            if not isinstance(rows, list):
-                raise ValueError(f"Split index {split_index} does not contain a list for {split_name!r}")
-            for row in rows:
-                if not isinstance(row, str):
-                    raise ValueError(f"Split index {split_index} has a non-string path in {split_name!r}: {row!r}")
-                excluded.add(Path(row))
+        excluded = set(indexed_paths["train"]) | set(indexed_paths["test"])
         selected_domains = set(domains) if domains is not None else None
         paths = sorted(
             path for path in input_dir.rglob("*.pdf")
@@ -920,18 +914,12 @@ def discover_split_pdfs(
     paths: list[Path] = []
     splits_by_path: dict[Path, str] = {}
     for split_name in split_names:
-        rows = index.get(split_name)
-        if not isinstance(rows, list):
-            raise ValueError(f"Split index {split_index} does not contain a list for {split_name!r}")
-        for row in rows:
-            if not isinstance(row, str):
-                raise ValueError(f"Split index {split_index} has a non-string path in {split_name!r}: {row!r}")
-            relative_path = Path(row)
+        for relative_path in indexed_paths[split_name]:
             if selected_domains is not None and (
                 not relative_path.parts or relative_path.parts[0] not in selected_domains
             ):
                 continue
-            path = input_dir / row
+            path = input_dir / relative_path
             paths.append(path)
             splits_by_path[path] = split_name
     missing = [path for path in paths if not path.is_file()]
