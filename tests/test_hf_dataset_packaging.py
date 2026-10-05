@@ -363,6 +363,21 @@ def test_additional_upload_rejects_flat_paper_layout(tmp_path) -> None:
         list(prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1024))
 
 
+def test_additional_upload_allows_output_dir_inside_data_root(tmp_path) -> None:
+    for name in ("preprocessed", "clues", "query_collections", "splits"):
+        (tmp_path / name).mkdir()
+    for name in ("preprocessed", "clues"):
+        domain = tmp_path / name / "ACL"
+        domain.mkdir()
+        (domain / "paper.txt").write_text("paper")
+    (tmp_path / "query_collections" / "queries.jsonl").write_text("{}\n")
+    (tmp_path / "splits" / "split.json").write_text("{}")
+    output_dir = tmp_path / "huggingface_dataset"
+    uploads = list(prepare_additional_data(data_root=tmp_path, output_dir=output_dir, shard_size_bytes=1024))
+    assert len(uploads) == 4
+    assert not output_dir.exists()
+
+
 def test_additional_upload_cleans_node_local_shard_after_failure(tmp_path, monkeypatch) -> None:
     from dataset_packaging.hf_dataset_packaging import AdditionalUpload
 

@@ -703,12 +703,15 @@ Set `HF_REPO_ID=owner/dataset-name` to use a different dataset repository. Any
 arguments after the dataset directory are forwarded to `dataset_packaging.prepare_hf_dataset`.
 
 To add processed data to an existing Hugging Face dataset without uploading or
-changing the PDF shards, metadata, or dataset card, run:
+changing the PDF shards, metadata, or dataset card, run from the repository root
+on ABCI:
 
 ```bash
-cd /path/to/this/repository
-qsub -P "${VTT_PBS_PROJECT:?Set your ABCI group}" \
-  -v "VTT_DATA_ROOT=${VTT_DATA_ROOT:?Set the actual dataset root}" \
+VTT_PBS_PROJECT=gcb50357
+VTT_DATA_ROOT=/scratch-shared/sfris1
+HF_REPO_ID=kasys/open-source-scientific-documents
+qsub -P "$VTT_PBS_PROJECT" \
+  -v "VTT_DATA_ROOT=$VTT_DATA_ROOT,HF_REPO_ID=$HF_REPO_ID" \
   scripts/packaging/upload_additional_huggingface.pbs
 ```
 

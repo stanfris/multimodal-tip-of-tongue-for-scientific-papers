@@ -965,9 +965,8 @@ def walk_additional_files(root: Path) -> Iterable[tuple[Path, int]]:
 def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int, max_files_per_shard: int | None = None) -> Iterable[AdditionalUpload]:
     """Plan shards as files are found, allowing builds to start during the scan."""
     data_root = data_root.expanduser().resolve()
-    output_dir = output_dir.expanduser().resolve()
-    if output_dir == data_root or output_dir.is_relative_to(data_root):
-        raise ValueError("--output-dir must be outside --data-root")
+    # Keep output_dir in the interface for callers of the PDF packager. This
+    # mode stages only under PBS_LOCALDIR and never writes into output_dir.
     if shard_size_bytes <= 0:
         raise ValueError("Additional shard size must be positive")
     if max_files_per_shard is not None and max_files_per_shard <= 0:

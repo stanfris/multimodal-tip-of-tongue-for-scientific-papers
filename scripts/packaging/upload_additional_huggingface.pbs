@@ -33,7 +33,7 @@ echo "Workers: 8; maximum files per shard: 100000; walltime: 03:00:00"
 .venv/bin/python -m dataset_packaging.prepare_hf_dataset \
   --additional-only \
   --data-root "$VTT_DATA_ROOT" \
-  --output-dir huggingface_dataset \
+  --output-dir "${PBS_LOCALDIR:-/tmp}/huggingface_dataset" \
   --repo-id "${HF_REPO_ID:-kasys/open-source-scientific-documents}" \
   --hf-cli "$PWD/.venv/bin/hf" \
   --additional-shard-size-gb 1 \
