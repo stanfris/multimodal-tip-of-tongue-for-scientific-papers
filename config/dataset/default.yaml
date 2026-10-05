@@ -5,6 +5,6 @@ processed_root: ${launcher.processed_root}
 pdf_dir: ${launcher.pdf_dir}
 split_index: ${launcher.split_index}
 clues_dir: clues
-query_output: ${dataset.root}/query_collections_test
+query_output: ${dataset.root}/query_collection
 visual_interpretations: null
 textual_interpretations: null
