@@ -151,11 +151,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if args.prepare_only or args.upload_only or args.validate_only or args.skip_validation or args.dry_run:
             raise ValueError("--additional-only cannot be combined with other modes")
         data_root = resolve_data_root(args.settings, args.data_root)
+        LOGGER.info("Additional upload: scanning and packaging local files under %s", data_root)
         uploads = prepare_additional_data(
             data_root=data_root,
             output_dir=output_dir,
             shard_size_bytes=shard_size_bytes(args.additional_shard_size_gb),
         )
+        LOGGER.info("Additional upload: staging complete; starting %s Hugging Face uploads", len(uploads))
         upload_additional_data(uploads=uploads, repo_id=args.repo_id, hf_cli=args.hf_cli)
         return {"output_dir": str(output_dir), "uploaded_to": args.repo_id, "additional_paths": [remote for _, remote in uploads]}
     if args.skip_validation:
@@ -938,15 +940,18 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
     uploads: list[tuple[Path, str]] = []
     for name in ("preprocessed", "clues"):
         root = roots[name]
+        LOGGER.info("Scanning %s for domain folders", root)
         domains = sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink())
         if not domains or any(path.is_file() or path.is_symlink() for path in root.iterdir()):
             raise ValueError(f"{root} must contain domain directories only")
         for domain in domains:
             if domain.name != normalize_source_name(domain.name):
                 raise ValueError(f"Unsafe domain name: {domain.name}")
-            if any(path.is_symlink() for path in domain.rglob("*")):
+            LOGGER.info("Scanning %s", domain)
+            paths_under_domain = list(domain.rglob("*"))
+            if any(path.is_symlink() for path in paths_under_domain):
                 raise ValueError(f"Symlinks are not supported under {domain}")
-            files = sorted(path for path in domain.rglob("*") if path.is_file())
+            files = sorted(path for path in paths_under_domain if path.is_file())
             if not files:
                 raise ValueError(f"{domain} contains no files")
             batches: list[list[Path]] = []
@@ -962,12 +967,14 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
                 batch_size += size
             if batch:
                 batches.append(batch)
+            LOGGER.info("Packaging %s/%s: %s files into %s TAR shards", name, domain.name, len(files), len(batches))
             # Keep staging outside the PDF package: the legacy upload mode sends
             # output_dir wholesale and must never include these extra files.
             shard_dir = output_dir.parent / f"{output_dir.name}_additional" / name / domain.name
             shard_dir.mkdir(parents=True, exist_ok=True)
             for index, paths in enumerate(batches):
                 shard = shard_dir / f"shard-{index:05d}.tar"
+                LOGGER.info("Writing %s (%s/%s, %s files)", shard, index + 1, len(batches), len(paths))
                 with tempfile.NamedTemporaryFile(prefix=f".{shard.name}.", suffix=".tmp", dir=shard_dir, delete=False) as tmp:
                     tmp_path = Path(tmp.name)
                 try:
@@ -983,11 +990,14 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
                 uploads.append((shard, f"{name}/{domain.name}/{shard.name}"))
     for name in ("query_collections", "splits"):
         root = roots[name]
-        if any(path.is_symlink() for path in root.rglob("*")):
+        LOGGER.info("Scanning %s for direct upload", root)
+        paths_under_root = list(root.rglob("*"))
+        if any(path.is_symlink() for path in paths_under_root):
             raise ValueError(f"Symlinks are not supported under {root}")
-        files = sorted(path for path in root.rglob("*") if path.is_file())
+        files = sorted(path for path in paths_under_root if path.is_file())
         if not files:
             raise ValueError(f"{root} contains no files")
+        LOGGER.info("Queued %s files under %s for direct upload", len(files), root)
         uploads.append((root, name))
     return uploads
 
