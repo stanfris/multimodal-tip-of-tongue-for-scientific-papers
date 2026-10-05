@@ -19,6 +19,7 @@ from dataset_packaging.hf_dataset_packaging import run
 from dataset_packaging.hf_dataset_packaging import shard_size_bytes
 from dataset_packaging.hf_dataset_packaging import validate_dataset
 from dataset_packaging.hf_dataset_packaging import upload_additional_data
+from dataset_packaging.hf_dataset_packaging import upload_dataset
 from dataset_packaging.hf_dataset_packaging import walk_additional_files
 from dataset_packaging.restore_hf_dataset import restore_dataset
 
@@ -78,6 +79,10 @@ def test_prepare_dataset_writes_webdataset_shards_and_metadata(tmp_path, caplog)
     assert set(metadata["source"]) == {"ACL", "Physics"}
     assert (output_dir / "duplicates.parquet").exists()
     assert (output_dir / "README.md").exists()
+    card = (output_dir / "README.md").read_text()
+    assert "preprocessed/<DOMAIN>/shard-*.tar" in card
+    assert "clues/<DOMAIN>/shard-*.tar" in card
+    assert "2 entries across 2 distinct SHA-256 contents" in card
 
     row = metadata.loc[metadata["source"] == "ACL"].iloc[0]
     with tarfile.open(output_dir / row["shard"], "r") as tar:
@@ -236,6 +241,23 @@ def test_upload_only_can_skip_local_validation(tmp_path, monkeypatch) -> None:
 def test_hf_cli_command_accepts_uv_run_hf() -> None:
     assert hf_cli_command("uv run hf") == ["uv", "run", "hf"]
     assert build_parser().parse_args(["--additional-only"]).additional_shard_size_gb == 1.0
+
+
+def test_upload_excludes_local_build_artifacts_and_deletes_old_remote_copies(tmp_path, monkeypatch) -> None:
+    commands = []
+    monkeypatch.setattr(
+        "dataset_packaging.hf_dataset_packaging.subprocess.run",
+        lambda command, **kwargs: commands.append(command),
+    )
+    upload_dataset(output_dir=tmp_path, repo_id="owner/dataset", hf_cli="hf")
+    command = commands[-1]
+    assert command[:5] == ["hf", "upload", "owner/dataset", str(tmp_path), "."]
+    assert [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--exclude"] == [
+        "duplicates.parquet", "preparation_report.json", "*.manifest.json"
+    ]
+    assert [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--delete"] == [
+        "duplicates.parquet", "preparation_report.json", "data/**/*.manifest.json"
+    ]
 
 
 def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(tmp_path, monkeypatch) -> None:
@@ -426,6 +448,55 @@ def test_additional_upload_allows_output_dir_inside_data_root(tmp_path) -> None:
     uploads = list(prepare_additional_data(data_root=tmp_path, output_dir=output_dir, shard_size_bytes=1024))
     assert len(uploads) == 4
     assert not output_dir.exists()
+
+
+def test_skip_preprocessed_domains_avoids_walking_them(tmp_path, monkeypatch) -> None:
+    from dataset_packaging import hf_dataset_packaging as packaging
+
+    for name in ("preprocessed", "clues", "query_collections", "splits"):
+        (tmp_path / name).mkdir()
+    skipped = {"ACL", "Biology", "Engineering", "Medicine"}
+    for domain_name in skipped | {"Physics"}:
+        domain = tmp_path / "preprocessed" / domain_name
+        domain.mkdir()
+        (domain / "paper.txt").write_text("paper")
+    clues_domain = tmp_path / "clues" / "ACL"
+    clues_domain.mkdir()
+    (clues_domain / "clue.txt").write_text("clue")
+    (tmp_path / "query_collections" / "queries.jsonl").write_text("{}\n")
+    (tmp_path / "splits" / "split.json").write_text("{}")
+
+    original_walk = packaging.walk_additional_files
+    walked = []
+
+    def record_walk(root):
+        walked.append(root)
+        yield from original_walk(root)
+
+    monkeypatch.setattr(packaging, "walk_additional_files", record_walk)
+    uploads = list(prepare_additional_data(
+        data_root=tmp_path,
+        output_dir=tmp_path / "huggingface_dataset",
+        shard_size_bytes=1024,
+        skip_preprocessed_domains=("ACL", "biology", "Engineering", "Medicine"),
+    ))
+    assert {upload.remote_path for upload in uploads} == {
+        "preprocessed/Physics/shard-00000.tar", "clues/ACL/shard-00000.tar", "query_collections", "splits"
+    }
+    assert not any(root.parent == tmp_path / "preprocessed" and root.name in skipped for root in walked)
+
+
+def test_skip_preprocessed_domain_rejects_unknown_name(tmp_path) -> None:
+    for name in ("preprocessed", "clues", "query_collections", "splits"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "preprocessed" / "ACL").mkdir()
+    with pytest.raises(ValueError, match="Unknown preprocessed domain"):
+        list(prepare_additional_data(
+            data_root=tmp_path,
+            output_dir=tmp_path / "huggingface_dataset",
+            shard_size_bytes=1024,
+            skip_preprocessed_domains=("ACLL",),
+        ))
 
 
 def test_additional_upload_cleans_node_local_shard_after_failure(tmp_path, monkeypatch) -> None:

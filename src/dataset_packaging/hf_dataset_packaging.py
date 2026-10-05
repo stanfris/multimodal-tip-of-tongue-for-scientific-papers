@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 from io import BytesIO
+from importlib.resources import files
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -143,6 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--additional-shard-size-gb", type=float, default=DEFAULT_ADDITIONAL_SHARD_SIZE_GB)
     parser.add_argument("--additional-max-files-per-shard", type=int, help="Start a shard after this many files even if its byte target is not reached. Changes shard boundaries; use only for a new upload.")
     parser.add_argument("--additional-workers", type=int, default=4, help="Concurrent additional-data TAR builds and uploads (default: 4).")
+    parser.add_argument("--skip-preprocessed-domain", action="append", default=[], metavar="DOMAIN", help="With --additional-only, skip scanning and uploading one preprocessed domain. Repeat as needed; clues are unaffected.")
     parser.add_argument(
         "--hf-cli",
         default="hf",
@@ -158,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = args.output_dir.expanduser().resolve()
+    if args.skip_preprocessed_domain and not args.additional_only:
+        raise ValueError("--skip-preprocessed-domain requires --additional-only")
     if args.additional_only:
         if args.prepare_only or args.upload_only or args.validate_only or args.skip_validation or args.dry_run:
             raise ValueError("--additional-only cannot be combined with other modes")
@@ -168,6 +172,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             output_dir=output_dir,
             shard_size_bytes=shard_size_bytes(args.additional_shard_size_gb),
             max_files_per_shard=args.additional_max_files_per_shard,
+            skip_preprocessed_domains=args.skip_preprocessed_domain,
         )
         uploaded_paths = upload_additional_data(uploads=uploads, repo_id=args.repo_id, hf_cli=args.hf_cli, workers=args.additional_workers)
         return {"output_dir": str(output_dir), "uploaded_to": args.repo_id, "additional_paths": uploaded_paths}
@@ -440,7 +445,7 @@ def prepare_dataset(
     duplicates = duplicate_rows(metadata_rows)
     write_parquet(output_dir / "metadata.parquet", metadata_rows, columns=METADATA_COLUMNS)
     write_parquet(output_dir / "duplicates.parquet", duplicates, columns=DUPLICATE_COLUMNS)
-    write_dataset_card(output_dir / "README.md", metadata_rows, duplicates)
+    write_dataset_card(output_dir / "README.md", metadata_rows)
     validation = validate_dataset(
         output_dir=output_dir,
         sources=sources,
@@ -829,104 +834,17 @@ def dry_run_report(
     }
 
 
-def write_dataset_card(path: Path, metadata_rows: list[dict[str, Any]], duplicates: list[dict[str, Any]]) -> None:
+def write_dataset_card(path: Path, metadata_rows: list[dict[str, Any]]) -> None:
     source_counts = Counter(row["source"] for row in metadata_rows)
-    license_counts = Counter(row["license"] or "Unavailable" for row in metadata_rows)
     source_lines = "\n".join(f"- `{source}`: {count:,} PDFs" for source, count in sorted(source_counts.items()))
-    license_lines = "\n".join(f"- `{license_value}`: {count:,}" for license_value, count in sorted(license_counts.items()))
-    path.write_text(
-        f"""---
-dataset_info:
-  features:
-    - name: document_id
-      dtype: string
-    - name: source
-      dtype: string
-    - name: pdf
-      dtype: binary
-license: other
----
-
-# Open-Source Scientific Documents
-
-This dataset contains approximately 100,000 open scientific PDF documents packaged as a shared retrieval corpus. Train, validation, and test query sets are expected to reference `document_id` values from this single corpus rather than using separate document splits.
-
-## Sources
-
-{source_lines or "- No packaged PDFs yet."}
-
-The source folders preserve the project corpus identities: ACL computational linguistics papers, arXiv Physics papers, arXiv Engineering papers, PMC OA Biology papers, and PMC OA Medical/Clinical Research papers. The selection and license filtering are performed by the existing project download pipeline before packaging.
-
-## Licensing
-
-License information is document-level when available. Do not assume one blanket license for the entire dataset.
-
-{license_lines or "- No license metadata available."}
-
-ACL Anthology records in this project do not provide a per-document license field, so their license metadata is nullable. arXiv open-reuse records preserve their selected Creative Commons license URL where available. PMC OA records preserve article-version license codes such as CC BY or CC0 when present.
-
-## Format
-
-PDFs are stored in uncompressed TAR shards under `data/<SOURCE>/shard-xxxxx.tar` using a WebDataset-compatible layout. Each example contains:
-
-```text
-DOCUMENT_ID.pdf
-DOCUMENT_ID.json
-```
-
-The JSON sidecar includes `document_id`, `source`, original filename/path, size, SHA-256 checksum, shard location, and available bibliographic metadata such as title, year, DOI, and document-level license. The global `metadata.parquet` has one row per packaged PDF with:
-
-```text
-{", ".join(METADATA_COLUMNS)}
-```
-
-`duplicates.parquet` records exact duplicate content by SHA-256. Duplicate files are preserved in the shards; duplicate rows identify the canonical and duplicate document IDs. This build records {len(metadata_rows):,} PDFs, {len({row["sha256"] for row in metadata_rows}):,} unique file contents, and {len(duplicates):,} duplicate rows.
-
-## Streaming Shards
-
-```python
-from datasets import load_dataset
-
-dataset = load_dataset(
-    "webdataset",
-    data_files={{
-        "ACL": "hf://datasets/{DEFAULT_REPO_ID}/data/ACL/*.tar",
-    }},
-    split="ACL",
-    streaming=True,
-)
-
-for example in dataset:
-    pdf_bytes = example["pdf"]
-    metadata = example["json"]
-    break
-```
-
-## Locate One PDF
-
-```python
-import io
-import tarfile
-
-import pandas as pd
-from huggingface_hub import hf_hub_download
-
-repo_id = "{DEFAULT_REPO_ID}"
-document_id = "ACL_..."
-metadata = pd.read_parquet("hf://datasets/" + repo_id + "/metadata.parquet")
-row = metadata.loc[metadata.document_id == document_id].iloc[0]
-
-shard_path = hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=row.shard)
-with tarfile.open(shard_path, "r") as tar:
-    pdf_bytes = tar.extractfile(row.member_path).read()
-```
-
-## Limitations
-
-Some source records have incomplete bibliographic metadata. Missing license, title, year, DOI, or author fields are left null rather than inferred. TAR shards are uncompressed because PDF files are already compressed.
-""",
-        encoding="utf-8",
+    template = files("dataset_packaging").joinpath("dataset_card.md").read_text(encoding="utf-8")
+    card = template.format(
+        pdf_count=len(metadata_rows),
+        unique_count=len({row["sha256"] for row in metadata_rows}),
+        source_lines=source_lines or "- No packaged PDFs yet.",
+        metadata_columns="`, `".join(METADATA_COLUMNS),
     )
+    path.write_text(card, encoding="utf-8")
 
 
 def hf_cli_command(hf_cli: str) -> list[str]:
@@ -962,7 +880,7 @@ def walk_additional_files(root: Path) -> Iterable[tuple[Path, int]]:
             yield path, child.stat(follow_symlinks=False).st_size
 
 
-def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int, max_files_per_shard: int | None = None) -> Iterable[AdditionalUpload]:
+def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int, max_files_per_shard: int | None = None, skip_preprocessed_domains: Iterable[str] = ()) -> Iterable[AdditionalUpload]:
     """Plan shards as files are found, allowing builds to start during the scan."""
     data_root = data_root.expanduser().resolve()
     # Keep output_dir in the interface for callers of the PDF packager. This
@@ -971,6 +889,9 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
         raise ValueError("Additional shard size must be positive")
     if max_files_per_shard is not None and max_files_per_shard <= 0:
         raise ValueError("--additional-max-files-per-shard must be positive")
+    skip_domains = {domain.strip().casefold() for domain in skip_preprocessed_domains}
+    if "" in skip_domains:
+        raise ValueError("--skip-preprocessed-domain requires a domain name")
     roots = {name: data_root / name for name in ("preprocessed", "clues", "query_collections", "splits")}
     for name, root in roots.items():
         if not root.is_dir() or root.is_symlink():
@@ -984,6 +905,10 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
         domains = [path for path in children if path.is_dir()]
         if not domains:
             raise ValueError(f"{root} must contain at least one domain directory")
+        if name == "preprocessed":
+            unknown = skip_domains - {domain.name.casefold() for domain in domains}
+            if unknown:
+                raise ValueError(f"Unknown preprocessed domain(s): {', '.join(sorted(unknown))}")
         for path in children:
             if path.is_file():
                 LOGGER.info("Queued root-level file %s", path)
@@ -993,6 +918,9 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
         for domain in domains:
             if domain.name != normalize_source_name(domain.name):
                 raise ValueError(f"Unsafe domain name: {domain.name}")
+            if name == "preprocessed" and domain.name.casefold() in skip_domains:
+                LOGGER.info("Skipping preprocessed/%s without scanning its files", domain.name)
+                continue
             batch: list[Path] = []
             batch_size = 0
             shard_index = 0
@@ -1103,7 +1031,13 @@ def upload_additional_data(*, uploads: Iterable[AdditionalUpload], repo_id: str,
 def upload_dataset(*, output_dir: Path, repo_id: str, hf_cli: str) -> None:
     hf_cmd = hf_cli_command(hf_cli)
     create_cmd = [*hf_cmd, "repo", "create", repo_id, "--type", "dataset", "--yes"]
-    upload_cmd = [*hf_cmd, "upload", repo_id, str(output_dir), ".", "--repo-type", "dataset"]
+    upload_cmd = [
+        *hf_cmd, "upload", repo_id, str(output_dir), ".", "--repo-type", "dataset",
+        "--exclude", "duplicates.parquet", "--exclude", "preparation_report.json",
+        "--exclude", "*.manifest.json",
+        "--delete", "duplicates.parquet", "--delete", "preparation_report.json",
+        "--delete", "data/**/*.manifest.json",
+    ]
     env = hf_upload_environment()
     if env.get("HF_XET_HIGH_PERFORMANCE") == "1":
         LOGGER.info("HF_XET_HIGH_PERFORMANCE=1 enabled for upload")

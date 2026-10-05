@@ -29,8 +29,9 @@ echo "Starting additional dataset upload at $(date -Is)"
 echo "Data root: $VTT_DATA_ROOT"
 echo "Repository: ${HF_REPO_ID:-kasys/open-source-scientific-documents}"
 echo "Workers: 8; maximum files per shard: 100000; walltime: 03:00:00"
+echo "Skipped preprocessed domains: ${VTT_SKIP_PREPROCESSED_DOMAINS:-none}"
 
-.venv/bin/python -m dataset_packaging.prepare_hf_dataset \
+command=(.venv/bin/python -m dataset_packaging.prepare_hf_dataset \
   --additional-only \
   --data-root "$VTT_DATA_ROOT" \
   --output-dir "${PBS_LOCALDIR:-/tmp}/huggingface_dataset" \
@@ -38,6 +39,15 @@ echo "Workers: 8; maximum files per shard: 100000; walltime: 03:00:00"
   --hf-cli "$PWD/.venv/bin/hf" \
   --additional-shard-size-gb 1 \
   --additional-max-files-per-shard 100000 \
-  --additional-workers 8
+  --additional-workers 8)
+
+if [[ -n "${VTT_SKIP_PREPROCESSED_DOMAINS:-}" ]]; then
+  IFS=: read -r -a skipped_domains <<< "$VTT_SKIP_PREPROCESSED_DOMAINS"
+  for domain in "${skipped_domains[@]}"; do
+    command+=(--skip-preprocessed-domain "$domain")
+  done
+fi
+
+"${command[@]}"
 
 echo "Finished additional dataset upload at $(date -Is)"

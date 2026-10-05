@@ -677,8 +677,10 @@ Each uncompressed TAR shard uses a WebDataset-compatible pair per document:
 `DOCUMENT_ID.pdf` and `DOCUMENT_ID.json`. `metadata.parquet` has one row per
 PDF with the stable `document_id`, source, original relative path, shard path,
 member path, byte size, SHA-256 checksum, document-level license when present,
-title, year, and DOI. Exact duplicate files are preserved and recorded in
-`duplicates.parquet`.
+title, year, and DOI. Exact duplicate files are preserved and recorded in the
+local `duplicates.parquet` report. The generated Hugging Face card is maintained
+in `src/dataset_packaging/dataset_card.md` and covers the PDF corpus and the
+additional collections.
 
 The packager is resumable. Completed shards are written through temporary files,
 atomically renamed, and skipped on rerun when their shard manifest and TAR
@@ -701,6 +703,23 @@ scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset
 The upload script targets `kasys/open-source-scientific-documents` by default.
 Set `HF_REPO_ID=owner/dataset-name` to use a different dataset repository. Any
 arguments after the dataset directory are forwarded to `dataset_packaging.prepare_hf_dataset`.
+The upload keeps `metadata.parquet` for PDF lookup and restoration. It excludes
+the local `duplicates.parquet`, `preparation_report.json`, and per-shard
+`*.manifest.json` build files, and removes those files if they were previously
+uploaded to the Hub.
+
+To update only the dataset card and remove already-uploaded build files without
+re-uploading PDF shards, review the paths first, then publish from an authenticated
+environment:
+
+```bash
+uv run python scripts/packaging/publish_huggingface_dataset_card.py
+uv run python scripts/packaging/publish_huggingface_dataset_card.py --apply
+```
+
+The upload-ready card is `docs/huggingface_dataset_README.md`. Refresh its
+counts if the PDF corpus changes; full PDF packaging regenerates its own card
+from `src/dataset_packaging/dataset_card.md`.
 
 To add processed data to an existing Hugging Face dataset without uploading or
 changing the PDF shards, metadata, or dataset card, run from the repository root
@@ -720,6 +739,23 @@ workers with at most 100,000 files per TAR shard. It uploads the four additional
 folders only. Use `-v "VTT_DATA_ROOT=...,HF_REPO_ID=..."` to target another dataset
 repository. Authentication must already be available to `hf` on the compute
 node (or pass `HF_TOKEN` to PBS through your site's approved secret mechanism).
+
+To resume while skipping the already-uploaded `preprocessed/ACL`, `Biology`,
+`Engineering`, and `Medicine` domains, submit from the ABCI repository root:
+
+```bash
+VTT_PBS_PROJECT=gcb50357
+HF_REPO_ID=kasys/open-source-scientific-documents
+VTT_SKIP_PREPROCESSED_DOMAINS=ACL:Biology:Engineering:Medicine
+qsub -P "$VTT_PBS_PROJECT" \
+  -v "VTT_DATA_ROOT=$PWD,HF_REPO_ID=$HF_REPO_ID,VTT_SKIP_PREPROCESSED_DOMAINS=$VTT_SKIP_PREPROCESSED_DOMAINS" \
+  scripts/packaging/upload_additional_huggingface.pbs
+```
+
+This avoids walking or packaging those four `preprocessed/` domains. It still
+processes `preprocessed/Physics`, all `clues/` domains and root-level metadata,
+`query_collections/`, and `splits/`. The equivalent Python option is repeatable:
+`--skip-preprocessed-domain ACL --skip-preprocessed-domain Biology`.
 
 The data root must contain `preprocessed/`, `clues/`, `query_collections/`, and
 `splits/`. Preprocessed and clues must each contain domain folders such as
