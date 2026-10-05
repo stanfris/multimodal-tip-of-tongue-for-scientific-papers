@@ -18,6 +18,7 @@ from dataset_packaging.hf_dataset_packaging import run
 from dataset_packaging.hf_dataset_packaging import shard_size_bytes
 from dataset_packaging.hf_dataset_packaging import validate_dataset
 from dataset_packaging.hf_dataset_packaging import upload_additional_data
+from dataset_packaging.hf_dataset_packaging import walk_additional_files
 from dataset_packaging.restore_hf_dataset import restore_dataset
 
 
@@ -265,8 +266,8 @@ def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(
     temporary_shards = []
     def fake_upload(cmd, **kwargs):
         commands.append(cmd)
-        if cmd[3].endswith(".tar"):
-            shard = Path(cmd[3])
+        if "hf-additional-" in cmd[3]:
+            shard = next(Path(cmd[3]).glob("*.tar"))
             temporary_shards.append(shard)
             assert shard.exists()
             with tarfile.open(shard) as tar:
@@ -314,6 +315,15 @@ def test_additional_file_limit_starts_small_shards_early(tmp_path) -> None:
         list(uploads)
 
 
+def test_streaming_walk_preserves_previous_sorted_path_order(tmp_path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "nested.txt").write_text("nested")
+    (tmp_path / "a.txt").write_text("flat")
+    assert [path.relative_to(tmp_path).as_posix() for path, _ in walk_additional_files(tmp_path)] == [
+        "a.txt", "a/nested.txt"
+    ]
+
+
 def test_additional_uploads_run_concurrently(tmp_path, monkeypatch) -> None:
     from dataset_packaging.hf_dataset_packaging import AdditionalUpload
 
@@ -326,7 +336,7 @@ def test_additional_uploads_run_concurrently(tmp_path, monkeypatch) -> None:
     second_started = threading.Event()
 
     def fake_upload(cmd, **kwargs):
-        if "shard-00000.tar" in cmd[4]:
+        if (Path(cmd[3]) / "shard-00000.tar").exists():
             assert second_started.wait(2), "second upload did not start while the first was running"
         else:
             second_started.set()
@@ -363,13 +373,15 @@ def test_additional_upload_cleans_node_local_shard_after_failure(tmp_path, monke
     local_temp = tmp_path / "node-local"
     local_temp.mkdir()
     monkeypatch.setenv("PBS_LOCALDIR", str(local_temp))
+    monkeypatch.delenv("HF_XET_CACHE", raising=False)
     seen = []
 
     def fail_upload(cmd, **kwargs):
-        shard = Path(cmd[3])
+        shard = Path(cmd[3]) / "shard-00000.tar"
         seen.append(shard)
         assert shard.is_relative_to(local_temp)
         assert shard.exists()
+        assert kwargs["env"]["HF_XET_CACHE"] == str(local_temp / "hf-xet-cache")
         raise RuntimeError("upload failed")
 
     monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", fail_upload)
@@ -380,7 +392,26 @@ def test_additional_upload_cleans_node_local_shard_after_failure(tmp_path, monke
             hf_cli="hf",
         )
     assert not seen[0].exists()
+    assert (local_temp / "hf-xet-cache").is_dir()
     assert paper.read_text() == "paper"
+
+
+def test_additional_upload_preserves_explicit_xet_cache(tmp_path, monkeypatch) -> None:
+    from dataset_packaging.hf_dataset_packaging import AdditionalUpload
+
+    local_temp = tmp_path / "node-local"
+    local_temp.mkdir()
+    monkeypatch.setenv("PBS_LOCALDIR", str(local_temp))
+    monkeypatch.setenv("HF_XET_CACHE", str(tmp_path / "custom-cache"))
+    seen = []
+    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", lambda cmd, **kwargs: seen.append(kwargs["env"]["HF_XET_CACHE"]))
+    upload_additional_data(
+        uploads=[AdditionalUpload(tmp_path, "splits")],
+        repo_id="owner/dataset",
+        hf_cli="hf",
+        workers=1,
+    )
+    assert seen == [str(tmp_path / "custom-cache")]
 
 
 def test_additional_upload_starts_before_scanning_later_domains(tmp_path, monkeypatch) -> None:
@@ -402,4 +433,4 @@ def test_additional_upload_starts_before_scanning_later_domains(tmp_path, monkey
             repo_id="owner/dataset",
             hf_cli="hf",
         )
-    assert [cmd[4] for cmd in commands] == ["preprocessed/ACL/shard-00000.tar"]
+    assert [cmd[4] for cmd in commands] == ["preprocessed/ACL"]

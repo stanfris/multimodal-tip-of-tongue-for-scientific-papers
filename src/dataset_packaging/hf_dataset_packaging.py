@@ -34,7 +34,6 @@ DEFAULT_REPO_ID = "kasys/open-source-scientific-documents"
 DEFAULT_OUTPUT_DIR = Path("huggingface_dataset")
 DEFAULT_SHARD_SIZE_GB = 1.0
 DEFAULT_ADDITIONAL_SHARD_SIZE_GB = 1.0
-DEFAULT_ADDITIONAL_MAX_FILES_PER_SHARD = 10_000
 PDF_BUFFER_SIZE = 1024 * 1024
 METADATA_COLUMNS = [
     "document_id",
@@ -142,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--additional-only", action="store_true", help="Package and upload preprocessed, clues, query collections, and splits without touching the PDF corpus.")
     parser.add_argument("--data-root", type=Path, help="Root containing preprocessed, clues, query_collections, and splits. Defaults to dataset.root from settings.")
     parser.add_argument("--additional-shard-size-gb", type=float, default=DEFAULT_ADDITIONAL_SHARD_SIZE_GB)
-    parser.add_argument("--additional-max-files-per-shard", type=int, default=DEFAULT_ADDITIONAL_MAX_FILES_PER_SHARD, help="Start a shard after this many files even if its byte target is not reached (default: 10000).")
+    parser.add_argument("--additional-max-files-per-shard", type=int, help="Start a shard after this many files even if its byte target is not reached. Changes shard boundaries; use only for a new upload.")
     parser.add_argument("--additional-workers", type=int, default=4, help="Concurrent additional-data TAR builds and uploads (default: 4).")
     parser.add_argument(
         "--hf-cli",
@@ -937,10 +936,22 @@ def hf_cli_command(hf_cli: str) -> list[str]:
     return command
 
 
+def hf_upload_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    if env.get("PBS_LOCALDIR") and not env.get("HF_XET_CACHE"):
+        cache = Path(env["PBS_LOCALDIR"]) / "hf-xet-cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        env["HF_XET_CACHE"] = str(cache)
+        LOGGER.info("Using node-local HF_XET_CACHE=%s", cache)
+    return env
+
+
 def walk_additional_files(root: Path) -> Iterable[tuple[Path, int]]:
     """Walk in stable path order without retaining a whole domain in memory."""
     with os.scandir(root) as scan:
-        children = sorted(scan, key=lambda item: item.name)
+        # Match the former sorted(Path.rglob(...)) order, including cases like
+        # a.txt sorting before files inside the directory a/.
+        children = sorted(scan, key=lambda item: item.name + ("/" if item.is_dir(follow_symlinks=False) else ""))
     for child in children:
         if child.is_symlink():
             raise ValueError(f"Symlinks are not supported under {root}")
@@ -951,7 +962,7 @@ def walk_additional_files(root: Path) -> Iterable[tuple[Path, int]]:
             yield path, child.stat(follow_symlinks=False).st_size
 
 
-def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int, max_files_per_shard: int = DEFAULT_ADDITIONAL_MAX_FILES_PER_SHARD) -> Iterable[AdditionalUpload]:
+def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int, max_files_per_shard: int | None = None) -> Iterable[AdditionalUpload]:
     """Plan shards as files are found, allowing builds to start during the scan."""
     data_root = data_root.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
@@ -959,7 +970,7 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
         raise ValueError("--output-dir must be outside --data-root")
     if shard_size_bytes <= 0:
         raise ValueError("Additional shard size must be positive")
-    if max_files_per_shard <= 0:
+    if max_files_per_shard is not None and max_files_per_shard <= 0:
         raise ValueError("--additional-max-files-per-shard must be positive")
     roots = {name: data_root / name for name in ("preprocessed", "clues", "query_collections", "splits")}
     for name, root in roots.items():
@@ -982,7 +993,7 @@ def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_byt
             LOGGER.info("Scanning and planning %s/%s", name, domain.name)
             for path, size in walk_additional_files(domain):
                 file_count += 1
-                if batch and (batch_size + size > shard_size_bytes or len(batch) >= max_files_per_shard):
+                if batch and (batch_size + size > shard_size_bytes or (max_files_per_shard is not None and len(batch) >= max_files_per_shard)):
                     yield AdditionalUpload(domain, f"{name}/{domain.name}/shard-{shard_index:05d}.tar", tuple(batch))
                     shard_index += 1
                     batch = []
@@ -1010,7 +1021,7 @@ def upload_additional_data(*, uploads: Iterable[AdditionalUpload], repo_id: str,
     if workers < 1:
         raise ValueError("--additional-workers must be positive")
     hf_cmd = hf_cli_command(hf_cli)
-    env = os.environ.copy()
+    env = hf_upload_environment()
     temp_root = Path(env["PBS_LOCALDIR"]) if env.get("PBS_LOCALDIR") else Path(tempfile.gettempdir())
     if not temp_root.is_dir():
         raise FileNotFoundError(f"Temporary directory does not exist: {temp_root}")
@@ -1034,7 +1045,7 @@ def upload_additional_data(*, uploads: Iterable[AdditionalUpload], repo_id: str,
                     tar.add(path, arcname=path.relative_to(upload.source).as_posix(), recursive=False)
             LOGGER.info("Uploading %s to %s (item %s)", shard, upload.remote_path, index)
             subprocess.run(
-                [*hf_cmd, "upload", repo_id, str(shard), upload.remote_path, "--repo-type", "dataset"],
+                [*hf_cmd, "upload", repo_id, str(Path(staging)), str(PurePosixPath(upload.remote_path).parent), "--repo-type", "dataset"],
                 check=True,
                 env=env,
             )
@@ -1059,7 +1070,7 @@ def upload_dataset(*, output_dir: Path, repo_id: str, hf_cli: str) -> None:
     hf_cmd = hf_cli_command(hf_cli)
     create_cmd = [*hf_cmd, "repo", "create", repo_id, "--type", "dataset", "--yes"]
     upload_cmd = [*hf_cmd, "upload", repo_id, str(output_dir), ".", "--repo-type", "dataset"]
-    env = os.environ.copy()
+    env = hf_upload_environment()
     if env.get("HF_XET_HIGH_PERFORMANCE") == "1":
         LOGGER.info("HF_XET_HIGH_PERFORMANCE=1 enabled for upload")
     try:

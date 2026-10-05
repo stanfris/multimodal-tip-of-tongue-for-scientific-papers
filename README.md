@@ -728,8 +728,14 @@ temporary space is roughly `N` times the shard size. The command does not modify
 the source dataset or the existing `data/` PDF corpus. Adjust shard size with
 `--additional-shard-size-gb` (default: 1). TAR shards remain uncompressed;
 compression can slow packaging and many source files are already compressed.
-For folders with many small files, `--additional-max-files-per-shard` (default:
-10,000) starts uploads before a shard reaches its byte target.
+For a new upload with many small files, `--additional-max-files-per-shard 10000`
+can start uploads before a shard reaches its byte target. Leave it unset when
+resuming an existing upload, since changing shard boundaries changes TAR contents.
+Each shard is sent through `hf upload`'s folder path so an unchanged TAR already
+committed to the Hub is skipped on rerun. The local TAR is still rebuilt to
+check its content against the remote copy.
+On PBS nodes, uploads use `PBS_LOCALDIR/hf-xet-cache` for Xet scratch data unless
+`HF_XET_CACHE` is already set; this also applies to PDF package uploads.
 The wrapper uses the existing `.venv` without syncing packages.
 
 For PDF uploads, validation scans the source folders, checks TAR members, and
