@@ -69,7 +69,7 @@ def test_existing_paper_json_with_empty_figures_uses_images_for_visual_samples(t
 
 def test_markdown_and_images_only_match_pdf_split_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "preprocessed"
-    for paper_id in ("ACL_train", "ACL_test"):
+    for paper_id in ("ACL_train", "ACL_test", "ACL_unlisted"):
         paper_dir = root / "ACL" / paper_id
         images_dir = paper_dir / "images"
         images_dir.mkdir(parents=True)

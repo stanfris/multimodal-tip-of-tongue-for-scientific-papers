@@ -129,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--validate-only", action="store_true", help="Run validation only.")
     parser.add_argument("--dry-run", action="store_true", help="Discover and plan without writing shards or uploading.")
     parser.add_argument("--force-rebuild", action="store_true", help="Rebuild completed shards instead of reusing them.")
+    parser.add_argument("--additional-only", action="store_true", help="Package and upload preprocessed, clues, query collections, and splits without touching the PDF corpus.")
+    parser.add_argument("--data-root", type=Path, help="Root containing preprocessed, clues, query_collections, and splits. Defaults to dataset.root from settings.")
+    parser.add_argument("--additional-shard-size-gb", type=float, default=DEFAULT_SHARD_SIZE_GB)
     parser.add_argument(
         "--hf-cli",
         default="hf",
@@ -144,6 +147,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = args.output_dir.expanduser().resolve()
+    if args.additional_only:
+        if args.prepare_only or args.upload_only or args.validate_only or args.skip_validation or args.dry_run:
+            raise ValueError("--additional-only cannot be combined with other modes")
+        data_root = resolve_data_root(args.settings, args.data_root)
+        uploads = prepare_additional_data(
+            data_root=data_root,
+            output_dir=output_dir,
+            shard_size_bytes=shard_size_bytes(args.additional_shard_size_gb),
+        )
+        upload_additional_data(uploads=uploads, repo_id=args.repo_id, hf_cli=args.hf_cli)
+        return {"output_dir": str(output_dir), "uploaded_to": args.repo_id, "additional_paths": [remote for _, remote in uploads]}
     if args.skip_validation:
         if not args.upload_only or args.dry_run or args.validate_only or args.prepare_only:
             raise ValueError("--skip-validation requires --upload-only and cannot be combined with other modes")
@@ -203,6 +217,16 @@ def resolve_default_input_root(settings_path: Path, input_root: Path | None) -> 
     if not isinstance(dataset, dict):
         raise ValueError("settings dataset section must be a mapping")
     return resolve_path_under_root("pdf_datasets", dataset.get("root"), resolved_settings.parent)
+
+
+def resolve_data_root(settings_path: Path, data_root: Path | None) -> Path:
+    if data_root is not None:
+        return data_root.expanduser().resolve()
+    raw, resolved_settings = load_managed_settings(settings_path)
+    dataset = raw.get("dataset", {})
+    if not isinstance(dataset, dict) or not dataset.get("root"):
+        raise ValueError("settings dataset.root must be configured")
+    return resolve_path_under_root(".", dataset["root"], resolved_settings.parent)
 
 
 def parse_source_mapping(value: str) -> SourceSpec:
@@ -897,6 +921,88 @@ def hf_cli_command(hf_cli: str) -> list[str]:
     if not command:
         raise ValueError("Hugging Face CLI command cannot be empty")
     return command
+
+
+def prepare_additional_data(*, data_root: Path, output_dir: Path, shard_size_bytes: int) -> list[tuple[Path, str]]:
+    """Stage the non-PDF artifacts under paths distinct from the existing PDF corpus."""
+    data_root = data_root.expanduser().resolve()
+    output_dir = output_dir.expanduser().resolve()
+    if output_dir == data_root or output_dir.is_relative_to(data_root):
+        raise ValueError("--output-dir must be outside --data-root")
+    if shard_size_bytes <= 0:
+        raise ValueError("Additional shard size must be positive")
+    roots = {name: data_root / name for name in ("preprocessed", "clues", "query_collections", "splits")}
+    for name, root in roots.items():
+        if not root.is_dir() or root.is_symlink():
+            raise FileNotFoundError(f"Expected {name} directory: {root}")
+    uploads: list[tuple[Path, str]] = []
+    for name in ("preprocessed", "clues"):
+        root = roots[name]
+        domains = sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink())
+        if not domains or any(path.is_file() or path.is_symlink() for path in root.iterdir()):
+            raise ValueError(f"{root} must contain domain directories only")
+        for domain in domains:
+            if domain.name != normalize_source_name(domain.name):
+                raise ValueError(f"Unsafe domain name: {domain.name}")
+            if any(path.is_symlink() for path in domain.rglob("*")):
+                raise ValueError(f"Symlinks are not supported under {domain}")
+            files = sorted(path for path in domain.rglob("*") if path.is_file())
+            if not files:
+                raise ValueError(f"{domain} contains no files")
+            batches: list[list[Path]] = []
+            batch: list[Path] = []
+            batch_size = 0
+            for path in files:
+                size = path.stat().st_size
+                if batch and batch_size + size > shard_size_bytes:
+                    batches.append(batch)
+                    batch = []
+                    batch_size = 0
+                batch.append(path)
+                batch_size += size
+            if batch:
+                batches.append(batch)
+            # Keep staging outside the PDF package: the legacy upload mode sends
+            # output_dir wholesale and must never include these extra files.
+            shard_dir = output_dir.parent / f"{output_dir.name}_additional" / name / domain.name
+            shard_dir.mkdir(parents=True, exist_ok=True)
+            for index, paths in enumerate(batches):
+                shard = shard_dir / f"shard-{index:05d}.tar"
+                with tempfile.NamedTemporaryFile(prefix=f".{shard.name}.", suffix=".tmp", dir=shard_dir, delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
+                try:
+                    with tarfile.open(tmp_path, "w") as tar:
+                        for path in paths:
+                            tar.add(path, arcname=path.relative_to(domain).as_posix(), recursive=False)
+                    with tarfile.open(tmp_path, "r") as tar:
+                        if tar.getnames() != [path.relative_to(domain).as_posix() for path in paths]:
+                            raise ValueError(f"TAR member mismatch: {tmp_path}")
+                    os.replace(tmp_path, shard)
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+                uploads.append((shard, f"{name}/{domain.name}/{shard.name}"))
+    for name in ("query_collections", "splits"):
+        root = roots[name]
+        if any(path.is_symlink() for path in root.rglob("*")):
+            raise ValueError(f"Symlinks are not supported under {root}")
+        files = sorted(path for path in root.rglob("*") if path.is_file())
+        if not files:
+            raise ValueError(f"{root} contains no files")
+        uploads.append((root, name))
+    return uploads
+
+
+def upload_additional_data(*, uploads: list[tuple[Path, str]], repo_id: str, hf_cli: str) -> None:
+    """Upload only new remote paths; never upload the prepared PDF directory."""
+    hf_cmd = hf_cli_command(hf_cli)
+    env = os.environ.copy()
+    for local_path, remote_path in uploads:
+        LOGGER.info("Uploading %s to %s", local_path, remote_path)
+        subprocess.run(
+            [*hf_cmd, "upload", repo_id, str(local_path), remote_path, "--repo-type", "dataset"],
+            check=True,
+            env=env,
+        )
 
 
 def upload_dataset(*, output_dir: Path, repo_id: str, hf_cli: str) -> None:
