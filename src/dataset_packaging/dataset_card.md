@@ -61,13 +61,15 @@ with tarfile.open(shard_path, "r") as archive:
     pdf_bytes = archive.extractfile(row["member_path"]).read()
 ```
 
-To download the entire repository:
+To download and restore selected components with the [repository's download script](https://github.com/stanfris/multimodal-tip-of-tongue-for-scientific-papers/blob/main/scripts/packaging/download_huggingface_dataset.sh):
 
 ```bash
-hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir open-source-scientific-documents
+scripts/packaging/download_huggingface_dataset.sh data --pdfs --workers 4
+scripts/packaging/download_huggingface_dataset.sh data --generated
+scripts/packaging/download_huggingface_dataset.sh data --all --workers 4
 ```
 
-The `preprocessed/` and `clues/` archives preserve relative paths inside each domain. For example, `preprocessed/ACL/shard-00000.tar` extracts into a local `preprocessed/ACL/` folder. Inspect TAR members before extracting archives from any untrusted source. Query collections and split files are ordinary files that can be downloaded individually.
+The script accepts individual `--preprocessed`, `--clues`, `--query-collections`, and `--splits` selections. It filters Hub downloads to selected paths, resumes transfers on rerun, restores PDFs under `data/pdf_datasets/<SOURCE>/`, extracts parsed content and clues under their domain folders, and copies ordinary query collection and split files. The `preprocessed/` and `clues/` archives preserve relative paths inside each domain. `metadata.parquet` is required for PDF restoration; `duplicates.parquet`, `preparation_report.json`, and shard manifests are build artifacts and are not required. The roughly 407 GB full repository is needed only for `--all`.
 
 The [repository's restore script](https://github.com/stanfris/multimodal-tip-of-tongue-for-scientific-papers/blob/main/scripts/packaging/restore_pdf_datasets_from_huggingface.sh) uses `metadata.parquet` to reconstruct the original five-domain PDF layout and verify checksums.
 

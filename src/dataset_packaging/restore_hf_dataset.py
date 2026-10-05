@@ -47,11 +47,12 @@ class RestoreEntry:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Restore a downloaded Hugging Face PDF dataset into the pdf_datasets folder layout."
+        description="Restore downloaded PDF TAR shards using metadata.parquet into the pdf_datasets folder layout."
     )
     parser.add_argument("dataset_dir", type=Path, help="Downloaded Hugging Face dataset directory.")
     parser.add_argument("target_dir", type=Path, help="Destination directory for source folders such as ACL and Physics.")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing PDFs at their restored paths.")
+    parser.add_argument("--resume", action="store_true", help="Skip existing PDFs only when size and SHA-256 match metadata; reject changed files unless --overwrite is set.")
     parser.add_argument(
         "--workers",
         type=int,
@@ -73,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         dataset_dir=args.dataset_dir,
         target_dir=args.target_dir,
         overwrite=args.overwrite,
+        resume=args.resume,
         workers=args.workers,
         verify_checksum=not args.skip_checksum,
     )
@@ -87,6 +89,7 @@ def restore_dataset(
     overwrite: bool = False,
     workers: int = 1,
     verify_checksum: bool = True,
+    resume: bool = False,
 ) -> dict[str, Any]:
     if workers < 1:
         raise ValueError("workers must be positive")
@@ -97,9 +100,16 @@ def restore_dataset(
         raise FileNotFoundError(f"Missing metadata parquet: {metadata_path}")
 
     entries = load_restore_entries(metadata_path)
-    destinations = [entry.destination(target_dir) for entry in entries]
+    pending: list[RestoreEntry] = []
+    for entry in entries:
+        destination = path_under_root(target_dir, PurePosixPath(entry.source) / entry.original_relative_path, "destination")
+        if resume and destination.is_file() and destination.stat().st_size == entry.size_bytes:
+            with destination.open("rb") as existing_file:
+                if hashlib.file_digest(existing_file, "sha256").hexdigest() == entry.sha256:
+                    continue
+        pending.append(entry)
     if not overwrite:
-        existing = [path for path in destinations if path.exists()]
+        existing = [entry.destination(target_dir) for entry in pending if entry.destination(target_dir).exists()]
         if existing:
             raise FileExistsError(
                 f"Refusing to overwrite {len(existing)} existing PDF(s), starting with {existing[0]}. "
@@ -107,7 +117,7 @@ def restore_dataset(
             )
 
     by_shard: dict[PurePosixPath, list[RestoreEntry]] = defaultdict(list)
-    for entry in entries:
+    for entry in pending:
         by_shard[entry.shard].append(entry)
 
     shard_jobs = sorted(by_shard.items(), key=lambda item: str(item[0]))
@@ -126,13 +136,14 @@ def restore_dataset(
         ]
         for future in as_completed(futures):
             restored += future.result()
-            LOGGER.info("Restored %s/%s PDFs", restored, len(entries))
+            LOGGER.info("Restored %s/%s pending PDFs", restored, len(pending))
 
     LOGGER.info("Restored %s PDFs into %s", restored, target_dir)
     return {
         "dataset_dir": str(dataset_dir),
         "target_dir": str(target_dir),
         "restored_pdf_count": restored,
+        "skipped_pdf_count": len(entries) - len(pending),
         "sources": sorted({entry.source for entry in entries}),
         "checksum_verified": verify_checksum,
         "workers": workers,
@@ -210,6 +221,13 @@ def checksum(value: Any, row_number: int) -> str:
 
 
 def path_under_root(root: Path, relative_path: PurePosixPath, label: str) -> Path:
+    if root.is_symlink():
+        raise ValueError(f"Unsafe {label} root: {root}")
+    current = root
+    for part in relative_path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"Unsafe {label} symlink: {current}")
     path = (root / Path(*relative_path.parts)).resolve()
     if path != root and root not in path.parents:
         raise ValueError(f"Unsafe {label} path: {relative_path}")
@@ -232,7 +250,7 @@ def restore_shard(
             restore_entry(
                 archive,
                 entry,
-                entry.destination(target_dir),
+                path_under_root(target_dir, PurePosixPath(entry.source) / entry.original_relative_path, "destination"),
                 verify_checksum=verify_checksum,
             )
     return len(entries)

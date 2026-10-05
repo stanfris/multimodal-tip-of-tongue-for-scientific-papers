@@ -383,16 +383,15 @@ The packager needs the five PDF source folders and the main environment.
 Its `--dry-run` discovers the planned shards without writing. Prepared files
 and validation reports are under `huggingface_dataset/`; progress goes to the
 terminal. Upload requires Hugging Face authentication and is a separate
-network operation. The download wrapper uses `uv run hf` by default; set
-`HF_CLI` to the path of an `hf` executable to use it directly.
+network operation. The download wrapper uses `huggingface_hub` through the
+project environment.
 
 ```bash
 scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --dry-run
 scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --prepare-only
 scripts/packaging/prepare_huggingface_dataset.sh --input-root data/pdf_datasets --output-dir huggingface_dataset --validate-only
 HF_REPO_ID=kasys/open-source-scientific-documents scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset
-scripts/packaging/download_huggingface_dataset.sh data/downloaded_hf_dataset
-scripts/packaging/restore_pdf_datasets_from_huggingface.sh data/downloaded_hf_dataset data/pdf_datasets --workers 4
+scripts/packaging/download_huggingface_dataset.sh data --pdfs --workers 4
 ```
 
 Once query collections exist under `data/query_collections/`, launch the
@@ -808,18 +807,36 @@ Git commits. Inspect the packaging options through the same wrapper:
 scripts/packaging/prepare_huggingface_dataset.sh --help
 ```
 
-Download the complete dataset repository into a specific local directory:
+Download selected components into the normal `data/` layout. The downloader
+keeps the filtered Hub snapshot and transfer state under
+`data/.hf_dataset_download/kasys--open-source-scientific-documents/`,
+so rerunning a command resumes downloads and skips matching restored files.
+Selections avoid fetching the full roughly 407 GB repository:
 
 ```bash
-uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir data/downloaded_hf_dataset
+scripts/packaging/download_huggingface_dataset.sh data --pdfs --workers 4
+scripts/packaging/download_huggingface_dataset.sh data --generated
+scripts/packaging/download_huggingface_dataset.sh data --all --workers 4
 ```
 
-Restore the downloaded shards to the original `pdf_datasets` layout. The target
-directory will contain source folders such as `ACL`, `Physics`, and `Medicine`:
+`--pdfs` downloads `metadata.parquet` and PDF shards, then restores PDFs under
+`data/pdf_datasets/<SOURCE>/` with size and SHA-256 verification. `--generated`
+selects parsed content, clues, query collections, and splits. Parsed and clue
+TARs extract under `data/preprocessed/<DOMAIN>/` and `data/clues/<DOMAIN>/`;
+query and split files copy under their matching directories. Select individual
+components with `--preprocessed`, `--clues`, `--query-collections`, and
+`--splits`; flags can be combined. `--overwrite` replaces existing files that
+differ. `--help` lists the options. Set `HF_REPO_ID` or pass `--repo-id` for
+another dataset repository. `duplicates.parquet`, `preparation_report.json`,
+and shard manifests are not required.
+
+The standalone PDF restore command remains available for an existing Hub
+snapshot. Its target contains source folders such as `ACL`, `Physics`, and
+`Medicine`:
 
 ```bash
 scripts/packaging/restore_pdf_datasets_from_huggingface.sh \
-  /scratch-shared/sfris1 \
+  data/.hf_dataset_download/kasys--open-source-scientific-documents \
   data/pdf_datasets
 ```
 
@@ -830,23 +847,9 @@ Use `--skip-checksum` only for trusted archives; size checks still apply:
 
 ```bash
 scripts/packaging/restore_pdf_datasets_from_huggingface.sh \
-  /scratch-shared/sfris1 \
+  data/.hf_dataset_download/kasys--open-source-scientific-documents \
   data/pdf_datasets \
   --workers 4 --skip-checksum
-```
-
-For a different repository, change the repository ID in the `hf download`
-command. For a scratch destination, run:
-
-```bash
-uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir /scratch-shared/sfris1
-```
-
-Additional arguments are forwarded to `hf download`, for example:
-
-```bash
-uv run hf download kasys/open-source-scientific-documents --repo-type dataset --local-dir data/metadata-only \
-  --include "*.parquet" "README.md"
 ```
 
 To inspect a single packaged PDF by `document_id`:
