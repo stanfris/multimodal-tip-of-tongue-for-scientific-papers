@@ -12,9 +12,11 @@ from dataset_packaging.hf_dataset_packaging import SourceSpec
 from dataset_packaging.hf_dataset_packaging import build_parser
 from dataset_packaging.hf_dataset_packaging import hf_cli_command
 from dataset_packaging.hf_dataset_packaging import prepare_dataset
+from dataset_packaging.hf_dataset_packaging import prepare_additional_data
 from dataset_packaging.hf_dataset_packaging import run
 from dataset_packaging.hf_dataset_packaging import shard_size_bytes
 from dataset_packaging.hf_dataset_packaging import validate_dataset
+from dataset_packaging.hf_dataset_packaging import upload_additional_data
 from dataset_packaging.restore_hf_dataset import restore_dataset
 
 
@@ -230,3 +232,48 @@ def test_upload_only_can_skip_local_validation(tmp_path, monkeypatch) -> None:
 
 def test_hf_cli_command_accepts_uv_run_hf() -> None:
     assert hf_cli_command("uv run hf") == ["uv", "run", "hf"]
+
+
+def test_additional_upload_preserves_pdf_package_and_uses_separate_remote_paths(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "dataset"
+    (data_root / "preprocessed" / "ACL" / "paper-1").mkdir(parents=True)
+    (data_root / "preprocessed" / "ACL" / "paper-1" / "markdown.md").write_text("paper")
+    (data_root / "clues" / "ACL" / "paper-1" / "base").mkdir(parents=True)
+    (data_root / "clues" / "ACL" / "paper-1" / "base" / "textual_clues.jsonl").write_text("{}\n")
+    (data_root / "query_collections" / "ACL" / "set-1").mkdir(parents=True)
+    (data_root / "query_collections" / "ACL" / "set-1" / "queries.jsonl").write_text("{}\n")
+    (data_root / "splits").mkdir()
+    (data_root / "splits" / "pdf_dataset_split.json").write_text("{}")
+    output_dir = tmp_path / "package"
+    (output_dir / "data" / "ACL").mkdir(parents=True)
+    pdf_shard = output_dir / "data" / "ACL" / "shard-00000.tar"
+    pdf_shard.write_bytes(b"existing PDF package")
+    (output_dir / "metadata.parquet").write_bytes(b"existing metadata")
+
+    uploads = prepare_additional_data(data_root=data_root, output_dir=output_dir, shard_size_bytes=1024)
+    assert pdf_shard.read_bytes() == b"existing PDF package"
+    assert (output_dir / "metadata.parquet").read_bytes() == b"existing metadata"
+    assert {remote for _, remote in uploads} == {
+        "preprocessed/ACL/shard-00000.tar", "clues/ACL/shard-00000.tar", "query_collections", "splits"
+    }
+    for local, remote in uploads[:2]:
+        assert not local.is_relative_to(output_dir)
+        with tarfile.open(local) as tar:
+            assert tar.getnames() == (["paper-1/markdown.md"] if remote.startswith("preprocessed") else ["paper-1/base/textual_clues.jsonl"])
+    assert uploads[-2:] == [(data_root / "query_collections", "query_collections"), (data_root / "splits", "splits")]
+
+    commands = []
+    monkeypatch.setattr("dataset_packaging.hf_dataset_packaging.subprocess.run", lambda cmd, **kwargs: commands.append(cmd))
+    upload_additional_data(uploads=uploads, repo_id="owner/dataset", hf_cli="hf")
+    assert len(commands) == 4
+    assert all(cmd[:3] == ["hf", "upload", "owner/dataset"] for cmd in commands)
+    assert all(cmd[4] not in {"data", ".", "metadata.parquet", "README.md"} for cmd in commands)
+
+
+def test_additional_upload_rejects_flat_paper_layout(tmp_path) -> None:
+    data_root = tmp_path / "dataset"
+    for name in ("preprocessed", "clues", "query_collections", "splits"):
+        (data_root / name).mkdir(parents=True)
+    (data_root / "preprocessed" / "paper-1.json").write_text("{}")
+    with pytest.raises(ValueError, match="domain directories only"):
+        prepare_additional_data(data_root=data_root, output_dir=tmp_path / "package", shard_size_bytes=1024)

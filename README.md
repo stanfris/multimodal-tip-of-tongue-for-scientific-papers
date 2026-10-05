@@ -702,6 +702,24 @@ The upload script targets `kasys/open-source-scientific-documents` by default.
 Set `HF_REPO_ID=owner/dataset-name` to use a different dataset repository. Any
 arguments after the dataset directory are forwarded to `dataset_packaging.prepare_hf_dataset`.
 
+To add processed data to an existing Hugging Face dataset without uploading or
+changing the PDF shards, metadata, or dataset card, run:
+
+```bash
+scripts/packaging/upload_huggingface_dataset.sh huggingface_dataset \
+  --additional-only --data-root /path/to/dataset-root
+```
+
+The data root must contain `preprocessed/`, `clues/`, `query_collections/`, and
+`splits/`. Preprocessed and clues must each contain domain folders such as
+`ACL/` and `Biology/`. The command packages their contents as uncompressed TAR
+shards under `preprocessed/<DOMAIN>/` and `clues/<DOMAIN>/`, preserving paths
+within each domain. It uploads `query_collections/` and `splits/` as ordinary
+folders, without TAR packaging. The local TARs are staged in
+`huggingface_dataset_additional/`; the upload targets only these four remote
+paths and leaves the existing `data/` PDF corpus untouched. Adjust shard size
+with `--additional-shard-size-gb` (default: 1).
+
 Before upload, validation scans the source folders, checks TAR members, and
 recomputes SHA-256 for every source PDF. The command logs each stage, periodic
 file and byte counts, and elapsed time. Once `starting hf upload` appears,
