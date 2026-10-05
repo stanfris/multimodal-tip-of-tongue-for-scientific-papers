@@ -46,6 +46,26 @@ def test_documented_bash_scripts_exist() -> None:
         assert (PROJECT_ROOT / relative_path).is_file(), f"README references missing script: {relative_path}"
 
 
+def test_huggingface_upload_wrapper_selects_additional_mode(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CAPTURE_ARGS"\n')
+    fake_uv.chmod(0o755)
+    wrapper = PROJECT_ROOT / "scripts/packaging/upload_huggingface_dataset.sh"
+    capture = tmp_path / "args.txt"
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "CAPTURE_ARGS": str(capture)}
+
+    subprocess.run(["bash", str(wrapper), "package", "--additional-only", "--data-root", "dataset"], check=True, env=env)
+    additional_args = capture.read_text().splitlines()
+    assert "--additional-only" in additional_args
+    assert "--upload-only" not in additional_args
+    assert additional_args[additional_args.index("--output-dir") + 1] == "package"
+
+    subprocess.run(["bash", str(wrapper), "package"], check=True, env=env)
+    assert "--upload-only" in capture.read_text().splitlines()
+
+
 def test_main_and_mineru_environment_switchers_exist() -> None:
     activate = (PROJECT_ROOT / "scripts/environment/activate_env.sh").read_text(encoding="utf-8")
     runner = (PROJECT_ROOT / "scripts/environment/run_in_env.sh").read_text(encoding="utf-8")
