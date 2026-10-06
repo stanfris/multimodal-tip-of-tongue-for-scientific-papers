@@ -1,11 +1,11 @@
 # Multimodal Tip-of-the-Tongue Retrieval for Scientific Papers
 
-This repository is part of the paper `Multimodal Tip-of-the-Tongue Retrieval for Scientific Papers`. Here, we provide all of the code necessary to generate all components of our dataset, in order to provide a basis for future work in generating queries and documents. We also provide instructions to simply download our dataset, such that you can use it directly for your own research.
+This repository is part of the paper `Multimodal Tip-of-the-Tongue Retrieval for Scientific Papers`. Here, we provide all of the code necessary to generate all components of our dataset, in order to provide a basis for future work in generating queries and documents. We also provide instructions to only download our dataset, hosted on [HuggingFace](https://huggingface.co/datasets/kasys/open-source-scientific-documents), such that you can use it directly.
 
 Our instructions first explain how to download the full dataset. Further sections explain repository structure, and how to run key elements of the query generation pipeline.
 ## Downloading the Dataset from Huggingface
 
-Below, we show how to download our data from the Hugging Face Hub, which is an intended method for practitioners to build upon our work. To simply download our full datset, you can apply the Hugging Face cli:
+Below, we show how to download our data through scripts we provide, which is an intended method for practitioners to build upon our work. If you simply wish download our full datset, you can also apply the Hugging Face cli:
 ```bash
 hf download kasys/open-source-scientific-documents \
   --repo-type dataset \
@@ -15,15 +15,27 @@ This does not handle extraction, workers, or partial components however, we prov
 keeps the filtered Hub snapshot and transfer state under
 `data/.hf_dataset_download/kasys--open-source-scientific-documents/`,
 so rerunning a command resumes downloads and skips matching restored files.
-With no arguments, the script downloads and restores all dataset components under `data/`. Pass a destination directory to change that location, or use component flags for smaller downloads:
+From the repository root, run the script with no arguments to download and restore everything (PDFs, preprocessed content, clues, query collections, and splits) under the default `data/` directory:
 
 ```bash
 scripts/packaging/download_huggingface_dataset.sh
-scripts/packaging/download_huggingface_dataset.sh data --pdfs --workers 4
-scripts/packaging/download_huggingface_dataset.sh data --generated
 ```
 
-The first command downloads PDFs, preprocessed content, clues, query collections, and splits. `--all` is an explicit equivalent. `--pdfs` downloads `metadata.parquet` and PDF shards, then restores PDFs under
+To download all generated components without PDFs, use `--generated`. This also uses `data/` by default:
+
+```bash
+scripts/packaging/download_huggingface_dataset.sh --generated
+```
+
+To download only PDFs with four restore workers:
+
+```bash
+scripts/packaging/download_huggingface_dataset.sh data --pdfs --workers 4
+```
+
+The `data` argument is the destination directory; omit it to use `data/`, or replace it with another path.
+
+`--all` explicitly selects every component. `--pdfs` downloads `metadata.parquet` and PDF shards, then restores PDFs under
 `data/pdf_datasets/<SOURCE>/` with size and SHA-256 verification. `--generated`
 selects parsed content, clues, query collections, and splits. Parsed and clue
 TARs extract under `data/preprocessed/<DOMAIN>/` and `data/clues/<DOMAIN>/`;
@@ -106,7 +118,7 @@ data/query_collections/<id>/              # generated query/eval collections
 ## Installation
 
 The repository uses two intentionally separate environments because the main
-pipeline and MinerU 3.x require incompatible Transformers versions:
+pipeline and MinerU 3.x require incompatible Transformers versions. Install [`uv`](https://docs.astral.sh/uv/), then create and activate the environment:
 
 ```bash
 scripts/environment/sync_env.sh
@@ -159,8 +171,7 @@ allocated node. Set `VTT_DATA_ROOT`, `VTT_LOG_ROOT`, `VTT_CACHE_ROOT`, and
 
 The ACL metadata builder and the PMC metadata builder accept `--metadata-only`
 through their wrappers. PMC requires an NCBI contact email. arXiv requires an
-authenticated Kaggle CLI or an existing metadata snapshot. These are network
-operations; `--help` only inspects arguments and creates no corpus files.
+authenticated Kaggle CLI or an existing metadata snapshot.
 
 ```bash
 scripts/document_downloads/build_acl_subset.sh
@@ -182,16 +193,9 @@ Download results and reports live under `data/acl_subset/`,
 `data/pmc_oa_strict/`, and `data/arxiv_open_reuse/`. Assembly writes
 `data/arxiv_open_reuse/pdfs_by_domain/` and `data/pdf_datasets/`. The last
 command requires the five assembled PDF folders and writes
-`data/splits/pdf_dataset_split.json` (2,200 train and 110 test PDFs per
-folder by default). Rerunning the split command preserves an existing index
+`data/splits/pdf_dataset_split.json`. Rerunning the split command preserves an existing index
 when membership is unchanged and refuses to replace a different split unless
-`--overwrite` is supplied. Extraction and preprocessing reject split indexes
-with duplicate, overlapping, or out-of-corpus PDF paths. These utilities report
-progress to the terminal;
-they do not use Hydra run logs. Inspect options with, for example,
-`scripts/pdf_corpus/build_pdf_dataset_split.sh --help`. The old
-`scripts/document_splits/build_document_split.sh` is a post-extraction legacy
-split and is not the canonical input to extraction.
+`--overwrite` is supplied.
 
 ### MinerU extraction
 
@@ -223,3 +227,13 @@ scripts/clue_generation/describe_all_textual_clues.sh split=train launcher=pbs_h
 scripts/query_generation/generate_queries.sh split=train launcher=pbs_h200 model=phi4 model.provider=vllm
 scripts/query_generation/judge_train_queries.sh split=train launcher=pbs_h200 model=gemma3_judge model.provider=vllm
 ```
+
+
+### Annotation
+
+The `annotations/` folder provides the annotations and the web-pages used to perform an analysis of tip-of-the-tongue queries found on the internet. The notebook `annotations/analysis.ipynb` provides the code which was used to compute percentages and annotator agreement. 
+
+
+
+### License
+This repository uses the [MIT License](https://github.com/stanfris/multimodal-tip-of-tongue-retrieval-for-scientific-papers/blob/main/LICENSE). 
