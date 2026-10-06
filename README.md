@@ -229,6 +229,16 @@ scripts/query_generation/judge_train_queries.sh split=train launcher=pbs_h200 mo
 ```
 
 
+### Test sample
+
+To make a small review bundle from the PDF test split, run:
+
+```bash
+bash scripts/packaging/export_test_sample.sh
+```
+
+This creates `data/test_sample_20_per_dataset.zip` with 20 query-linked test PDFs from each of ACL, Biology, Engineering, Medicine, and Physics. PDFs are under `pdfs/<dataset>/`; `queries.json` lists each PDF path, document ID, query ID, mode, and actual query text. The script uses local files under `data/` when present and downloads missing split, query, and PDF files from the published Hugging Face dataset. Use `--output PATH` for another ZIP location, `--data-root PATH` for another local dataset root, or `--offline` to require local files.
+
 ### Annotation
 
 The `annotations/` folder provides the annotations and the web-pages used to perform an analysis of tip-of-the-tongue queries found on the internet. The notebook `annotations/analysis.ipynb` provides the code which was used to compute percentages and annotator agreement. 
@@ -236,4 +246,4 @@ The `annotations/` folder provides the annotations and the web-pages used to per
 
 
 ### License
-This repository uses the [MIT License](https://github.com/stanfris/multimodal-tip-of-tongue-retrieval-for-scientific-papers/blob/main/LICENSE). 
+This repository uses the [MIT License](https://github.com/stanfris/multimodal-tip-of-tongue-retrieval-for-scientific-papers/blob/main/LICENSE).
