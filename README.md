@@ -228,6 +228,8 @@ scripts/query_generation/generate_queries.sh split=train launcher=pbs_h200 model
 scripts/query_generation/judge_train_queries.sh split=train launcher=pbs_h200 model=gemma3_judge model.provider=vllm
 ```
 
+Query generation considers at most the first 15 images in each paper. Set `visual_query.selection.max_images=NUMBER` to change this cap; it also applies to clue coverage and images sent to the optional query judge.
+
 
 ### Test sample
 

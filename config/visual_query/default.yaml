@@ -40,6 +40,7 @@ selection:
   - visual-and-text
   visual_component_budget: 3
   textual_component_budget: 3
+  max_images: 15
   allow_partial_components: false
   start_index: 0
   end_index: null

@@ -74,6 +74,35 @@ def test_query_generation_reads_domain_clues_and_writes_domain_collections(tmp_p
     assert not (config.output_dir / config.collection_id).exists()
 
 
+def test_query_generation_limits_images_before_clue_coverage_and_selection(tmp_path: Path) -> None:
+    dataset = tmp_path / "preprocessed"
+    clues = tmp_path / "clues"
+    paper = _paper(dataset, "ACL")
+    paper_id = paper["paper_id"]
+    paper_dir = dataset / "ACL" / paper_id
+    paper["figures"].append({"figure_id": "second", "image_relpath": "images/second.jpg"})
+    (paper_dir / "paper.json").write_text(json.dumps(paper), encoding="utf-8")
+    (paper_dir / "images" / "second.jpg").write_bytes(b"image")
+    append_clue_row(textual_clue_path(clues, paper_id, "ACL"),
+                    {"paper_id": paper_id, "kind": "textual", "output": "Text clue."})
+    append_clue_row(visual_clue_path(clues, paper_id, f"{paper_id}_figure", "ACL"),
+                    {"paper_id": paper_id, "figure_id": f"{paper_id}_figure",
+                     "kind": "visual", "output": "First visual clue."})
+
+    config = query_generation.QueryGenerationConfig(
+        dataset=dataset, visual_interpretations=None, textual_interpretations=None,
+        clues_dir=clues, output_dir=tmp_path / "queries", modes=("visual-only",),
+        max_images=1,
+    )
+    query_generation._generate_query_collections_from_preprocessed(config, "{selected_cues}", "hash", None, None)
+
+    path = config.output_dir / "ACL" / config.collection_id / "visual_only" / "queries.jsonl"
+    row = json.loads(path.read_text().splitlines()[0])
+    assert row["metadata"]["selected_visual_count"] == 1
+    assert row["metadata"]["max_images"] == 1
+    assert "First visual clue" in row["query"]
+
+
 def test_managed_judgement_reads_and_writes_each_domain_collection(tmp_path: Path, monkeypatch) -> None:
     settings = write_settings(tmp_path)
     dataset = tmp_path / "data" / "preprocessed"

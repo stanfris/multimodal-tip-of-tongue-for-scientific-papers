@@ -1,0 +1,283 @@
+You are modifying an existing annotation web application. Before changing anything, inspect the current codebase carefully and understand:
+the existing login flow;
+account creation / annotator account generation;
+how annotator identity and progress are stored;
+the existing annotation path and routing structure;
+the current annotation UI;
+the current data-loading logic;
+the structure of queries.json;
+the PDF directory structure;
+the code changes already present in the repository that introduce the alternative/generated query set.
+Do not replace or redesign working infrastructure unnecessarily.
+The objective is to add two distinct annotation tasks/workflows while preserving the existing application structure.
+Core requirement: preserve existing authentication and accounts
+Keep the existing:
+login system;
+user/account generation system;
+authentication/session behavior;
+user identifiers;
+annotation persistence mechanism;
+existing application routes where possible.
+Do not introduce a separate authentication system or a new user database.
+After a user logs in successfully, instead of immediately entering one annotation workflow, show a simple task-selection screen.
+The annotator must choose between:
+Query Relevance & Well-Formedness Annotation
+Alternative Query Relevance & Well-Formedness Annotation
+After selecting a task, route the annotator to the corresponding annotation workflow.
+The selected task should be associated with the annotation records so that results from the two workflows cannot be confused.
+
+
+
+Task 1 — Original Query Annotation
+The first workflow evaluates queries stored in:
+queries.json
+Inspect the actual structure of this file rather than assuming its schema.
+Each query should be matched to its corresponding scientific paper PDF.
+Use the metadata already contained in the query record, specifically:
+the high-level domain;
+the paper/document identifier.
+Use those values to locate the correct PDF within the existing PDF directory hierarchy.
+Do not rely on fuzzy title matching if a deterministic domain + identifier mapping is available.
+If a PDF cannot be found, handle the case gracefully and log/report the missing mapping instead of crashing the annotation interface.
+
+
+
+Annotation page layout
+The annotation interface should be optimized for reading a scientific paper and judging a query simultaneously.
+Use a two-column desktop layout.
+Left side — PDF
+The left side should occupy approximately 60–70% of the available width.
+Display the complete PDF for the associated document.
+Requirements:
+PDF must be readable directly in the browser;
+annotator must be able to scroll through the entire document;
+zooming should be available through the viewer if possible;
+do not display only a screenshot or first page;
+maximize usable vertical space;
+avoid tiny embedded PDF frames.
+Prefer the existing PDF-viewing mechanism if one already exists.
+If the project already uses PDF.js or another PDF viewer, reuse it.
+
+
+
+Right side — Query and annotations
+The right side should occupy approximately 30–40% of the screen and remain easy to read while the user examines the PDF.
+At the top, prominently display:
+Query
+Show the complete query using large, highly readable typography.
+The query must be visually separated from the annotation controls.
+Do not expose information that is not intended for annotators, such as hidden ground-truth labels or unnecessary document identifiers.
+Below the query, create two clearly distinct annotation sections.
+
+
+
+Annotation 1 — Relevance
+Question:
+How relevant is this document to the information need expressed by the query?
+Provide exactly three selectable values:
+0 — Not relevant
+The document does not satisfy the information need expressed by the query.
+1 — Partially relevant
+The document relates to the query, but only partially addresses the information need or the match is ambiguous.
+2 — Highly relevant
+The document clearly corresponds to and satisfies the information need expressed by the query.
+Use a visually clear control such as three large radio buttons, segmented buttons, or cards.
+The annotator must select exactly one value.
+Store the result as an integer:
+relevance: 0 | 1 | 2
+
+
+
+Annotation 2 — Query Well-Formedness
+Question:
+How well-formed and understandable is the query as a paper re-finding request?
+Provide exactly three values:
+0 — Poor
+The query is incoherent, unusable, contradictory, severely underspecified, or does not resemble a meaningful paper re-finding request.
+1 — Acceptable
+The query is understandable but contains noticeable ambiguity, awkward wording, missing context, or other quality issues.
+2 — Good
+The query is coherent, natural, sufficiently informative, and clearly expresses a plausible information need for re-finding a scientific paper.
+Store this as:
+well_formedness: 0 | 1 | 2
+Keep this section visually distinct from the relevance annotation so annotators do not confuse the two judgments.
+
+
+
+Submission behavior
+The annotator should not be able to submit until both annotations have been selected.
+On submission:
+1. save the annotation using the application's existing persistence mechanism;
+2. associate it with:
+annotator/user ID;
+task type;
+query ID;
+document/paper ID;
+relevance score;
+well-formedness score;
+timestamp if timestamps are already supported;
+3. advance to the next unannotated example.
+Avoid showing the same query/document pair repeatedly to the same user unless the existing application intentionally supports repeated annotations.
+Progress should persist if the annotator logs out and returns later.
+Reuse the application's current annotation-progress mechanism wherever possible.
+
+
+
+Task 2 — Alternative Query Annotation
+Create a second annotation workflow with the same UI and annotation questions.
+The difference is only the source/version of the queries.
+This workflow should use the alternative queries introduced by the existing code changes in this repository.
+Before implementing this workflow, inspect the current branch / modified files / relevant data-generation code and determine exactly:
+where these alternative queries are stored;
+what their schema is;
+how they map to paper IDs;
+how they map to high-level domains;
+whether they share IDs with the original queries.
+Do not invent a new query source if one already exists.
+If the repository contains multiple possible alternative-query sources, identify the one associated with the current changes and document your choice.
+The second workflow should otherwise behave identically:
+same PDF;
+same two-column layout;
+same relevance annotation;
+same well-formedness annotation;
+same persistence behavior;
+same progress handling.
+Store a clear task/source identifier with every annotation, for example:
+task_type = "original_query"
+versus
+task_type = "alternative_query"
+Use naming that fits the conventions already present in the repository.
+
+
+
+Task selection screen
+Immediately after successful login, display a task-selection view.
+For example:
+Choose an annotation task
+Original Query Annotation
+Evaluate the original paper re-finding queries.
+[Start task]
+Alternative Query Annotation
+Evaluate the alternative query formulation.
+[Start task]
+The task cards/buttons should be clearly differentiated.
+If useful, show progress separately for each task, e.g.:
+Original Queries: 34 / 100 completed
+Alternative Queries: 21 / 100 completed
+Only add this if progress counts can be obtained cleanly from the existing annotation infrastructure.
+Users should be able to return to the task-selection screen without logging out.
+
+
+
+Data integrity
+Treat the two annotation sets as logically separate datasets even when they refer to the same paper.
+An annotation must therefore be uniquely distinguishable by at least:
+annotator;
+task/query source;
+query identifier;
+document identifier.
+Do not overwrite Task 1 annotations with Task 2 annotations.
+Do not silently change the format of existing stored annotations unless necessary.
+If the persistence schema must change, implement the smallest backward-compatible modification possible.
+
+
+
+Existing annotation route
+Preserve the application's existing annotation path and behavior as much as possible.
+Do not delete the original route.
+Refactor shared functionality into reusable components where appropriate instead of copying the entire annotation implementation twice.
+A good structure would conceptually separate:
+authentication;
+task selection;
+query loading;
+query-to-PDF resolution;
+annotation UI;
+annotation persistence;
+progress tracking.
+The two workflows should ideally use the same annotation component with a configurable query source.
+However, follow the architecture and conventions already used in the repository rather than forcing a new framework or abstraction unnecessarily.
+
+
+
+UI requirements
+Prioritize annotation usability over decorative styling.
+The interface should:
+work well on a normal laptop/desktop screen;
+use most of the available browser height;
+make the query highly readable;
+allow comfortable full-document PDF reading;
+make the two annotation questions visually unmistakable;
+use large click targets;
+clearly show the currently selected values;
+have an obvious Submit / Save & Next button.
+If the window becomes too narrow for a practical side-by-side PDF view, provide a reasonable responsive fallback, but desktop annotation is the primary use case.
+
+
+
+Implementation process
+Before writing code:
+inspect the repository structure;
+identify the frontend/backend framework;
+locate authentication/account-generation logic;
+locate the existing annotation route;
+locate annotation persistence;
+inspect queries.json;
+inspect the PDF directory layout;
+identify the alternative-query source from the existing changes;
+determine the deterministic query → PDF mapping.
+Then implement the feature using the existing architecture.
+Do not make speculative structural changes.
+
+
+
+Validation
+After implementation, test at minimum:
+Existing users can still log in.
+Existing generated accounts still work.
+New account generation still works.
+Login leads to the task-selection screen.
+Task 1 loads a query from queries.json.
+Task 1 resolves the correct PDF using domain + identifier.
+The entire PDF can be read.
+Relevance accepts only 0, 1, or 2.
+Well-formedness accepts only 0, 1, or 2.
+Submission requires both answers.
+The annotation is persisted correctly.
+The next item loads after submission.
+Progress survives logout/login.
+Task 2 loads the alternative version of the query.
+Task 2 resolves the same corresponding PDF correctly.
+Task 1 and Task 2 results are stored separately.
+Returning to task selection works.
+Refreshing the annotation page does not corrupt progress.
+Missing PDFs or malformed query records fail gracefully.
+Existing application functionality unrelated to these changes still works.
+
+
+
+Code quality
+Keep the implementation clean and minimal.
+In particular:
+avoid duplicating the entire annotation UI for the two tasks;
+reuse existing components;
+use descriptive names;
+follow the project's current style;
+remove temporary debugging output;
+do not commit generated data or annotation output unless the repository already does so;
+add comments only where behavior is non-obvious.
+Update the README or annotation documentation where appropriate to explain:
+the two tasks;
+how queries map to PDFs;
+how annotators choose a task;
+the meaning of the 0/1/2 relevance labels;
+the meaning of the 0/1/2 well-formedness labels;
+where annotations are stored.
+At the end, provide a concise summary containing:
+files changed;
+architecture/design decisions;
+how the two query sources were identified;
+how query → PDF matching works;
+any persistence/schema changes;
+commands/tests used to verify the implementation;
+any remaining edge cases or assumptions.
+Most importantly: work with the existing application instead of rebuilding it. Preserve login, account generation, existing paths, annotation storage, and established project conventions unless a change is strictly necessary.

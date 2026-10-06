@@ -169,6 +169,7 @@ def test_managed_settings_select_train_and_test_query_sets(tmp_path: Path) -> No
     assert train.split_name == "train"
     assert train.collection_id == "managed_train"
     assert train.max_examples == 5
+    assert train.max_images == 15
     assert test.split_name == "test"
     assert test.collection_id == "managed_test"
     assert test.max_examples == 2

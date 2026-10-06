@@ -26,7 +26,8 @@ def config(*overrides: str) -> dict:
 
 
 def test_stage_split_model_and_limit_compose() -> None:
-    cfg = config("stage=generate_queries", "split=test", "model=noop", "stage.limit=3")
+    cfg = config("stage=generate_queries", "split=test", "model=noop", "stage.limit=3",
+                 "visual_query.selection.max_images=8")
     plan, settings = build_plan(cfg, ROOT)
     assert plan["stage"]["name"] == "generate_queries"
     assert plan["stage"]["limit"] == 3
@@ -34,11 +35,13 @@ def test_stage_split_model_and_limit_compose() -> None:
     assert settings["visual_query"]["model"]["provider"] == "null"
     assert settings["visual_query"]["model"]["name"] == "null"
     assert settings["visual_query"]["query_sets"]["test"]["split_name"] == "test"
+    assert settings["visual_query"]["selection"]["max_images"] == 8
 
 
 def test_stage_default_models_and_explicit_override() -> None:
     assert config("stage=generate_queries")["model"]["name"] == "microsoft/phi-4"
     assert config("stage=generate_queries")["visual_query"]["selection"]["modes"] == ["visual-and-text"]
+    assert config("stage=generate_queries")["visual_query"]["selection"]["max_images"] == 15
     assert config("stage=describe_textual_clues")["model"]["name"] == "Qwen/Qwen3-4B"
     assert config("stage=judge_queries")["visual_query"]["judgement"]["model"] == "google/gemma-3-27b-it"
     assert config("stage=judge_queries")["dataset"]["query_output"].endswith("/query_collections")

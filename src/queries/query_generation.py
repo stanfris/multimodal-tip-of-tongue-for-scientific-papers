@@ -47,6 +47,7 @@ DEFAULT_VISUAL_INTERPRETATIONS = "qwen3_vl_figure_description"
 DEFAULT_TEXTUAL_INTERPRETATIONS = "qwen3_textual_clue_description"
 DEFAULT_VISUAL_COMPONENT_BUDGET = 3
 DEFAULT_TEXTUAL_COMPONENT_BUDGET = 3
+DEFAULT_MAX_IMAGES = 15
 DEFAULT_VISUAL_QUERY_NAME = "query_generation"
 DEFAULT_MODELS = {
     "null": "null",
@@ -95,6 +96,7 @@ class QueryGenerationConfig:
     seed: int = 13
     visual_component_budget: int = DEFAULT_VISUAL_COMPONENT_BUDGET
     textual_component_budget: int = DEFAULT_TEXTUAL_COMPONENT_BUDGET
+    max_images: int = DEFAULT_MAX_IMAGES
     max_examples: int | None = None
     allow_partial_components: bool = False
     start_index: int = 0
@@ -178,12 +180,13 @@ def _generate_query_collections_from_preprocessed(
     *,
     limit: int | None = None,
 ) -> Path:
-    papers = read_preprocessed_papers(config.dataset)
+    papers = [_limit_paper_images(paper, config.max_images) for paper in read_preprocessed_papers(config.dataset)]
     components_by_paper = _components_by_paper(
         config.dataset,
         clues_dir=config.clues_dir,
         visual_clues_path=config.visual_interpretations,
         textual_clues_path=config.textual_interpretations,
+        max_images=config.max_images,
     )
     selected_papers = _eligible_papers(papers, config)
     papers_by_domain: dict[str, list[tuple[int, dict[str, Any]]]] = {}
@@ -352,6 +355,7 @@ def _generate_mode_examples_from_papers(
                 "component_selection": "all_available",
                 "visual_component_budget": config.visual_component_budget,
                 "textual_component_budget": config.textual_component_budget,
+                "max_images": config.max_images,
                 "prompt_id": config.prompt_id,
                 "prompt_version": config.prompt_version,
                 "prompt": generation_prompt,
@@ -483,14 +487,21 @@ def _query_id(mode: QueryMode, paper_index: int, config: QueryGenerationConfig) 
     return f"{prefix}_q{paper_index:05d}"
 
 
+def _limit_paper_images(paper: dict[str, Any], max_images: int) -> dict[str, Any]:
+    return {**paper, "figures": paper.get("figures", [])[:max_images]}
+
+
 def _components_by_paper(
     dataset: Path,
     *,
     clues_dir: Path,
     visual_clues_path: Path | None,
     textual_clues_path: Path | None,
+    max_images: int | None = None,
 ) -> dict[str, list[MemoryComponent]]:
     papers = read_preprocessed_papers(dataset)
+    if max_images is not None:
+        papers = [_limit_paper_images(paper, max_images) for paper in papers]
     paper_ids = set()
     figure_ids_by_paper: dict[str, set[str]] = {}
     figure_names: dict[tuple[str, str], str] = {}
@@ -895,6 +906,7 @@ def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGe
                 selection.get("max_text_components", selection.get("component_budget", DEFAULT_TEXTUAL_COMPONENT_BUDGET)),
             )
         ),
+        max_images=int(selection.get("max_images", DEFAULT_MAX_IMAGES)),
         max_examples=selected_set.get("max_examples", selection.get("max_examples")),
         allow_partial_components=bool(selection.get("allow_partial_components", False)),
         start_index=int(selected_set.get("start_index", selection.get("start_index", 0))),
@@ -932,6 +944,8 @@ def _validate_config(config: QueryGenerationConfig) -> None:
         raise ValueError("judgement_max_tokens must be at least 1")
     if config.max_examples is not None and config.max_examples < 1:
         raise ValueError("max_examples must be at least 1 when set")
+    if config.max_images < 1:
+        raise ValueError("max_images must be at least 1")
     validate_index_window(config.start_index, config.end_index)
     if config.split_index is not None:
         if config.split_name is None:
