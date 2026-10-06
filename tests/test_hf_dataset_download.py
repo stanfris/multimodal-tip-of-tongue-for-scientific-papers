@@ -122,8 +122,16 @@ def test_archive_rejects_links_and_destination_symlinks(tmp_path: Path) -> None:
 def test_component_selection_cli(tmp_path: Path, monkeypatch) -> None:
     captured = []
     monkeypatch.setattr("dataset_packaging.download_hf_dataset.download_dataset", lambda **kwargs: captured.append(kwargs))
+    assert main([]) == 0
+    assert captured[0]["data_root"] == Path("data")
+    assert captured[0]["components"] == {"pdfs", "preprocessed", "clues", "query_collections", "splits"}
+    assert main([str(tmp_path)]) == 0
+    assert captured[1]["data_root"] == tmp_path
+    assert captured[1]["components"] == captured[0]["components"]
     assert main([str(tmp_path), "--generated"]) == 0
-    assert captured[0]["components"] == {"preprocessed", "clues", "query_collections", "splits"}
+    assert captured[2]["components"] == {"preprocessed", "clues", "query_collections", "splits"}
+    assert main([str(tmp_path), "--clues"]) == 0
+    assert captured[3]["components"] == {"clues"}
+    assert main([str(tmp_path), "--all"]) == 0
+    assert captured[4]["components"] == captured[0]["components"]
     assert allow_patterns({"pdfs"}) == ["metadata.parquet", "data/*/shard-*.tar"]
-    with pytest.raises(SystemExit):
-        main([str(tmp_path)])

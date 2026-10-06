@@ -1,4 +1,4 @@
-"""Download selected Hub components and restore the local data directory."""
+"""Download Hub components and restore the local data directory."""
 
 from __future__ import annotations
 
@@ -22,11 +22,11 @@ BUILD_ARTIFACTS = ["duplicates.parquet", "preparation_report.json", "*.manifest.
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Download selected Hugging Face dataset components and restore them under DATA_ROOT."
+        description="Download Hugging Face dataset components and restore them under DATA_ROOT (all components by default)."
     )
-    parser.add_argument("data_root", type=Path, help="Local data root; creates pdf_datasets/, preprocessed/, clues/, query_collections/, and splits/ here.")
+    parser.add_argument("data_root", nargs="?", type=Path, default=Path("data"), help="Local data root (default: data/); creates pdf_datasets/, preprocessed/, clues/, query_collections/, and splits/ here.")
     parser.add_argument("--repo-id", default=os.environ.get("HF_REPO_ID", DEFAULT_REPO_ID), help="Hub dataset repository (default: %(default)s).")
-    selection = parser.add_argument_group("components (choose one or more)")
+    selection = parser.add_argument_group("components (all by default; flags select a subset)")
     for component in COMPONENTS:
         selection.add_argument(f"--{component.replace('_', '-')}", action="store_true", help=f"Download and restore {component.replace('_', ' ')}.")
     selection.add_argument("--generated", action="store_true", help="Select preprocessed, clues, query collections, and splits.")
@@ -40,7 +40,7 @@ def selected_components(args: argparse.Namespace) -> set[str]:
     selected = {name for name in COMPONENTS if getattr(args, name)}
     if args.generated:
         selected.update(COMPONENTS[1:])
-    if args.all:
+    if args.all or not selected:
         selected.update(COMPONENTS)
     return selected
 
@@ -60,8 +60,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     components = selected_components(args)
-    if not components:
-        parser.error("select at least one component, --generated, or --all")
     if args.workers < 1:
         parser.error("--workers must be positive")
     download_dataset(

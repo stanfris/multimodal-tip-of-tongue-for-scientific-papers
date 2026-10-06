@@ -64,12 +64,12 @@ with tarfile.open(shard_path, "r") as archive:
 To download and restore selected components with the [repository's download script](https://github.com/stanfris/multimodal-tip-of-tongue-for-scientific-papers/blob/main/scripts/packaging/download_huggingface_dataset.sh):
 
 ```bash
+scripts/packaging/download_huggingface_dataset.sh
 scripts/packaging/download_huggingface_dataset.sh data --pdfs --workers 4
 scripts/packaging/download_huggingface_dataset.sh data --generated
-scripts/packaging/download_huggingface_dataset.sh data --all --workers 4
 ```
 
-The script accepts individual `--preprocessed`, `--clues`, `--query-collections`, and `--splits` selections. It filters Hub downloads to selected paths, resumes transfers on rerun, restores PDFs under `data/pdf_datasets/<SOURCE>/`, extracts parsed content and clues under their domain folders, and copies ordinary query collection and split files. The `preprocessed/` and `clues/` archives preserve relative paths inside each domain. `metadata.parquet` is required for PDF restoration; `duplicates.parquet`, `preparation_report.json`, and shard manifests are build artifacts and are not required. The roughly 407 GB full repository is needed only for `--all`.
+With no arguments, the script downloads PDFs, preprocessed content, clues, query collections, and splits under `data/`. A positional directory changes the destination. It accepts individual `--preprocessed`, `--clues`, `--query-collections`, and `--splits` selections for smaller downloads; `--all` also explicitly selects every component. It filters Hub downloads to selected paths, resumes transfers on rerun, restores PDFs under `data/pdf_datasets/<SOURCE>/`, extracts parsed content and clues under their domain folders, and copies ordinary query collection and split files. The `preprocessed/` and `clues/` archives preserve relative paths inside each domain. `metadata.parquet` is required for PDF restoration; `duplicates.parquet`, `preparation_report.json`, and shard manifests are build artifacts and are not required.
 
 The [repository's restore script](https://github.com/stanfris/multimodal-tip-of-tongue-for-scientific-papers/blob/main/scripts/packaging/restore_pdf_datasets_from_huggingface.sh) uses `metadata.parquet` to reconstruct the original five-domain PDF layout and verify checksums.
 

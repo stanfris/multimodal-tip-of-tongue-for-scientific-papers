@@ -2,24 +2,28 @@
 
 This repository is part of the paper `Multimodal Tip-of-the-Tongue Retrieval for Scientific Papers`. Here, we provide all of the code necessary to generate all components of our dataset, in order to provide a basis for future work in generating queries and documents. We also provide instructions to simply download our dataset, such that you can use it directly for your own research.
 
+Our instructions first explain how to download the full dataset. Further sections explain repository structure, and how to run key elements of the query generation pipeline.
+## Downloading the Dataset from Huggingface
 
-### Downloading the Dataset from Huggingface
-
-Below, we show how to download our data from the Hugging Face Hub, which is an intended method for practitioners to build upon our work. This should be run on a machine with sufficient storage space (at least 500GB of free space).
-
-Download selected components into the normal `data/` layout. The downloader
+Below, we show how to download our data from the Hugging Face Hub, which is an intended method for practitioners to build upon our work. To simply download our full datset, you can apply the Hugging Face cli:
+```bash
+hf download kasys/open-source-scientific-documents \
+  --repo-type dataset \
+  --local-dir open-source-scientific-documents
+```
+This does not handle extraction, workers, or partial components however, we provide these below. The scripts shown below handle each of these components and should be run on a machine with sufficient storage space (at least 500GB of free space). Download selected components into the normal `data/` layout. The downloader
 keeps the filtered Hub snapshot and transfer state under
 `data/.hf_dataset_download/kasys--open-source-scientific-documents/`,
 so rerunning a command resumes downloads and skips matching restored files.
-Selections avoid fetching the full roughly 407 GB repository:
+With no arguments, the script downloads and restores all dataset components under `data/`. Pass a destination directory to change that location, or use component flags for smaller downloads:
 
 ```bash
+scripts/packaging/download_huggingface_dataset.sh
 scripts/packaging/download_huggingface_dataset.sh data --pdfs --workers 4
 scripts/packaging/download_huggingface_dataset.sh data --generated
-scripts/packaging/download_huggingface_dataset.sh data --all --workers 4
 ```
 
-`--pdfs` downloads `metadata.parquet` and PDF shards, then restores PDFs under
+The first command downloads PDFs, preprocessed content, clues, query collections, and splits. `--all` is an explicit equivalent. `--pdfs` downloads `metadata.parquet` and PDF shards, then restores PDFs under
 `data/pdf_datasets/<SOURCE>/` with size and SHA-256 verification. `--generated`
 selects parsed content, clues, query collections, and splits. Parsed and clue
 TARs extract under `data/preprocessed/<DOMAIN>/` and `data/clues/<DOMAIN>/`;
@@ -219,4 +223,3 @@ scripts/clue_generation/describe_all_textual_clues.sh split=train launcher=pbs_h
 scripts/query_generation/generate_queries.sh split=train launcher=pbs_h200 model=phi4 model.provider=vllm
 scripts/query_generation/judge_train_queries.sh split=train launcher=pbs_h200 model=gemma3_judge model.provider=vllm
 ```
-
