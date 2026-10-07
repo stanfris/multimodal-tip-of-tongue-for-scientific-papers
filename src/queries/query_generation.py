@@ -374,6 +374,8 @@ def _generate_mode_examples_from_papers(
     progress.close()
     elapsed = time.monotonic() - started
     print(f"{mode}: completed={len(examples)} skipped={empty + underfilled + incomplete_clues + resumed} "
+          f"(resumed={resumed}, incomplete_clues={incomplete_clues}, "
+          f"missing_modalities={underfilled}, empty_components={empty}) "
           f"failed={failed} elapsed={elapsed:.1f}s requests_per_second={len(examples) / max(elapsed, 0.001):.2f}",
           flush=True)
     final_count = existing_count + len(examples)
