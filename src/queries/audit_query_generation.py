@@ -83,7 +83,7 @@ def _paper_reason(paper: dict, config, mode: str) -> tuple[str, list[str]]:
         if not values:
             missing_figures.append(figure_id)
         components.extend(MemoryComponent(figure_id, "visual", value) for value in values)
-    if missing_figures:
+    if missing_figures and not (config.allow_missing_figure_clues and any(component.kind == "visual" for component in components)):
         return "missing_usable_figure_clue", missing_figures
     chosen = select_components(components, mode=mode)
     if not chosen:
@@ -203,7 +203,9 @@ def audit(settings: Path, query_set: str) -> dict:
                     reason = "no_figures"
                 elif not any(component.kind == "textual" for component in available):
                     reason = "no_usable_textual_clue"
-                elif expected_figures - described_figures:
+                elif expected_figures - described_figures and not (
+                    config.allow_missing_figure_clues and expected_figures & described_figures
+                ):
                     reason = "missing_usable_figure_clue"
                 else:
                     chosen = select_components(available, mode=mode)

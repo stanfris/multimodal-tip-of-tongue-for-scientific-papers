@@ -103,6 +103,38 @@ def test_query_generation_limits_images_before_clue_coverage_and_selection(tmp_p
     assert "First visual clue" in row["query"]
 
 
+def test_query_generation_can_ignore_missing_figure_clues(tmp_path: Path) -> None:
+    dataset = tmp_path / "preprocessed"
+    clues = tmp_path / "clues"
+    paper = _paper(dataset, "ACL")
+    paper_id = paper["paper_id"]
+    paper_dir = dataset / "ACL" / paper_id
+    paper["figures"].append({"figure_id": "missing_figure", "image_relpath": "images/missing.jpg"})
+    (paper_dir / "paper.json").write_text(json.dumps(paper), encoding="utf-8")
+    (paper_dir / "images" / "missing.jpg").write_bytes(b"image")
+    append_clue_row(textual_clue_path(clues, paper_id, "ACL"),
+                    {"paper_id": paper_id, "kind": "textual", "output": "Text clue."})
+    append_clue_row(visual_clue_path(clues, paper_id, f"{paper_id}_figure", "ACL"),
+                    {"paper_id": paper_id, "figure_id": f"{paper_id}_figure",
+                     "kind": "visual", "output": "Visual clue."})
+    base = dict(dataset=dataset, visual_interpretations=None, textual_interpretations=None,
+                clues_dir=clues, output_dir=tmp_path / "queries", modes=("visual-and-text",))
+    query_generation._generate_query_collections_from_preprocessed(
+        query_generation.QueryGenerationConfig(**base), "{selected_cues}", "hash", None, None
+    )
+    path = tmp_path / "queries" / "ACL" / "query_generation_train" / "visual_and_text" / "queries.jsonl"
+    assert not path.read_text()
+
+    query_generation._generate_query_collections_from_preprocessed(
+        query_generation.QueryGenerationConfig(**base, allow_missing_figure_clues=True),
+        "{selected_cues}", "hash", None, None,
+    )
+    row = json.loads(path.read_text().splitlines()[0])
+    assert row["metadata"]["selected_visual_count"] == 1
+    assert row["metadata"]["selected_text_count"] == 1
+    assert all(component["record_id"] != "missing_figure" for component in row["metadata"]["selected_components"])
+
+
 def test_managed_judgement_reads_and_writes_each_domain_collection(tmp_path: Path, monkeypatch) -> None:
     settings = write_settings(tmp_path)
     dataset = tmp_path / "data" / "preprocessed"

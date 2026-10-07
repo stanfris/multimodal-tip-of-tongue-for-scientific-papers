@@ -99,6 +99,7 @@ class QueryGenerationConfig:
     max_images: int = DEFAULT_MAX_IMAGES
     max_examples: int | None = None
     allow_partial_components: bool = False
+    allow_missing_figure_clues: bool = False
     start_index: int = 0
     end_index: int | None = None
     resume: bool = False
@@ -282,7 +283,7 @@ def _generate_mode_examples_from_papers(
             progress.set_status(scanned=scanned, skipped=empty + underfilled + resumed)
             continue
         components = components_by_paper.get(paper_id, [])
-        if not _has_complete_clue_coverage(paper, components):
+        if not _has_complete_clue_coverage(paper, components, config.allow_missing_figure_clues):
             incomplete_clues += 1
             progress.set_status(scanned=scanned, skipped=empty + underfilled + incomplete_clues + resumed)
             continue
@@ -383,10 +384,10 @@ def _generate_mode_examples_from_papers(
         raise RuntimeError(
             f"Only have {final_count} {mode} queries, but {config.max_examples} were requested. "
             f"Generated {len(examples)} new queries and resumed {existing_count} existing queries. "
-            f"Scanned {scanned} papers; {incomplete_clues} were missing one or more image/textual clue files, "
+            f"Scanned {scanned} papers; {incomplete_clues} lacked required clue coverage, "
             f"{underfilled} were missing required modalities, "
             f"{empty} had no usable {mode} components, and {resumed} were already generated. "
-            f"Regenerate clues or pass --allow-partial-components."
+            f"Regenerate clues or adjust visual_query.selection.allow_missing_figure_clues."
         )
     return examples
 
@@ -578,12 +579,16 @@ def _has_required_modalities(selected: list[MemoryComponent], mode: QueryMode) -
     return has_visual and has_textual
 
 
-def _has_complete_clue_coverage(paper: dict[str, Any], components: list[MemoryComponent]) -> bool:
+def _has_complete_clue_coverage(
+    paper: dict[str, Any], components: list[MemoryComponent], allow_missing_figure_clues: bool = False,
+) -> bool:
     textual_present = any(component.kind == "textual" for component in components)
     if not textual_present:
         return False
     described_figures = {component.record_id for component in components if component.kind == "visual"}
     expected_figures = {str(figure["figure_id"]) for figure in paper.get("figures", [])}
+    if allow_missing_figure_clues:
+        return bool(expected_figures & described_figures)
     return bool(expected_figures) and expected_figures <= described_figures
 
 
@@ -911,6 +916,7 @@ def _config_from_yaml(path: Path, *, query_set: ManagedSet = "train") -> QueryGe
         max_images=int(selection.get("max_images", DEFAULT_MAX_IMAGES)),
         max_examples=selected_set.get("max_examples", selection.get("max_examples")),
         allow_partial_components=bool(selection.get("allow_partial_components", False)),
+        allow_missing_figure_clues=bool(selection.get("allow_missing_figure_clues", False)),
         start_index=int(selected_set.get("start_index", selection.get("start_index", 0))),
         end_index=selected_set.get("end_index", selection.get("end_index")),
         resume=bool(selected_set.get("resume", selection.get("resume", False))),

@@ -230,6 +230,8 @@ scripts/query_generation/judge_train_queries.sh split=train launcher=pbs_h200 mo
 
 Query generation considers at most the first 15 images in each paper. Set `visual_query.selection.max_images=NUMBER` to change this cap; it also applies to clue coverage and images sent to the optional query judge.
 
+By default, query generation requires usable clues for every considered figure. Set `visual_query.selection.allow_missing_figure_clues=true` to use the available figure clues when some are missing. A paper still needs a usable textual clue and at least one usable figure clue.
+
 
 ### Test sample
 

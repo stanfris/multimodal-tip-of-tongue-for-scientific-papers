@@ -42,6 +42,7 @@ selection:
   textual_component_budget: 3
   max_images: 15
   allow_partial_components: false
+  allow_missing_figure_clues: false
   start_index: 0
   end_index: null
   max_examples: null

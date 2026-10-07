@@ -170,9 +170,20 @@ def test_managed_settings_select_train_and_test_query_sets(tmp_path: Path) -> No
     assert train.collection_id == "managed_train"
     assert train.max_examples == 5
     assert train.max_images == 15
+    assert train.allow_missing_figure_clues is False
     assert test.split_name == "test"
     assert test.collection_id == "managed_test"
     assert test.max_examples == 2
+
+
+def test_managed_settings_can_allow_missing_figure_clues(tmp_path: Path) -> None:
+    settings = write_settings(tmp_path)
+    settings.write_text(settings.read_text().replace(
+        "    allow_partial_components: false",
+        "    allow_partial_components: false\n    allow_missing_figure_clues: true",
+    ))
+    config = load_query_generation_config(build_parser().parse_args(["--settings", str(settings)]))
+    assert config.allow_missing_figure_clues is True
 
 
 def test_managed_settings_load_visual_description_stage(tmp_path: Path) -> None:
